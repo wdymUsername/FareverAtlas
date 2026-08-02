@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <defs>
+    <mask id="question-cutout">
+      <rect width="24" height="24" fill="#000"/>
+      <circle cx="12" cy="12" r="10.75" fill="#fff"/>
+      <path transform="translate(-3.84 -3.84) scale(1.32)" fill="#000" d="M11.1 14.15v-.42c0-1.05.49-1.67 1.35-2.25.78-.53 1.25-.92 1.25-1.65 0-.88-.69-1.43-1.72-1.43-1.02 0-1.72.53-2.13 1.34L8.5 8.98C9.15 7.66 10.38 6.8 12.05 6.8c2.05 0 3.52 1.15 3.52 2.91 0 1.35-.72 2.08-1.81 2.82-.75.5-1.06.88-1.06 1.48v.14H11.1Zm.8 3.05a1.08 1.08 0 1 1 0-2.16 1.08 1.08 0 0 1 0 2.16Z"/>
+    </mask>
+  </defs>
+  <rect width="24" height="24" fill="#b9c5cf" mask="url(#question-cutout)"/>
+</svg>

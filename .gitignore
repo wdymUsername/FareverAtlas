@@ -1,0 +1,28 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.tmp
+
+# Local user and machine state
+nyx_game_dir.conf
+user_waypoints_*.json
+user_waypoints_*.json.bak
+waypoints_export.json
+custom_waypoints_export.json
+.codex/
+.agents/
+
+# Runtime bridge output
+native_bridge/farever-process.json
+native_bridge/farever-telemetry.json
+
+# Generated build output and release packages
+native_bridge/target/
+*.zip
+
+# Local backups and extracted game files
+.backups/
+extracted/
+
+# Third-party research checkouts (kept locally, not vendored)
+usefull/

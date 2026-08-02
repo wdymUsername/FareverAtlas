@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -n "${FAREVER_STEAM_ROOT:-}" ]]; then
+    STEAM_ROOT="$FAREVER_STEAM_ROOT"
+else
+    for candidate in \
+        "$HOME/.steam/steam" \
+        "$HOME/.local/share/Steam" \
+        "$HOME"/Games/*/steam \
+        "$HOME"/Games/*/*/steam; do
+        if [[ -d "$candidate/steamapps/compatdata/3672400" ]]; then
+            STEAM_ROOT="$candidate"
+            break
+        fi
+    done
+    : "${STEAM_ROOT:=$HOME/.steam/steam}"
+fi
+if [[ -n "${FAREVER_PROTON:-}" ]]; then
+    PROTON="$FAREVER_PROTON"
+else
+    PROTON="$STEAM_ROOT/steamapps/common/Proton 10.0/proton"
+    if [[ ! -x "$PROTON" ]]; then
+        for candidate in "$STEAM_ROOT"/steamapps/common/Proton*/proton; do
+            if [[ -x "$candidate" ]]; then
+                PROTON="$candidate"
+            fi
+        done
+    fi
+fi
+COMPAT_DATA="$STEAM_ROOT/steamapps/compatdata/3672400"
+BRIDGE="$ROOT/farever-atlas-bridge.exe"
+if [[ ! -f "$BRIDGE" ]]; then
+    BRIDGE="$ROOT/target/x86_64-pc-windows-gnu/release/farever-atlas-bridge.exe"
+fi
+OUTPUT="${FAREVER_TELEMETRY_REPORT:-$ROOT/farever-telemetry.json}"
+INTERVAL_MS="${FAREVER_TELEMETRY_INTERVAL_MS:-100}"
+
+if [[ ! -x "$PROTON" ]]; then
+    echo "Proton launcher not found: $PROTON" >&2
+    exit 1
+fi
+
+if [[ ! -f "$BRIDGE" ]]; then
+    echo "Bridge binary missing. Run: $ROOT/build.sh" >&2
+    exit 1
+fi
+
+OUTPUT_WINDOWS="Z:${OUTPUT//\//\\}"
+
+exec env \
+    STEAM_COMPAT_DATA_PATH="$COMPAT_DATA" \
+    STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_ROOT" \
+    SteamAppId=3672400 \
+    SteamGameId=3672400 \
+    WINEDEBUG=-all \
+    "$PROTON" run "$BRIDGE" --output "$OUTPUT_WINDOWS" --watch-ms "$INTERVAL_MS"

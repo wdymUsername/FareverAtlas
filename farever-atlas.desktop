@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Farever Atlas
+Comment=Live Farever map, party, and combat companion
+Exec=/home/nyx/Games/nvme2/FareverAtlas/run.sh
+Icon=/home/nyx/Games/nvme2/FareverAtlas/assets/rift_icon_128.png
+Terminal=false
+Categories=Game;Utility;
+Keywords=Farever;Atlas;Map;Party;DPS;
+StartupNotify=true
