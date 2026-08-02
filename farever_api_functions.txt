@@ -1,0 +1,316 @@
+Farever Plugin API — Complete Documented Function List
+=======================================================
+
+Source: installed Farever plugin API reference
+Includes farever.*, imgui.*, lifecycle callbacks, event names, and returned
+record fields. The removed farever.foes.* API is intentionally excluded.
+
+
+LIFECYCLE CALLBACKS
+-------------------
+on_init()
+on_render()
+on_event(name, data)
+
+
+TIME
+----
+farever.now()
+
+
+PLAYER — POSITION AND IDENTITY
+------------------------------
+farever.player.x()
+farever.player.y()
+farever.player.z()
+farever.player.rot_z()
+farever.player.locked()
+farever.player.name()
+farever.player.class()
+farever.player.uid()
+farever.player.level()
+
+
+PLAYER — COMBAT STATE
+---------------------
+farever.player.in_combat()
+farever.player.combat_start()
+farever.player.has_target()
+
+
+PLAYER — HEALTH AND ENERGY
+--------------------------
+farever.player.health()
+farever.player.max_health()
+farever.player.health_pct()
+farever.player.health_regen()
+farever.player.shield()
+farever.player.energy()
+farever.player.energy_regen()
+
+
+PLAYER — PRIMARY STATS
+----------------------
+farever.player.vitality()
+farever.player.strength()
+farever.player.dexterity()
+farever.player.faith()
+farever.player.intellect()
+
+
+PLAYER — COMBAT STATS
+---------------------
+farever.player.crit_chance()
+farever.player.crit_damage()
+farever.player.armor_penetration()
+farever.player.spell_penetration()
+farever.player.fervor()
+farever.player.block_mitigation()
+farever.player.dodge_chance()
+farever.player.magic_mastery()
+farever.player.physical_mastery()
+farever.player.spell_cast_time_reduction()
+farever.player.knock_resistance()
+farever.player.cooldown_reduction()
+
+
+PLAYER — DEFENSE AND MODIFIERS
+------------------------------
+farever.player.armor()
+farever.player.magic_armor()
+farever.player.magic_reduction()
+farever.player.move_speed_factor()
+farever.player.damage()
+farever.player.heal()
+farever.player.damage_modifier()
+farever.player.damage_taken_modifier()
+farever.player.heal_given_multiplier()
+farever.player.shield_power_multiplier()
+farever.player.glide_speed()
+
+
+PLAYER — CLASS RESOURCES
+------------------------
+farever.player.poise()
+farever.player.poise_regen()
+farever.player.oxygen()
+farever.player.rage()
+farever.player.rage_regen()
+farever.player.spark()
+farever.player.spark_regen()
+farever.player.combo_point()
+farever.player.focus()
+
+
+PLAYER — CHARACTER SHEET AND CODEX
+----------------------------------
+farever.player.stats()
+  Returns entries: { name, value, text }
+
+farever.player.codex(kind)
+  Returns: { state, completed, progress, max, name, path } or nil
+
+
+PLAYER — WEAPON, EQUIPMENT, INVENTORY AND CURRENCIES
+----------------------------------------------------
+farever.player.weapon_kind()
+farever.player.weapon_level()
+farever.player.weapon_upgrade()
+
+farever.player.equipment()
+  Returns entries: { slot, slot_name, kind, level, upgrade }
+
+farever.player.inventory()
+  Returns entries: { kind, level, upgrade, stack }
+
+farever.player.currencies()
+  Returns entries: { kind, amount }
+
+
+PLAYER — STATUSES AND SKILLS
+----------------------------
+farever.player.statuses()
+  Returns entries: { kind, duration, stacks, shield_amount }
+
+farever.player.weapon_skills()
+  Returns entries: { slot, kind, icon }
+
+farever.player.skills()
+  Returns entries: { kind, cooldown, base_cooldown, charges, icon }
+
+
+DPS
+---
+farever.dps.current()
+farever.dps.total()
+farever.dps.elapsed()
+farever.dps.in_combat()
+
+
+TARGET
+------
+farever.target.exists()
+farever.target.name()
+farever.target.x()
+farever.target.y()
+farever.target.z()
+farever.target.level()
+farever.target.hp()
+farever.target.max_hp()
+farever.target.hp_pct()
+farever.target.is_casting()
+farever.target.cast_skill()
+farever.target.cast_elapsed_sec()
+farever.target.cast_total_sec()
+farever.target.cast_remaining_sec()
+farever.target.cast_progress()
+farever.target.armor()
+farever.target.magic_armor()
+farever.target.magic_reduction()
+
+
+PARTY
+-----
+farever.party.is_in_party()
+farever.party.count()
+farever.party.list()
+  Returns entries:
+  { name, class, uid, x, y, z, rot_z, health, max_health,
+    attr_ok, hero_valid }
+
+
+COMPASS
+-------
+farever.compass.is_visible()
+farever.compass.radius()
+farever.compass.cardinals_on()
+farever.compass.add_marker(x, y [, { z, name, color, icon, ttl }])
+farever.compass.remove_marker(handle)
+
+
+WORLD POIS
+----------
+farever.pois()
+  Returns entries: { x, y, z, kind, subkind, name, id }
+
+
+USER WAYPOINTS
+--------------
+farever.waypoints.add(x, y [, z, name, { color, icon }])
+farever.waypoints.set_style(id, { color, icon })
+farever.waypoints.list()
+  Returns entries: { id, name, x, y, z, color, icon }
+farever.waypoints.remove(id)
+
+Waypoint colors:
+cyan, red, orange, yellow, green, blue, magenta, white
+
+Waypoint icons:
+pin, flag, star, diamond, circle, exclamation
+
+
+SKILL ICONS
+-----------
+farever.icons.skill(skill_kind)
+  Returns:
+  { atlas, x, y, size, width, height, px, py, w, h } or nil
+
+
+PERSISTENT STORE
+----------------
+farever.store.get(key, default)
+farever.store.set(key, value)
+
+
+CONTROLLED FILE OUTPUT
+----------------------
+farever.write_combatlog(filename, contents)
+
+
+NOTIFICATIONS, SOUND AND LOGGING
+--------------------------------
+farever.toast(message [, duration_seconds])
+farever.sound(name)
+  Documented names: alert, warning, info, beep
+farever.log.info(message)
+farever.log.warn(message)
+
+
+IMGUI — BASIC WIDGETS
+---------------------
+imgui.text(text)
+imgui.text_colored(r, g, b, a, text)
+imgui.button(label)
+imgui.checkbox(label, value)
+imgui.slider_float(label, value, minimum, maximum)
+imgui.drag_float(label, value, speed, minimum, maximum)
+imgui.input_text(label, value)
+imgui.color_edit(label, r, g, b)
+imgui.combo(label, selected_index, items)
+imgui.progress(fraction, label)
+imgui.separator()
+imgui.spacing()
+imgui.same_line()
+
+
+IMGUI — ICONS
+-------------
+imgui.icon(skill_kind, size)
+imgui.atlas_icon(atlas_name, cell_x, cell_y, source_size, display_size)
+
+
+IMGUI — DRAWING AND LAYOUT
+--------------------------
+imgui.font_scale(scale)
+imgui.cursor_pos()
+imgui.dummy(width, height)
+imgui.draw_rect_filled(x1, y1, x2, y2, r, g, b, a)
+imgui.draw_rect(x1, y1, x2, y2, r, g, b, a, thickness)
+imgui.draw_circle_filled(x, y, radius, r, g, b, a)
+imgui.draw_circle(x, y, radius, r, g, b, a, thickness)
+imgui.draw_line(x1, y1, x2, y2, r, g, b, a, thickness)
+imgui.draw_text(x, y, r, g, b, a, text)
+imgui.draw_triangle_filled(x1, y1, x2, y2, x3, y3, r, g, b, a)
+imgui.draw_triangle(x1, y1, x2, y2, x3, y3, r, g, b, a, thickness)
+
+Do not call imgui.begin() or imgui.end(); Farever manages the plugin window.
+
+
+EVENTS DELIVERED TO on_event(name, data)
+----------------------------------------
+hero_locked
+  data: empty
+
+fight_start
+  data: { fight_id }
+
+damage_dealt
+  data: { skill, amount, is_crit, is_kill, target, blocked }
+
+heal_dealt
+  data: { skill, amount, is_crit, target }
+
+shield_applied
+  data: { skill, amount }
+
+fight_end
+  data: { fight_id, duration, total_damage, dps, top_skill }
+
+target_changed
+  data: { kind }
+
+cast_start
+  data: { skill, total_sec }
+
+cast_end
+  data: { skill, duration }
+
+weapon_changed
+  data: { kind, prev_kind, level, upgrade }
+
+
+REMOVED / UNAVAILABLE API
+-------------------------
+farever.foes.*
+  Removed because the multi-foe tracker caused game crashes. The supported
+  replacement is farever.target.*, which tracks only the current target.

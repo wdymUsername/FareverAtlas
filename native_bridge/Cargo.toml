@@ -1,0 +1,11 @@
+[package]
+name = "farever-atlas-bridge"
+version = "0.10.0"
+edition = "2024"
+publish = false
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"
