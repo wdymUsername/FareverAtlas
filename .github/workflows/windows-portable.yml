@@ -1,0 +1,90 @@
+name: Windows portable exe
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "assets/**"
+      - "native_bridge/**"
+      - "packaging/windows/**"
+      - "requirements.txt"
+      - ".github/workflows/windows-portable.yml"
+  pull_request:
+    paths:
+      - "app/**"
+      - "assets/**"
+      - "native_bridge/**"
+      - "packaging/windows/**"
+      - "requirements.txt"
+      - ".github/workflows/windows-portable.yml"
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build native bridge
+        working-directory: native_bridge
+        run: cargo build --release
+
+      - name: Stage bridge binary
+        shell: pwsh
+        run: |
+          Copy-Item -Force `
+            "native_bridge\target\release\farever-atlas-bridge.exe" `
+            "native_bridge\farever-atlas-bridge.exe"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+
+      - name: Prepare UI fonts
+        env:
+          PYTHONPATH: app
+        run: python -m farever_atlas.fonts
+
+      - name: Build portable exe
+        run: |
+          python -m PyInstaller --noconfirm --clean `
+            --distpath dist `
+            --workpath build\pyinstaller `
+            packaging\windows\farever_atlas.spec
+
+      - name: Verify exe
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist\FareverAtlas.exe")) {
+            throw "dist\FareverAtlas.exe was not produced"
+          }
+          Get-Item "dist\FareverAtlas.exe" | Format-List Name, Length, LastWriteTime
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FareverAtlas-windows-portable
+          path: dist/FareverAtlas.exe
+          if-no-files-found: error
+
+      - name: Attach exe to GitHub Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/FareverAtlas.exe
