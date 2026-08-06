@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <defs>
+    <radialGradient id="goldFill" cx="38%" cy="32%" r="68%">
+      <stop offset="0%" stop-color="#fffce8"/>
+      <stop offset="58%" stop-color="#f4d96a"/>
+      <stop offset="100%" stop-color="#d4a33c"/>
+    </radialGradient>
+    <linearGradient id="goldRing" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fff3b8"/>
+      <stop offset="45%" stop-color="#e7bc49"/>
+      <stop offset="100%" stop-color="#a9771a"/>
+    </linearGradient>
+  </defs>
+  <circle cx="32" cy="32" r="28.5" fill="#111111" opacity="0.18"/>
+  <circle cx="32" cy="32" r="26.5" fill="url(#goldFill)" stroke="url(#goldRing)" stroke-width="4"/>
+  <circle cx="32" cy="32" r="20.5" fill="none" stroke="#fff4c1" stroke-width="1.6" opacity="0.75"/>
+  <path d="M32 15.5l4.6 9.4 10.4 1.5-7.5 7.3 1.8 10.3L32 39.3 22.7 44l1.8-10.3-7.5-7.3 10.4-1.5z"
+        fill="#fff8d9" stroke="#d3a23c" stroke-width="1.2" stroke-linejoin="round"/>
+  <circle cx="25" cy="21" r="3" fill="#ffffff" opacity="0.45"/>
+</svg>

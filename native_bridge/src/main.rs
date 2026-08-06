@@ -1,3 +1,7 @@
+// Release builds are a headless Windows PE (no console window). Debug keeps a
+// console so one-shot discovery and attach errors stay visible while developing.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 #[cfg(not(windows))]
 fn main() {
     eprintln!(
@@ -8,12 +12,13 @@ fn main() {
 
 #[cfg(windows)]
 mod windows_bridge {
+    use std::collections::HashMap;
     use std::ffi::{OsString, c_void};
     use std::mem::{size_of, zeroed};
     use std::os::windows::ffi::OsStringExt;
     use std::path::Path;
     use std::ptr::NonNull;
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     type Bool = i32;
     type Dword = u32;
@@ -69,6 +74,13 @@ mod windows_bridge {
     const HERO_POS_Y_FIELD_INDEX: usize = 28;
     const HERO_POS_Z_FIELD_INDEX: usize = 29;
     const HERO_ROTATION_Z_FIELD_INDEX: usize = 30;
+    const HERO_LAYER_FIELD_INDEX: usize = 14;
+    const GAME_LAYER_TYPE_INDEX: usize = 782;
+    const GAME_LAYER_UNITS_FIELD_INDEX: usize = 44;
+    const FOE_TYPE_INDEX: usize = 1_381;
+    const STATE_TYPE_INDEX: usize = 781;
+    const STATE_REMOVED_FIELD_INDEX: usize = 0;
+    const FOE_SUMMON_OWNER_FIELD_INDEX: usize = 164;
     // Runtime field indexes include inherited fields. These indexes are
     // derived from the supported hlboot.dat metadata, never guessed offsets.
     const PLAYER_NAME_FIELD_INDEX: usize = 29;
@@ -304,6 +316,10 @@ mod windows_bridge {
         position_y_offset: usize,
         position_z_offset: usize,
         rotation_z_offset: usize,
+        layer_offset: usize,
+        game_layer_units_offset: usize,
+        state_removed_offset: usize,
+        foe_summon_owner_offset: usize,
         player_name_offset: usize,
         player_uid_offset: usize,
         player_group_offset: usize,
@@ -349,6 +365,73 @@ mod windows_bridge {
         base_gauge_value_offset: usize,
         attribute_bar_unit_offset: usize,
         attribute_bar_id_offset: usize,
+    }
+
+    #[derive(Clone, Copy)]
+    struct FoeHealth {
+        address: usize,
+        health: f64,
+    }
+
+    struct ObservedDps {
+        previous: HashMap<usize, f64>,
+        total: f64,
+        fight_id: u64,
+        started: Option<Instant>,
+        last_damage: Option<Instant>,
+        active: bool,
+    }
+
+    impl ObservedDps {
+        fn new() -> Self {
+            Self {
+                previous: HashMap::new(),
+                total: 0.0,
+                fight_id: 0,
+                started: None,
+                last_damage: None,
+                active: false,
+            }
+        }
+
+        fn update(&mut self, foes: &[FoeHealth], player_in_combat: bool, now: Instant) {
+            let mut damage = 0.0;
+            let mut current = HashMap::with_capacity(foes.len());
+            for foe in foes {
+                if let Some(previous) = self.previous.get(&foe.address) {
+                    let loss = *previous - foe.health;
+                    if loss.is_finite() && loss > 0.0 && loss <= 1_000_000_000.0 {
+                        damage += loss;
+                    }
+                }
+                current.insert(foe.address, foe.health);
+            }
+            self.previous = current;
+
+            if damage > 0.0 {
+                if !self.active {
+                    self.active = true;
+                    self.total = 0.0;
+                    self.fight_id = self.fight_id.wrapping_add(1);
+                    self.started = Some(now);
+                }
+                self.total += damage;
+                self.last_damage = Some(now);
+            } else if self.active
+                && !player_in_combat
+                && self
+                    .last_damage
+                    .is_some_and(|last| now.duration_since(last) >= Duration::from_secs(3))
+            {
+                self.active = false;
+            }
+        }
+
+        fn elapsed(&self, now: Instant) -> f64 {
+            self.started
+                .map(|started| now.duration_since(started).as_secs_f64())
+                .unwrap_or(0.0)
+        }
     }
 
     fn read_runtime_anchor(
@@ -400,6 +483,7 @@ mod windows_bridge {
     fn read_code_anchor(
         process: &OwnedHandle,
         runtime: &RuntimeAnchor,
+        require_live_player: bool,
     ) -> Result<CodeAnchor, String> {
         // HashLink hl_code through its constants pointer. This is metadata, not
         // the globals' values or any GC-managed game object.
@@ -472,6 +556,7 @@ mod windows_bridge {
             globals_address,
             globals_indexes_address,
             globals_data_address,
+            require_live_player,
         )?;
 
         Ok(CodeAnchor {
@@ -615,12 +700,114 @@ mod windows_bridge {
         Ok(read_u64_le(&read_process_bytes(process, address, 8)?, 0)? as usize)
     }
 
+    fn object_is_a(
+        process: &OwnedHandle,
+        object_address: usize,
+        expected_type_address: usize,
+    ) -> bool {
+        let Ok(bytes) = read_process_bytes(process, object_address, 8) else {
+            return false;
+        };
+        let Ok(mut current_type) = read_u64_le(&bytes, 0).map(|value| value as usize) else {
+            return false;
+        };
+        for _ in 0..32 {
+            if current_type == expected_type_address {
+                return true;
+            }
+            let Ok(type_bytes) = read_process_bytes(process, current_type, 16) else {
+                return false;
+            };
+            if read_u32_le(&type_bytes, 0).ok() != Some(11) {
+                return false;
+            }
+            let Ok(metadata) = read_u64_le(&type_bytes, 8).map(|value| value as usize) else {
+                return false;
+            };
+            let Ok(super_bytes) = read_process_bytes(process, metadata + 0x18, 8) else {
+                return false;
+            };
+            let Ok(parent) = read_u64_le(&super_bytes, 0).map(|value| value as usize) else {
+                return false;
+            };
+            if parent == 0 || parent == current_type {
+                return false;
+            }
+            current_type = parent;
+        }
+        false
+    }
+
+    fn read_live_foe_health(
+        process: &OwnedHandle,
+        code: &CodeAnchor,
+        hero: usize,
+    ) -> Result<Vec<FoeHealth>, String> {
+        let root = &code.player_root;
+        let layer = read_object_pointer_field(process, hero, root.layer_offset)?;
+        if layer == 0
+            || read_u64_le(&read_process_bytes(process, layer, 8)?, 0)? as usize
+                != code.types_address + GAME_LAYER_TYPE_INDEX * 32
+        {
+            return Ok(Vec::new());
+        }
+        let units = read_object_pointer_field(process, layer, root.game_layer_units_offset)?;
+        if units == 0
+            || read_u64_le(&read_process_bytes(process, units, 8)?, 0)? as usize
+                != code.types_address + ARRAY_OBJ_TYPE_INDEX * 32
+        {
+            return Ok(Vec::new());
+        }
+        let length = i32::from_le_bytes(
+            read_process_bytes(process, units + root.array_length_offset, 4)?
+                .try_into()
+                .unwrap(),
+        );
+        if !(0..=2_000).contains(&length) {
+            return Err("GameLayer.units has an invalid length".to_owned());
+        }
+        let storage = read_object_pointer_field(process, units, root.array_storage_offset)?;
+        if storage == 0 {
+            return Ok(Vec::new());
+        }
+        let foe_type = code.types_address + FOE_TYPE_INDEX * 32;
+        let mut foes = Vec::new();
+        for index in 0..length as usize {
+            let entry = storage
+                .checked_add(24 + index * 8)
+                .ok_or_else(|| "GameLayer.units entry address overflowed".to_owned())?;
+            let unit = read_u64_le(&read_process_bytes(process, entry, 8)?, 0)? as usize;
+            if unit == 0 || !object_is_a(process, unit, foe_type) {
+                continue;
+            }
+            if read_process_bytes(process, unit + root.state_removed_offset, 1)?[0] != 0 {
+                continue;
+            }
+            if read_object_pointer_field(process, unit, root.foe_summon_owner_offset)? != 0 {
+                continue;
+            }
+            let attributes = read_object_pointer_field(process, unit, root.attributes_offset)?;
+            if attributes == 0 {
+                continue;
+            }
+            let health = read_f64_le(
+                &read_process_bytes(process, attributes + root.health_offset, 8)?,
+                0,
+            )?;
+            if health.is_finite() && (0.0..=1_000_000_000.0).contains(&health) {
+                foes.push(FoeHealth { address: unit, health });
+            }
+        }
+        Ok(foes)
+    }
+
     fn read_player_root(
         process: &OwnedHandle,
         types_address: usize,
         globals_address: usize,
         globals_indexes_address: usize,
         globals_data_address: usize,
+        require_live_player: bool,
     ) -> Result<PlayerRoot, String> {
         let app_static_type_address = types_address + APP_STATIC_TYPE_INDEX * 32;
         let app_global_type = read_u64_le(
@@ -652,34 +839,41 @@ mod windows_bridge {
 
         let app_instance_offset =
             object_field_offset(process, app_static_type_address, APP_INSTANCE_FIELD_INDEX)?;
-        let game_app_address =
-            read_object_pointer_field(process, app_static_holder_address, app_instance_offset)?;
         let game_app_type_address = types_address + GAME_APP_TYPE_INDEX * 32;
-        if game_app_address == 0
-            || read_u64_le(&read_process_bytes(process, game_app_address, 8)?, 0)? as usize
-                != game_app_type_address
-        {
-            return Err("$App.inst is not a live GameApp object".to_owned());
-        }
-
         let player_offset =
             object_field_offset(process, game_app_type_address, GAME_APP_PLAYER_FIELD_INDEX)?;
         let hero_offset =
             object_field_offset(process, game_app_type_address, GAME_APP_HERO_FIELD_INDEX)?;
         let gui_offset =
             object_field_offset(process, game_app_type_address, GAME_APP_GUI_FIELD_INDEX)?;
-        let player_address = read_object_pointer_field(process, game_app_address, player_offset)?;
-        let hero_address = read_object_pointer_field(process, game_app_address, hero_offset)?;
-        if player_address == 0
-            || read_u64_le(&read_process_bytes(process, player_address, 8)?, 0)? as usize
-                != types_address + PLAYER_TYPE_INDEX * 32
-        {
+
+        let game_app_address =
+            read_object_pointer_field(process, app_static_holder_address, app_instance_offset)?;
+        let game_app_live = game_app_address != 0
+            && read_u64_le(&read_process_bytes(process, game_app_address, 8)?, 0)? as usize
+                == game_app_type_address;
+        if require_live_player && !game_app_live {
+            return Err("$App.inst is not a live GameApp object".to_owned());
+        }
+
+        let (player_address, hero_address) = if game_app_live {
+            (
+                read_object_pointer_field(process, game_app_address, player_offset)?,
+                read_object_pointer_field(process, game_app_address, hero_offset)?,
+            )
+        } else {
+            (0, 0)
+        };
+        let player_live = player_address != 0
+            && read_u64_le(&read_process_bytes(process, player_address, 8)?, 0)? as usize
+                == types_address + PLAYER_TYPE_INDEX * 32;
+        let hero_live = hero_address != 0
+            && read_u64_le(&read_process_bytes(process, hero_address, 8)?, 0)? as usize
+                == types_address + HERO_TYPE_INDEX * 32;
+        if require_live_player && !player_live {
             return Err("GameApp.me is not a live st.Player object".to_owned());
         }
-        if hero_address == 0
-            || read_u64_le(&read_process_bytes(process, hero_address, 8)?, 0)? as usize
-                != types_address + HERO_TYPE_INDEX * 32
-        {
+        if require_live_player && !hero_live {
             return Err("GameApp.hero is not a live ent.Hero object".to_owned());
         }
 
@@ -692,6 +886,23 @@ mod windows_bridge {
             object_field_offset(process, hero_type_address, HERO_POS_Z_FIELD_INDEX)?;
         let rotation_z_offset =
             object_field_offset(process, hero_type_address, HERO_ROTATION_Z_FIELD_INDEX)?;
+        let layer_offset =
+            object_field_offset(process, hero_type_address, HERO_LAYER_FIELD_INDEX)?;
+        let game_layer_units_offset = object_field_offset(
+            process,
+            types_address + GAME_LAYER_TYPE_INDEX * 32,
+            GAME_LAYER_UNITS_FIELD_INDEX,
+        )?;
+        let state_removed_offset = object_field_offset(
+            process,
+            types_address + STATE_TYPE_INDEX * 32,
+            STATE_REMOVED_FIELD_INDEX,
+        )?;
+        let foe_summon_owner_offset = object_field_offset(
+            process,
+            types_address + FOE_TYPE_INDEX * 32,
+            FOE_SUMMON_OWNER_FIELD_INDEX,
+        )?;
         let player_name_offset = object_field_offset(
             process,
             types_address + PLAYER_TYPE_INDEX * 32,
@@ -896,34 +1107,40 @@ mod windows_bridge {
             types_address + ATTRIBUTE_BAR_TYPE_INDEX * 32,
             ATTRIBUTE_BAR_ID_FIELD_INDEX,
         )?;
-        let position_x = read_f64_le(
-            &read_process_bytes(process, hero_address + position_x_offset, 8)?,
-            0,
-        )?;
-        let position_y = read_f64_le(
-            &read_process_bytes(process, hero_address + position_y_offset, 8)?,
-            0,
-        )?;
-        let position_z = read_f64_le(
-            &read_process_bytes(process, hero_address + position_z_offset, 8)?,
-            0,
-        )?;
-        let rotation_z = read_f64_le(
-            &read_process_bytes(process, hero_address + rotation_z_offset, 8)?,
-            0,
-        )?;
-        if [position_x, position_y, position_z, rotation_z]
-            .iter()
-            .any(|value| !value.is_finite() || value.abs() > 10_000_000.0)
-        {
-            return Err("live Hero transform failed sanity validation".to_owned());
-        }
+        let (position_x, position_y, position_z, rotation_z) = if hero_live {
+            let position_x = read_f64_le(
+                &read_process_bytes(process, hero_address + position_x_offset, 8)?,
+                0,
+            )?;
+            let position_y = read_f64_le(
+                &read_process_bytes(process, hero_address + position_y_offset, 8)?,
+                0,
+            )?;
+            let position_z = read_f64_le(
+                &read_process_bytes(process, hero_address + position_z_offset, 8)?,
+                0,
+            )?;
+            let rotation_z = read_f64_le(
+                &read_process_bytes(process, hero_address + rotation_z_offset, 8)?,
+                0,
+            )?;
+            if require_live_player
+                && [position_x, position_y, position_z, rotation_z]
+                    .iter()
+                    .any(|value| !value.is_finite() || value.abs() > 10_000_000.0)
+            {
+                return Err("live Hero transform failed sanity validation".to_owned());
+            }
+            (position_x, position_y, position_z, rotation_z)
+        } else {
+            (0.0, 0.0, 0.0, 0.0)
+        };
 
         Ok(PlayerRoot {
             app_static_holder_address,
-            game_app_address,
-            player_address,
-            hero_address,
+            game_app_address: if game_app_live { game_app_address } else { 0 },
+            player_address: if player_live { player_address } else { 0 },
+            hero_address: if hero_live { hero_address } else { 0 },
             position_x,
             position_y,
             position_z,
@@ -936,6 +1153,10 @@ mod windows_bridge {
             position_y_offset,
             position_z_offset,
             rotation_z_offset,
+            layer_offset,
+            game_layer_units_offset,
+            state_removed_offset,
+            foe_summon_owner_offset,
             player_name_offset,
             player_uid_offset,
             player_group_offset,
@@ -1752,7 +1973,7 @@ mod windows_bridge {
             }
         }
 
-        Err("Farever.exe is not running in this Proton environment".to_owned())
+        Err("Farever.exe is not running".to_owned())
     }
 
     fn loaded_modules(process_id: Dword) -> Result<Vec<ModuleInfo>, String> {
@@ -1871,8 +2092,25 @@ mod windows_bridge {
             return Err("Farever hlboot.dat is not supported for live telemetry".to_owned());
         }
         let runtime = read_runtime_anchor(&process, farever)?;
-        let code = read_code_anchor(&process, &runtime)?;
+        // Watch mode attaches as soon as HashLink is up, even before the
+        // player has entered a world (GameApp/player/hero may still be null).
+        let code = read_code_anchor(&process, &runtime, false)?;
         Ok((process, code))
+    }
+
+    fn waiting_report(sequence: u64, timestamp_ms: u128, message: &str) -> String {
+        format!(
+            "{{\"schema\":1,\"bridge_version\":\"0.11.0\",\"state\":\"waiting\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"message\":{}}}\n",
+            json_string(message)
+        )
+    }
+
+    fn should_reattach(error: &str) -> bool {
+        error.contains("Win32 error")
+            || error.contains("process read")
+            || error.contains("Farever.exe is not running")
+            || error.contains("main module was not found")
+            || error.contains("libhl.dll was not found")
     }
 
     fn sample_party_member(
@@ -2289,92 +2527,142 @@ mod windows_bridge {
         if !(50..=5_000).contains(&interval_ms) {
             return Err("watch interval must be between 50 and 5000 ms".to_owned());
         }
-        let (process, code) = attach_for_watch()?;
+        let mut attached: Option<(OwnedHandle, CodeAnchor)> = None;
         let mut sequence = 0_u64;
         let mut hud_health_gauge = None;
         let mut hud_shield_gauge = None;
         let mut party_gauge_cache = Vec::new();
         let mut completed_elements_cache = Vec::new();
+        let mut observed_dps = ObservedDps::new();
         loop {
             sequence = sequence.wrapping_add(1);
             let timestamp_ms = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis();
-            let report = match sample_telemetry(
-                &process,
-                &code,
-                &mut hud_health_gauge,
-                &mut hud_shield_gauge,
-                sequence == 1 || sequence % 10 == 0,
-                &mut party_gauge_cache,
-                &mut completed_elements_cache,
-            ) {
-                Ok(sample) => {
-                    let party_json = sample
-                        .party
-                        .iter()
-                        .map(|member| {
-                            format!(
-                                "{{\"name\":{},\"uid\":{},\"class\":{},\"level\":{},\"connected\":{},\"health\":{},\"max_health\":{},\"shield\":{},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}},\"heading\":{},\"distance\":{}}}",
-                                json_string(&member.name),
-                                json_string(&member.uid),
-                                json_string(&member.class_name),
-                                member.level,
-                                member.connected,
-                                member.health,
-                                member.max_health,
-                                member.shield,
-                                member.x,
-                                member.y,
-                                member.z,
-                                member.rotation,
-                                member.distance,
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                        .join(",");
-                    let completed_elements_json = sample
-                        .completed_elements
-                        .iter()
-                        .map(|value| json_string(value))
-                        .collect::<Vec<_>>()
-                        .join(",");
-                    format!(
-                        "{{\"schema\":1,\"bridge_version\":\"0.10.0\",\"state\":\"connected\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"game_app_address\":\"0x{:x}\",\"player_address\":\"0x{:x}\",\"hero_address\":\"0x{:x}\",\"player\":{{\"name\":{},\"uid\":{},\"class\":{},\"level\":{},\"in_combat\":{},\"vitality\":{},\"health\":{},\"max_health\":{},\"health_regen\":{},\"shield\":{},\"shield_ratio\":{},\"shield_capacity\":{},\"shield_gauge_visible\":{},\"raw_shield\":{},\"shield_gauge_available\":{},\"special_energy\":{},\"special_energy_regen\":{}}},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}},\"rotation_z\":{},\"party\":[{}],\"completed_elements\":[{}]}}\n",
-                        sample.game_app,
-                        sample.player,
-                        sample.hero,
-                        json_string(&sample.name),
-                        json_string(&sample.uid),
-                        json_string(&sample.class_name),
-                        sample.level,
-                        sample.in_combat,
-                        sample.vitality,
-                        sample.health,
-                        sample.max_health,
-                        sample.health_regen,
-                        sample.shield,
-                        sample.shield_ratio,
-                        sample.shield_capacity,
-                        sample.shield_gauge_visible,
-                        sample.raw_shield,
-                        sample.shield_gauge_available,
-                        sample.special_energy,
-                        sample.special_energy_regen,
-                        sample.x,
-                        sample.y,
-                        sample.z,
-                        sample.rotation,
-                        party_json,
-                        completed_elements_json
-                    )
+
+            if attached.is_none() {
+                match attach_for_watch() {
+                    Ok(pair) => {
+                        attached = Some(pair);
+                        hud_health_gauge = None;
+                        hud_shield_gauge = None;
+                        party_gauge_cache.clear();
+                        completed_elements_cache.clear();
+                        observed_dps = ObservedDps::new();
+                    }
+                    Err(error) => {
+                        std::fs::write(path, waiting_report(sequence, timestamp_ms, &error))
+                            .map_err(|write_error| {
+                                format!("could not write {}: {write_error}", path.display())
+                            })?;
+                        std::thread::sleep(Duration::from_millis(interval_ms));
+                        continue;
+                    }
                 }
-                Err(error) => format!(
-                    "{{\"schema\":1,\"bridge_version\":\"0.10.0\",\"state\":\"waiting\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"message\":{}}}\n",
-                    json_string(&error)
-                ),
+            }
+
+            let (report, drop_attach) = {
+                let (process, code) = attached
+                    .as_ref()
+                    .expect("attach succeeded or loop continued");
+                match sample_telemetry(
+                    process,
+                    code,
+                    &mut hud_health_gauge,
+                    &mut hud_shield_gauge,
+                    sequence == 1 || sequence % 10 == 0,
+                    &mut party_gauge_cache,
+                    &mut completed_elements_cache,
+                ) {
+                    Ok(sample) => {
+                        let now = Instant::now();
+                        let foes = read_live_foe_health(process, code, sample.hero)
+                            .unwrap_or_default();
+                        observed_dps.update(&foes, sample.in_combat, now);
+                        let dps_elapsed = observed_dps.elapsed(now);
+                        let dps_rate = if dps_elapsed > 0.0 {
+                            observed_dps.total / dps_elapsed
+                        } else {
+                            0.0
+                        };
+                        let party_json = sample
+                            .party
+                            .iter()
+                            .map(|member| {
+                                format!(
+                                    "{{\"name\":{},\"uid\":{},\"class\":{},\"level\":{},\"connected\":{},\"health\":{},\"max_health\":{},\"shield\":{},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}},\"heading\":{},\"distance\":{}}}",
+                                    json_string(&member.name),
+                                    json_string(&member.uid),
+                                    json_string(&member.class_name),
+                                    member.level,
+                                    member.connected,
+                                    member.health,
+                                    member.max_health,
+                                    member.shield,
+                                    member.x,
+                                    member.y,
+                                    member.z,
+                                    member.rotation,
+                                    member.distance,
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        let completed_elements_json = sample
+                            .completed_elements
+                            .iter()
+                            .map(|value| json_string(value))
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        (
+                            format!(
+                                "{{\"schema\":1,\"bridge_version\":\"0.11.0\",\"state\":\"connected\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"game_app_address\":\"0x{:x}\",\"player_address\":\"0x{:x}\",\"hero_address\":\"0x{:x}\",\"player\":{{\"name\":{},\"uid\":{},\"class\":{},\"level\":{},\"in_combat\":{},\"vitality\":{},\"health\":{},\"max_health\":{},\"health_regen\":{},\"shield\":{},\"shield_ratio\":{},\"shield_capacity\":{},\"shield_gauge_visible\":{},\"raw_shield\":{},\"shield_gauge_available\":{},\"special_energy\":{},\"special_energy_regen\":{}}},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}},\"rotation_z\":{},\"party\":[{}],\"completed_elements\":[{}],\"dps\":{{\"mode\":\"observed_nearby\",\"fight_id\":{},\"current\":{},\"total\":{},\"elapsed\":{},\"in_combat\":{},\"damage_skills\":[{{\"skill\":\"Observed nearby damage\",\"total\":{},\"hits\":0,\"crits\":0,\"max\":0}}],\"healing_skills\":[]}}}}\n",
+                                sample.game_app,
+                                sample.player,
+                                sample.hero,
+                                json_string(&sample.name),
+                                json_string(&sample.uid),
+                                json_string(&sample.class_name),
+                                sample.level,
+                                sample.in_combat,
+                                sample.vitality,
+                                sample.health,
+                                sample.max_health,
+                                sample.health_regen,
+                                sample.shield,
+                                sample.shield_ratio,
+                                sample.shield_capacity,
+                                sample.shield_gauge_visible,
+                                sample.raw_shield,
+                                sample.shield_gauge_available,
+                                sample.special_energy,
+                                sample.special_energy_regen,
+                                sample.x,
+                                sample.y,
+                                sample.z,
+                                sample.rotation,
+                                party_json,
+                                completed_elements_json,
+                                observed_dps.fight_id,
+                                dps_rate,
+                                observed_dps.total,
+                                dps_elapsed,
+                                observed_dps.active,
+                                observed_dps.total
+                            ),
+                            false,
+                        )
+                    }
+                    Err(error) => (
+                        waiting_report(sequence, timestamp_ms, &error),
+                        should_reattach(&error),
+                    ),
+                }
             };
+            if drop_attach {
+                attached = None;
+            }
             std::fs::write(path, report)
                 .map_err(|error| format!("could not write {}: {error}", path.display()))?;
             std::thread::sleep(Duration::from_millis(interval_ms));
@@ -2440,7 +2728,7 @@ mod windows_bridge {
             ));
         }
         let runtime_anchor = read_runtime_anchor(&process, module)?;
-        let code_anchor = read_code_anchor(&process, &runtime_anchor)?;
+        let code_anchor = read_code_anchor(&process, &runtime_anchor, true)?;
         let module_reports = modules
             .iter()
             .map(|module| module_json(module, application_directory))

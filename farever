@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+# Farever Atlas launcher: setup, start, stop, and restart the app + bridge.
+set -euo pipefail
+
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+VENV_PYTHON="$ROOT/.venv/bin/python"
+BRIDGE_DIR="$ROOT/native_bridge"
+BRIDGE_WATCH="$BRIDGE_DIR/watch-proton.sh"
+BRIDGE_NAME="farever-atlas-bridge.exe"
+GAME_DIR_FILE="$ROOT/nyx_game_dir.conf"
+BRIDGE_PID=""
+
+usage() {
+    cat <<'EOF'
+Usage: ./farever <command> [args...]
+
+Commands:
+  setup              Create the Python venv and install dependencies
+  start [args...]    Start the native bridge, then Farever Atlas
+  stop               Stop Farever Atlas and the native bridge
+  restart [args...]  Stop anything running, then start fresh
+
+Atlas args (forwarded by start/restart):
+  --dev              Show a Reload button for soft in-process UI reloads
+
+Environment:
+  FAREVER_GAME_DIR              Farever install directory (optional)
+  FAREVER_STEAM_ROOT            Steam root for Proton bridge discovery
+  FAREVER_PROTON                Proton launcher path
+  FAREVER_TELEMETRY_INTERVAL_MS Bridge poll interval in ms (default 100)
+EOF
+}
+
+die() {
+    echo "ERROR: $*" >&2
+    exit 1
+}
+
+is_running() {
+    local pid="$1"
+    [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+}
+
+stop_matching() {
+    local pattern="$1"
+    local signal="${2:-TERM}"
+    pkill "-$signal" -f "$pattern" 2>/dev/null || true
+}
+
+stop_all() {
+    echo "Stopping Farever Atlas..."
+
+    # Optional detached systemd user unit from older setups.
+    systemctl --user stop farever-atlas.service 2>/dev/null || true
+
+    stop_matching "$ROOT/.venv/bin/python -m farever_atlas" TERM
+    stop_matching "$BRIDGE_WATCH" TERM
+    stop_matching "$BRIDGE_NAME" TERM
+
+    sleep 1
+
+    stop_matching "$ROOT/.venv/bin/python -m farever_atlas" KILL
+    stop_matching "$BRIDGE_WATCH" KILL
+    stop_matching "$BRIDGE_NAME" KILL
+}
+
+cleanup_bridge() {
+    if is_running "${BRIDGE_PID:-}"; then
+        echo "Stopping native bridge..."
+        kill "$BRIDGE_PID" 2>/dev/null || true
+        wait "$BRIDGE_PID" 2>/dev/null || true
+    fi
+    stop_matching "$BRIDGE_NAME" TERM
+}
+
+cmd_setup() {
+    local python="${PYTHON:-python3}"
+
+    cd "$ROOT"
+    "$python" -m venv .venv
+    "$VENV_PYTHON" -m pip install --upgrade pip
+    "$VENV_PYTHON" -m pip install -r requirements.txt
+
+    echo "Preparing UI fonts (Noto Sans)..."
+    PYTHONPATH="$ROOT/app${PYTHONPATH:+:$PYTHONPATH}" \
+        "$VENV_PYTHON" -m farever_atlas.fonts
+
+    printf '\nSetup complete. Start with:\n  %q start\n' "$ROOT/farever"
+}
+
+cmd_start() {
+    [[ -x "$VENV_PYTHON" ]] || die "Python environment missing. Run: $ROOT/farever setup"
+    [[ -x "$BRIDGE_WATCH" ]] || die "Bridge launcher missing: $BRIDGE_WATCH"
+
+    # Replace any leftover bridge from a previous session.
+    stop_matching "$BRIDGE_NAME" TERM
+    stop_matching "$BRIDGE_WATCH" TERM
+    sleep 0.2
+
+    echo "Starting native bridge..."
+    local bridge_log="$BRIDGE_DIR/bridge.log"
+    "$BRIDGE_WATCH" >"$bridge_log" 2>&1 &
+    BRIDGE_PID=$!
+    trap cleanup_bridge EXIT INT TERM
+
+    sleep 1
+    if ! is_running "$BRIDGE_PID"; then
+        wait "$BRIDGE_PID" || true
+        if [[ -s "$bridge_log" ]]; then
+            die "Native bridge exited during startup. See $bridge_log"
+        fi
+        die "Native bridge exited during startup."
+    fi
+
+    if [[ -z "${FAREVER_GAME_DIR:-}" && -f "$GAME_DIR_FILE" ]]; then
+        IFS= read -r FAREVER_GAME_DIR < "$GAME_DIR_FILE" || true
+        export FAREVER_GAME_DIR
+    fi
+
+    echo "Starting Farever Atlas..."
+    export PYTHONPATH="$ROOT/app${PYTHONPATH:+:$PYTHONPATH}"
+    "$VENV_PYTHON" -m farever_atlas "$@"
+}
+
+cmd_stop() {
+    stop_all
+    echo "Farever Atlas stopped."
+}
+
+cmd_restart() {
+    stop_all
+    sleep 0.3
+    cmd_start "$@"
+}
+
+main() {
+    local command="${1:-}"
+    if [[ -z "$command" ]]; then
+        usage
+        exit 1
+    fi
+    shift || true
+
+    case "$command" in
+        setup) cmd_setup ;;
+        start) cmd_start "$@" ;;
+        stop) cmd_stop ;;
+        restart) cmd_restart "$@" ;;
+        -h|--help|help) usage ;;
+        *)
+            echo "Unknown command: $command" >&2
+            usage >&2
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"

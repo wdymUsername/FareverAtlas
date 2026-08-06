@@ -77,7 +77,7 @@ Bridge v0.4.0 validates the live `hl_code` header against the offline HLB:
 
 It then follows the live type table directly to index 1366, confirms object
 kind 11, and validates the UTF-16 metadata name `ent.Hero`. This resolved the
-same live type address previously observed by the injected minimap, without
+same live type address previously observed by the earlier bridge tooling, without
 its broad region scan or `hl_alloc_obj` hook. The bridge stops at type metadata
 and does not dereference a Hero instance.
 

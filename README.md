@@ -1,61 +1,109 @@
-# Farever Standalone v0.12.2
+# Farever Atlas
 
-## Windows
+[![Windows portable exe](https://github.com/wdymUsername/FareverAtlas/actions/workflows/windows-portable.yml/badge.svg)](https://github.com/wdymUsername/FareverAtlas/actions/workflows/windows-portable.yml)
 
-Farever Standalone supports native Windows installations in addition to
-Linux/Proton.
+## Quick start
 
-1. Install 64-bit Python 3.10 or newer.
-2. Run `setup.bat`.
-3. Run `install_bridge.bat`. If Farever is in a nonstandard location, pass it
-   explicitly:
+### Linux / Proton
 
-   ```bat
-   install_bridge.bat "D:\SteamLibrary\steamapps\common\Farever"
-   ```
-
-4. Start Farever, then run `run.bat`.
-
-On Windows, live telemetry is read from:
-
-```text
-%LOCALAPPDATA%\farever-minimap\combatlogs
+```bash
+./farever setup
+./native_bridge/build.sh
+./farever start
 ```
 
-The launcher uses `nyx_game_dir.conf` when present and otherwise searches
-Windows Steam libraries. The same project-local assets and waypoint JSON file
-are used on both platforms.
+For UI development, start with `--dev` to get a Reload button next to
+Settings. It soft-reloads Atlas Python/UI code in-process without restarting
+the bridge:
 
-## Linux / Proton
+```bash
+./farever start --dev
+```
 
-Run `setup.sh`, `install_bridge.sh`, and `run.sh` as before.
+Stop or restart later with:
 
-## Bridge v0.11.1
+```bash
+./farever stop
+./farever restart
+```
 
-- Reduced complete live-state polling and JSON writes from 10 Hz to 5 Hz.
-- Standalone map interpolation remains smooth while the game performs roughly
-  half as many telemetry API reads and file writes.
+Start Farever through Steam first so the Proton prefix exists. The launcher
+starts the Windows bridge under Proton, then opens the Atlas UI.
 
-## v0.12.2
+### Windows (portable exe)
 
-- Confined the floating WAYPOINTS panel to the visible map canvas.
-- Kept the WAYPOINTS header pinned while the panel body scrolls.
-- Added a compact vertical scrollbar when expanded filters and custom waypoints
-  exceed the available map height.
-- Recalculates the panel limit while the window is resized and during roll
-  animations, preventing any part of the panel from escaping the map.
+Drop `dist/FareverAtlas.exe` into any folder and run it. On first launch it
+creates writable runtime dirs next to itself:
 
-Changes from v0.11.7:
+```text
+FareverAtlas.exe
+native_bridge/          bridge binary + farever-telemetry.json
+user_data/
+  settings.ini
+  waypoints/
+  builds/
+```
 
-- Removed the outline and backing plate from the class artwork; the project-local WebP is now shown cleanly inside the existing 30 px icon area.
-- HP value text now switches contrast automatically:
-  - dark text over a mostly filled bright HP/shield bar
-  - light text over the dark empty track at low health
-- The HP bar width now follows the visible identity-line width, within compact limits, so the lower row no longer extends substantially farther right than the upper row.
-- Character/Rift vertical alignment and shield overlay behavior are unchanged.
+Start Farever and log in before launching Atlas. No Python install is required
+for the portable build.
 
+Rebuild the portable exe on Linux (Wine + Windows Python + PyInstaller):
 
-## v0.12.1
+```bash
+./native_bridge/build.sh
+./packaging/windows/build_wine.sh
+```
 
-- Restored the `Snapshot` dataclass constructor lost during the v0.12.0 module split.
-- Added packaging validation for positional and keyword snapshot construction.
+On a native Windows machine with Python 3.12+:
+
+```bat
+packaging\windows\build.bat
+```
+
+GitHub Actions builds the same portable exe on `windows-latest`
+(`.github/workflows/windows-portable.yml`). Download the
+`FareverAtlas-windows-portable` artifact from the workflow run, or the exe
+attached to a GitHub Release. Manual runs: Actions → Windows portable exe →
+Run workflow.
+
+### Windows (source / venv)
+
+```bat
+farever.bat setup
+farever.bat start
+```
+
+Stop or restart later with:
+
+```bat
+farever.bat stop
+farever.bat restart
+```
+
+Build the bridge for Windows first (`native_bridge\build.sh` from a toolchain
+that can target `x86_64-pc-windows-gnu`, or copy a prebuilt
+`native_bridge\farever-atlas-bridge.exe`).
+
+## What the launcher does
+
+| Command | Effect |
+| --- | --- |
+| `setup` | Creates `.venv` and installs Python dependencies |
+| `start` | Starts the native bridge, then Farever Atlas |
+| `stop` | Stops Atlas and the bridge |
+| `restart` | `stop`, then `start` |
+
+Optional environment variables:
+
+- `FAREVER_GAME_DIR` — Farever install directory
+- `FAREVER_STEAM_ROOT` — Steam root used to find the Proton prefix (Linux)
+- `FAREVER_PROTON` — Proton launcher path (Linux)
+- `FAREVER_TELEMETRY_INTERVAL_MS` — bridge poll interval (default `100`)
+
+Live telemetry is read from `native_bridge/farever-telemetry.json`.
+
+## Bridge notes
+
+The native bridge is a read-only Windows helper. On Linux it must run inside
+Farever's Proton prefix via `native_bridge/watch-proton.sh` (invoked by
+`./farever start`). See `native_bridge/README.md` for build and safety details.

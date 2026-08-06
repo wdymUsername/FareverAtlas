@@ -5,6 +5,7 @@ __pycache__/
 
 # Local user and machine state
 nyx_game_dir.conf
+user_data/
 user_waypoints_*.json
 user_waypoints_*.json.bak
 waypoints_export.json
@@ -15,14 +16,27 @@ custom_waypoints_export.json
 # Runtime bridge output
 native_bridge/farever-process.json
 native_bridge/farever-telemetry.json
+native_bridge/bridge.log
 
 # Generated build output and release packages
 native_bridge/target/
+native_bridge/farever-atlas-bridge.exe
+dist/
+build/
+.cache/
 *.zip
+
+# Fetched UI fonts (populated by python -m farever_atlas.fonts)
+assets/fonts/*.ttf
+assets/fonts/*.otf
+assets/fonts/*.partial
+assets/fonts/OFL.txt
 
 # Local backups and extracted game files
 .backups/
 extracted/
+# Intermediate tile PNGs from tools/build_map_assets.py (--keep-tiles)
+extracted/map/
 
 # Third-party research checkouts (kept locally, not vendored)
 usefull/
