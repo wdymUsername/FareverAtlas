@@ -44,6 +44,13 @@ class FilterSidebarMixin:
             QtWidgets.QLayout.SizeConstraint.SetMinAndMaxSize
         )
 
+        self.enemies_filter.setObjectName("sidebarSubItem")
+        self.enemies_filter.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        sidebar_content_layout.addWidget(self.enemies_filter)
+
         sidebar_content_layout.addWidget(self.poi_section_toggle)
 
         self.poi_filter_container = QtWidgets.QWidget()

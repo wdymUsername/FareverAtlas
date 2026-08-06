@@ -143,6 +143,30 @@ class DataHub(QtCore.QObject):
                         "distance": member.get("distance"),
                     }
                 )
+        enemies: list[dict[str, Any]] = []
+        native_enemies = payload.get("enemies", [])
+        if isinstance(native_enemies, list):
+            for enemy in native_enemies:
+                if not isinstance(enemy, dict):
+                    continue
+                enemy_position = enemy.get("position", {})
+                if not isinstance(enemy_position, dict):
+                    enemy_position = {}
+                enemy_id = enemy.get("id")
+                kind = enemy.get("kind")
+                if not isinstance(enemy_id, str) or not enemy_id:
+                    continue
+                if kind is not None and not isinstance(kind, str):
+                    kind = None
+                enemies.append(
+                    {
+                        "id": enemy_id,
+                        "kind": kind or "",
+                        "x": enemy_position.get("x"),
+                        "y": enemy_position.get("y"),
+                        "z": enemy_position.get("z"),
+                    }
+                )
         return {
             "schema": 1,
             "bridge_version": payload.get("bridge_version"),
@@ -150,6 +174,7 @@ class DataHub(QtCore.QObject):
             "locked": payload.get("state") == "connected",
             "sections": ["player"],
             "party": party,
+            "enemies": enemies,
             "completed_elements": payload.get("completed_elements", []),
             "player": {
                 "name": name,

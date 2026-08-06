@@ -23,6 +23,7 @@ from ..controls import (
     SlideSwitch,
 )
 from ..pages.map.data import MapTexture, Snapshot
+from ..pages.codex.page import CodexPage, CodexPageMixin
 from ..pages.map.page import MapPage, MapPageMixin
 from ..pages.map.radar import RadarWidget
 from ..pages.map.status import CharacterStatusWidget, PartyMemberStatusWidget, RiftStatusWidget
@@ -46,6 +47,7 @@ class AtlasWindow(
     TitleBarMixin,
     MapPageMixin,
     PlannerPageMixin,
+    CodexPageMixin,
 ):
     combatMeterRequested = QtCore.Signal()
     onlineModeChanged = QtCore.Signal(bool)
@@ -151,6 +153,13 @@ class AtlasWindow(
         layout.setSpacing(7)
 
         legacy_show_pois = self._setting_bool("map/show_pois", True)
+
+        self.enemies_filter = QtWidgets.QPushButton("Enemies")
+        self.enemies_filter.setCheckable(True)
+        self.enemies_filter.setChecked(
+            self._setting_bool("map/show_enemies", True)
+        )
+        self.enemies_filter.setToolTip("Show or hide nearby enemies on the map")
 
         self.poi_section_toggle = SidebarHeaderButton("POI", "sidebarSectionButton")
         self.poi_section_toggle.setToolTip("Hide POI filters")
@@ -417,12 +426,14 @@ class AtlasWindow(
         self.radar.installEventFilter(self)
 
         self._init_planner_page()
+        self._init_codex_page()
 
         self.pages = {
             MapPage.PAGE_ID: MapPage(self.map_toolbar, self.map_body),
             PlannerPage.PAGE_ID: PlannerPage(self.planner_toolbar, self.planner_body),
+            CodexPage.PAGE_ID: CodexPage(self.codex_toolbar, self.codex_body),
         }
-        self.page_order = (MapPage.PAGE_ID, PlannerPage.PAGE_ID)
+        self.page_order = (MapPage.PAGE_ID, PlannerPage.PAGE_ID, CodexPage.PAGE_ID)
 
         for page_id in self.page_order:
             page = self.pages[page_id]
@@ -497,6 +508,7 @@ class AtlasWindow(
         )
         self._position_main_navigation()
 
+        self.enemies_filter.toggled.connect(self._controls_changed)
         for button in self.poi_filters.values():
             button.toggled.connect(self._poi_filter_changed)
         for button in self.loot_filters.values():
@@ -574,21 +586,23 @@ class AtlasWindow(
         if previous in getattr(self, "pages", {}) and previous != page:
             self.pages[previous].on_deactivated()
 
+        map_active = page == MapPage.PAGE_ID
         planner_active = page == PlannerPage.PAGE_ID
         if hasattr(self, "page_stack") and hasattr(self, "context_stack"):
             target = self.pages[page]
             self.context_stack.setCurrentWidget(target.context_bar)
             self.page_stack.setCurrentWidget(target.body)
         if hasattr(self, "map_page_button"):
-            self.map_page_button.setChecked(not planner_active)
+            self.map_page_button.setChecked(map_active)
             self.planner_page_button.setChecked(planner_active)
+            self.codex_page_button.setChecked(page == CodexPage.PAGE_ID)
         if hasattr(self, "position"):
-            self.position.setVisible(not planner_active)
+            self.position.setVisible(map_active)
         if not planner_active and hasattr(
             self, "planner_build_load_overlay"
         ):
             self._set_planner_build_overlay_visible(False)
-        if planner_active:
+        if not map_active:
             if hasattr(self, "map_help_panel"):
                 self._set_map_help_visible(False)
             if hasattr(self, "main_navigation_overlay"):
@@ -1006,6 +1020,11 @@ class AtlasWindow(
             key=lambda index: abs(self.ZOOM_LEVELS[index][0] - saved_radius),
         )
 
+        self.enemies_filter.blockSignals(True)
+        self.enemies_filter.setChecked(
+            self._setting_bool("map/show_enemies", True)
+        )
+        self.enemies_filter.blockSignals(False)
         for kind, button in self.poi_filters.items():
             button.blockSignals(True)
             button.setChecked(
@@ -1081,6 +1100,7 @@ class AtlasWindow(
         self.radar.dim_invalid_party_members = self._setting_bool(
             "party/dim_invalid", True
         )
+        self.radar.show_enemies = self.enemies_filter.isChecked()
         self.radar.show_pois = any(poi_visibility.values())
         visible_custom_waypoints = self._visible_custom_waypoints()
         self.radar.set_custom_waypoints(
@@ -1106,6 +1126,7 @@ class AtlasWindow(
         for kind, use_icon in loot_icon_mode.items():
             self._settings.setValue(f"map/loot_use_icon_{kind}", use_icon)
         self._settings.setValue("map/show_collectibles", any(loot_visibility.values()))
+        self._settings.setValue("map/show_enemies", self.radar.show_enemies)
         # Retain the aggregate key only for downgrade compatibility.
         self._settings.setValue(
             "map/show_custom_waypoints", bool(visible_custom_waypoints)

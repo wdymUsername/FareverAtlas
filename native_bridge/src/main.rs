@@ -74,13 +74,24 @@ mod windows_bridge {
     const HERO_POS_Y_FIELD_INDEX: usize = 28;
     const HERO_POS_Z_FIELD_INDEX: usize = 29;
     const HERO_ROTATION_Z_FIELD_INDEX: usize = 30;
-    const HERO_LAYER_FIELD_INDEX: usize = 14;
+    // Flattened runtime field index on ent.Hero / ent.Foe (includes BaseState +
+    // State + Entity + Unit). st.State.layer is 17 — not BaseState slot 14.
+    const HERO_LAYER_FIELD_INDEX: usize = 17;
     const GAME_LAYER_TYPE_INDEX: usize = 782;
-    const GAME_LAYER_UNITS_FIELD_INDEX: usize = 44;
+    // st.GameLayer.units is 47. Index 44 is entities (superset, wrong for this
+    // sweep's ArrayObj walk expectations in older builds).
+    const GAME_LAYER_UNITS_FIELD_INDEX: usize = 47;
     const FOE_TYPE_INDEX: usize = 1_381;
     const STATE_TYPE_INDEX: usize = 781;
     const STATE_REMOVED_FIELD_INDEX: usize = 0;
-    const FOE_SUMMON_OWNER_FIELD_INDEX: usize = 164;
+    // ent.Foe.summonOwner is 167. Index 164 is ent.Unit.lastObjOffset, which is
+    // almost always non-zero and incorrectly filters every live foe as a summon.
+    const FOE_SUMMON_OWNER_FIELD_INDEX: usize = 167;
+    // Nearby-enemy map sweep (GameLayer.units / ent.Foe). Independent of DPS.
+    // Radius/z caps mirror the measured FareverMeter world-sweep bounds.
+    const ENEMY_SWEEP_RADIUS: f64 = 600.0;
+    const ENEMY_SWEEP_Z_CULL: f64 = 60.0;
+    const ENEMY_SWEEP_MAX: usize = 150;
     // Runtime field indexes include inherited fields. These indexes are
     // derived from the supported hlboot.dat metadata, never guessed offsets.
     const PLAYER_NAME_FIELD_INDEX: usize = 29;
@@ -371,6 +382,14 @@ mod windows_bridge {
     struct FoeHealth {
         address: usize,
         health: f64,
+    }
+
+    struct EnemySample {
+        address: usize,
+        kind: String,
+        x: f64,
+        y: f64,
+        z: f64,
     }
 
     struct ObservedDps {
@@ -799,6 +818,134 @@ mod windows_bridge {
             }
         }
         Ok(foes)
+    }
+
+    /// Nearby hostile units for the Atlas map.
+    ///
+    /// Walks `st.GameLayer.units`, keeps live `ent.Foe` objects that are not
+    /// summons, and culls by horizontal radius / vertical separation. This is
+    /// intentionally separate from the legacy DPS health sampler.
+    fn read_nearby_enemies(
+        process: &OwnedHandle,
+        code: &CodeAnchor,
+        hero: usize,
+        player_x: f64,
+        player_y: f64,
+        player_z: f64,
+    ) -> Result<Vec<EnemySample>, String> {
+        let root = &code.player_root;
+        let layer = read_object_pointer_field(process, hero, root.layer_offset)?;
+        if layer == 0
+            || read_u64_le(&read_process_bytes(process, layer, 8)?, 0)? as usize
+                != code.types_address + GAME_LAYER_TYPE_INDEX * 32
+        {
+            return Ok(Vec::new());
+        }
+        let units = read_object_pointer_field(process, layer, root.game_layer_units_offset)?;
+        if units == 0
+            || read_u64_le(&read_process_bytes(process, units, 8)?, 0)? as usize
+                != code.types_address + ARRAY_OBJ_TYPE_INDEX * 32
+        {
+            return Ok(Vec::new());
+        }
+        let length = i32::from_le_bytes(
+            read_process_bytes(process, units + root.array_length_offset, 4)?
+                .try_into()
+                .unwrap(),
+        );
+        if !(0..=2_000).contains(&length) {
+            return Err("GameLayer.units has an invalid length".to_owned());
+        }
+        let storage = read_object_pointer_field(process, units, root.array_storage_offset)?;
+        if storage == 0 {
+            return Ok(Vec::new());
+        }
+        let foe_type = code.types_address + FOE_TYPE_INDEX * 32;
+        let radius_sq = ENEMY_SWEEP_RADIUS * ENEMY_SWEEP_RADIUS;
+        let mut enemies = Vec::new();
+        for index in 0..length as usize {
+            if enemies.len() >= ENEMY_SWEEP_MAX {
+                break;
+            }
+            let Some(entry) = storage.checked_add(24 + index * 8) else {
+                continue;
+            };
+            let Ok(entry_bytes) = read_process_bytes(process, entry, 8) else {
+                continue;
+            };
+            let Ok(unit) = read_u64_le(&entry_bytes, 0).map(|value| value as usize) else {
+                continue;
+            };
+            if unit == 0 || unit == hero || !object_is_a(process, unit, foe_type) {
+                continue;
+            }
+            let Ok(removed) = read_process_bytes(process, unit + root.state_removed_offset, 1) else {
+                continue;
+            };
+            if removed[0] != 0 {
+                continue;
+            }
+            let Ok(summon_owner) =
+                read_object_pointer_field(process, unit, root.foe_summon_owner_offset)
+            else {
+                continue;
+            };
+            if summon_owner != 0 {
+                continue;
+            }
+            let Ok(x_bytes) = read_process_bytes(process, unit + root.position_x_offset, 8) else {
+                continue;
+            };
+            let Ok(y_bytes) = read_process_bytes(process, unit + root.position_y_offset, 8) else {
+                continue;
+            };
+            let Ok(z_bytes) = read_process_bytes(process, unit + root.position_z_offset, 8) else {
+                continue;
+            };
+            let Ok(x) = read_f64_le(&x_bytes, 0) else {
+                continue;
+            };
+            let Ok(y) = read_f64_le(&y_bytes, 0) else {
+                continue;
+            };
+            let Ok(z) = read_f64_le(&z_bytes, 0) else {
+                continue;
+            };
+            if [x, y, z]
+                .iter()
+                .any(|value| !value.is_finite() || value.abs() > 10_000_000.0)
+            {
+                continue;
+            }
+            let dx = x - player_x;
+            let dy = y - player_y;
+            if dx * dx + dy * dy > radius_sq {
+                continue;
+            }
+            if (z - player_z).abs() > ENEMY_SWEEP_Z_CULL {
+                continue;
+            }
+            let kind = read_object_pointer_field(process, unit, root.unit_kind_offset)
+                .ok()
+                .and_then(|kind_pointer| {
+                    read_hashlink_identifier(
+                        process,
+                        code.types_address,
+                        kind_pointer,
+                        "enemy unit kind",
+                    )
+                    .ok()
+                })
+                .unwrap_or_default();
+            enemies.push(EnemySample {
+                address: unit,
+                kind,
+                x: (x * 10.0).round() / 10.0,
+                y: (y * 10.0).round() / 10.0,
+                z: (z * 10.0).round() / 10.0,
+            });
+        }
+        Ok(enemies)
     }
 
     fn read_player_root(
@@ -2100,7 +2247,7 @@ mod windows_bridge {
 
     fn waiting_report(sequence: u64, timestamp_ms: u128, message: &str) -> String {
         format!(
-            "{{\"schema\":1,\"bridge_version\":\"0.11.0\",\"state\":\"waiting\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"message\":{}}}\n",
+            "{{\"schema\":1,\"bridge_version\":\"0.12.0\",\"state\":\"waiting\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"message\":{}}}\n",
             json_string(message)
         )
     }
@@ -2586,6 +2733,15 @@ mod windows_bridge {
                         } else {
                             0.0
                         };
+                        let enemies = read_nearby_enemies(
+                            process,
+                            code,
+                            sample.hero,
+                            sample.x,
+                            sample.y,
+                            sample.z,
+                        )
+                        .unwrap_or_default();
                         let party_json = sample
                             .party
                             .iter()
@@ -2609,6 +2765,20 @@ mod windows_bridge {
                             })
                             .collect::<Vec<_>>()
                             .join(",");
+                        let enemies_json = enemies
+                            .iter()
+                            .map(|enemy| {
+                                format!(
+                                    "{{\"id\":\"0x{:x}\",\"kind\":{},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}}}}",
+                                    enemy.address,
+                                    json_string(&enemy.kind),
+                                    enemy.x,
+                                    enemy.y,
+                                    enemy.z,
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join(",");
                         let completed_elements_json = sample
                             .completed_elements
                             .iter()
@@ -2617,7 +2787,7 @@ mod windows_bridge {
                             .join(",");
                         (
                             format!(
-                                "{{\"schema\":1,\"bridge_version\":\"0.11.0\",\"state\":\"connected\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"game_app_address\":\"0x{:x}\",\"player_address\":\"0x{:x}\",\"hero_address\":\"0x{:x}\",\"player\":{{\"name\":{},\"uid\":{},\"class\":{},\"level\":{},\"in_combat\":{},\"vitality\":{},\"health\":{},\"max_health\":{},\"health_regen\":{},\"shield\":{},\"shield_ratio\":{},\"shield_capacity\":{},\"shield_gauge_visible\":{},\"raw_shield\":{},\"shield_gauge_available\":{},\"special_energy\":{},\"special_energy_regen\":{}}},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}},\"rotation_z\":{},\"party\":[{}],\"completed_elements\":[{}],\"dps\":{{\"mode\":\"observed_nearby\",\"fight_id\":{},\"current\":{},\"total\":{},\"elapsed\":{},\"in_combat\":{},\"damage_skills\":[{{\"skill\":\"Observed nearby damage\",\"total\":{},\"hits\":0,\"crits\":0,\"max\":0}}],\"healing_skills\":[]}}}}\n",
+                                "{{\"schema\":1,\"bridge_version\":\"0.12.0\",\"state\":\"connected\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"game_app_address\":\"0x{:x}\",\"player_address\":\"0x{:x}\",\"hero_address\":\"0x{:x}\",\"player\":{{\"name\":{},\"uid\":{},\"class\":{},\"level\":{},\"in_combat\":{},\"vitality\":{},\"health\":{},\"max_health\":{},\"health_regen\":{},\"shield\":{},\"shield_ratio\":{},\"shield_capacity\":{},\"shield_gauge_visible\":{},\"raw_shield\":{},\"shield_gauge_available\":{},\"special_energy\":{},\"special_energy_regen\":{}}},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}},\"rotation_z\":{},\"party\":[{}],\"enemies\":[{}],\"completed_elements\":[{}],\"dps\":{{\"mode\":\"observed_nearby\",\"fight_id\":{},\"current\":{},\"total\":{},\"elapsed\":{},\"in_combat\":{},\"damage_skills\":[{{\"skill\":\"Observed nearby damage\",\"total\":{},\"hits\":0,\"crits\":0,\"max\":0}}],\"healing_skills\":[]}}}}\n",
                                 sample.game_app,
                                 sample.player,
                                 sample.hero,
@@ -2643,6 +2813,7 @@ mod windows_bridge {
                                 sample.z,
                                 sample.rotation,
                                 party_json,
+                                enemies_json,
                                 completed_elements_json,
                                 observed_dps.fight_id,
                                 dps_rate,

@@ -55,7 +55,10 @@ class RadarWidget(QtWidgets.QWidget):
         self.show_party_names = True
         self.show_party_health_rings = True
         self.dim_invalid_party_members = True
+        self.show_enemies = True
         self.show_route_line = True
+        # World units of elevation difference before an enemy marker is dimmed.
+        self.enemy_z_fade = 30.0
         self.active_custom_waypoint_id: int | None = None
         self.radius_m = 200.0
         self.target_radius_m = 200.0
@@ -92,8 +95,12 @@ class RadarWidget(QtWidgets.QWidget):
         self._drag_moved = False
         self._drag_started_panned = False
         self._custom_waypoint_hits: list[tuple[QtCore.QRectF, dict[str, Any]]] = []
+        self._enemy_hits: list[tuple[QtCore.QRectF, dict[str, Any]]] = []
         self._hovered_custom_waypoint_id: int | None = None
+        self._hovered_enemy_id: str | None = None
         self._live_marker_signature: tuple[Any, ...] | None = None
+        # Generous hit slack around the small enemy dots so hover is usable.
+        self._enemy_hit_radius = 9.0
         # Cursor-shape changes cannot be interpolated by Qt, so drag release uses
         # a short staged transition: closed hand -> open hand -> resting cursor.
         # The generation token prevents delayed callbacks from overriding a newer
@@ -123,6 +130,7 @@ class RadarWidget(QtWidgets.QWidget):
         if not self._display_pose_valid() and self._raw_pose_valid(raw):
             self._snap_display_player(raw)
         party = self.state.get("party", []) if isinstance(self.state, dict) else []
+        enemies = self.state.get("enemies", []) if isinstance(self.state, dict) else []
         target = self.state.get("target", {}) if isinstance(self.state, dict) else {}
         party_signature = tuple(
             (
@@ -137,6 +145,17 @@ class RadarWidget(QtWidgets.QWidget):
             for member in party
             if isinstance(member, dict)
         ) if isinstance(party, list) else ()
+        enemy_signature = tuple(
+            (
+                str(enemy.get("id") or ""),
+                str(enemy.get("kind") or ""),
+                safe_float(enemy.get("x"), 0.0),
+                safe_float(enemy.get("y"), 0.0),
+                safe_float(enemy.get("z"), 0.0),
+            )
+            for enemy in enemies
+            if isinstance(enemy, dict)
+        ) if isinstance(enemies, list) else ()
         target_signature = (
             (
                 True,
@@ -151,7 +170,12 @@ class RadarWidget(QtWidgets.QWidget):
         completed_signature = tuple(
             sorted(str(value) for value in completed_elements)
         ) if isinstance(completed_elements, list) else ()
-        live_signature = (party_signature, target_signature, completed_signature)
+        live_signature = (
+            party_signature,
+            enemy_signature,
+            target_signature,
+            completed_signature,
+        )
         if pois_changed or live_signature != self._live_marker_signature:
             self._live_marker_signature = live_signature
             self.update()
@@ -427,6 +451,28 @@ class RadarWidget(QtWidgets.QWidget):
                 return dict(waypoint)
         return None
 
+    def enemy_at(self, point: QtCore.QPointF) -> dict[str, Any] | None:
+        # Nearest wins when markers overlap — helpful in dense packs.
+        best: dict[str, Any] | None = None
+        best_distance = math.inf
+        for hit_rect, enemy in self._enemy_hits:
+            if not hit_rect.contains(point):
+                continue
+            center = hit_rect.center()
+            distance = math.hypot(point.x() - center.x(), point.y() - center.y())
+            if distance < best_distance:
+                best_distance = distance
+                best = enemy
+        return dict(best) if best is not None else None
+
+    @staticmethod
+    def _enemy_display_name(enemy: dict[str, Any]) -> str:
+        kind = str(enemy.get("kind") or "").strip()
+        if not kind:
+            return "Enemy"
+        # Creature ids arrive as HashLink identifiers like Crimson_Z2W_Sword_2.
+        return " ".join(part for part in kind.replace("_", " ").split() if part)
+
     def _world_in_view(
         self,
         obj: dict[str, Any],
@@ -580,8 +626,15 @@ class RadarWidget(QtWidgets.QWidget):
         self._cancel_cursor_release_ease()
         waypoint = self.custom_waypoint_at(event.position())
         waypoint_id = safe_int(waypoint.get("id"), -1) if waypoint else None
-        if waypoint_id != self._hovered_custom_waypoint_id:
+        enemy = None if waypoint is not None else self.enemy_at(event.position())
+        enemy_id = str(enemy.get("id") or "") if enemy is not None else None
+        hover_changed = (
+            waypoint_id != self._hovered_custom_waypoint_id
+            or enemy_id != self._hovered_enemy_id
+        )
+        if hover_changed:
             self._hovered_custom_waypoint_id = waypoint_id
+            self._hovered_enemy_id = enemy_id
             if waypoint is not None:
                 player = self._player()
                 distance = math.hypot(
@@ -599,10 +652,32 @@ class RadarWidget(QtWidgets.QWidget):
                     event.globalPosition().toPoint(), tooltip, self
                 )
                 self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+            elif enemy is not None:
+                player = self._player()
+                distance = math.hypot(
+                    safe_float(enemy.get("x")) - safe_float(player.get("x")),
+                    safe_float(enemy.get("y")) - safe_float(player.get("y")),
+                )
+                tooltip = (
+                    f"{self._enemy_display_name(enemy)}\n"
+                    f"{distance:.1f} m"
+                )
+                QtWidgets.QToolTip.showText(
+                    event.globalPosition().toPoint(), tooltip, self
+                )
+                self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
             else:
                 QtWidgets.QToolTip.hideText()
                 self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
         super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event: QtCore.QEvent) -> None:  # noqa: N802
+        self._hovered_custom_waypoint_id = None
+        self._hovered_enemy_id = None
+        QtWidgets.QToolTip.hideText()
+        if not self._drag_active:
+            self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        super().leaveEvent(event)
 
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:  # noqa: N802
         if self._event_is_over_child_ui(event.globalPosition().toPoint()):
@@ -897,6 +972,7 @@ class RadarWidget(QtWidgets.QWidget):
         player = self._player()
         view_center = self._view_center()
         self._custom_waypoint_hits = []
+        self._enemy_hits = []
 
         map_drawn = False
         if self.show_texture and self.map_texture is not None:
@@ -1015,6 +1091,43 @@ class RadarWidget(QtWidgets.QWidget):
                 )
                 self._draw_custom_waypoint_marker(
                     painter, point, waypoint, is_active
+                )
+
+        enemies = self.state.get("enemies", []) if isinstance(self.state, dict) else []
+        player_z = safe_float(player.get("z"), 0.0)
+        if self.show_enemies and isinstance(enemies, list):
+            for enemy in enemies:
+                if not isinstance(enemy, dict):
+                    continue
+                enemy_x = safe_float(enemy.get("x"), math.nan)
+                enemy_y = safe_float(enemy.get("y"), math.nan)
+                if not (math.isfinite(enemy_x) and math.isfinite(enemy_y)):
+                    continue
+                if not self._world_in_view(enemy, view_center, viewport, 10.0):
+                    continue
+                point = self._world_to_screen(
+                    enemy, center, pixels_per_metre, view_center
+                )
+                enemy_z = safe_float(enemy.get("z"), player_z)
+                far = (
+                    math.isfinite(enemy_z)
+                    and math.isfinite(player_z)
+                    and abs(enemy_z - player_z) > self.enemy_z_fade
+                )
+                fill = QtGui.QColor("#FF5348")
+                if far:
+                    fill.setAlpha(110)
+                painter.setPen(QtGui.QPen(QtGui.QColor("#190d0d"), 1.0))
+                painter.setBrush(fill)
+                painter.drawEllipse(point, 2.8, 2.8)
+                hit = self._enemy_hit_radius
+                self._enemy_hits.append(
+                    (
+                        QtCore.QRectF(
+                            point.x() - hit, point.y() - hit, hit * 2.0, hit * 2.0
+                        ),
+                        dict(enemy),
+                    )
                 )
 
         party = self.state.get("party", []) if isinstance(self.state, dict) else []

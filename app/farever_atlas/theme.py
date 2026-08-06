@@ -112,7 +112,8 @@ QToolButton#mainMenuButton::menu-indicator {
     width: 0;
 }
 QToolButton#mapPageButton,
-QToolButton#plannerPageButton {
+QToolButton#plannerPageButton,
+QToolButton#codexPageButton {
     color: #8493a2;
     background: transparent;
     border: none;
@@ -122,17 +123,20 @@ QToolButton#plannerPageButton {
     font-weight: 600;
 }
 QToolButton#mapPageButton:hover,
-QToolButton#plannerPageButton:hover {
+QToolButton#plannerPageButton:hover,
+QToolButton#codexPageButton:hover {
     color: #dce6ee;
     background: #202b36;
 }
 QToolButton#mapPageButton:checked,
-QToolButton#plannerPageButton:checked {
+QToolButton#plannerPageButton:checked,
+QToolButton#codexPageButton:checked {
     color: #eef3f7;
     background: #2a3946;
 }
 QWidget#mapPage,
 QWidget#plannerPage,
+QWidget#codexPage,
 QStackedWidget#mainPageStack {
     background: transparent;
     border: none;
@@ -141,7 +145,15 @@ QWidget#plannerContentPlaceholder {
     background: transparent;
     border: none;
 }
-QWidget#plannerToolbar {
+QLabel#codexPlaceholder {
+    color: #8493a2;
+    font-size: 13px;
+    font-weight: 600;
+    background: transparent;
+    border: none;
+}
+QWidget#plannerToolbar,
+QWidget#codexToolbar {
     background: #151d26;
     border: 1px solid #273340;
     border-radius: 7px;
