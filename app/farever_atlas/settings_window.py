@@ -77,6 +77,7 @@ def apply_settings_defaults(settings: QtCore.QSettings) -> None:
         settings.setValue(f"map/show_loot_{kind}", False)
     settings.setValue("map/show_pois", True)
     settings.setValue("map/show_collectibles", False)
+    settings.setValue("map/show_enemies", True)
     settings.setValue("map/show_dps_overlay", True)
     settings.setValue("party/show_empty_slots", True)
     settings.setValue("party/slot_count", PARTY_SLOT_COUNT)
@@ -154,6 +155,9 @@ class SettingsPanel(QtCore.QObject):
                         legacy_loot,
                     )
                 )
+            self.show_enemies.setChecked(
+                _as_bool(self._settings.value("map/show_enemies"), True)
+            )
 
             self.show_empty_slots.setChecked(
                 _as_bool(self._settings.value("party/show_empty_slots"), True)
@@ -310,6 +314,10 @@ class SettingsPanel(QtCore.QObject):
             self.loot_defaults[kind] = checkbox
             self._bind_bool(checkbox, f"map/show_loot_{kind}")
             default_form.addRow(label, checkbox)
+
+        self.show_enemies = QtWidgets.QCheckBox()
+        self._bind_bool(self.show_enemies, "map/show_enemies")
+        default_form.addRow("Nearby enemies", self.show_enemies)
         layout.addWidget(defaults)
         return self._finish(page, layout)
 

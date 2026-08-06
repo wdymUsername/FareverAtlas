@@ -14,6 +14,7 @@ from .config import PROJECT_ROOT
 BRIDGE_NAME = "farever-atlas-bridge.exe"
 TELEMETRY_NAME = "farever-telemetry.json"
 _bridge_process: subprocess.Popen[bytes] | None = None
+_bridge_stopped = False
 
 
 def is_frozen() -> bool:
@@ -36,6 +37,23 @@ def settings_ini_path() -> Path:
 
 def instance_lock_path() -> Path:
     return PROJECT_ROOT / "user_data" / "farever-atlas.lock"
+
+
+def _windows_no_window_flags() -> int:
+    if sys.platform != "win32":
+        return 0
+    return int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
+def _run_hidden(args: list[str]) -> None:
+    """Run a helper process without flashing a console window on Windows."""
+    subprocess.run(
+        args,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+        creationflags=_windows_no_window_flags(),
+    )
 
 
 def _bundled_bridge_source() -> Path | None:
@@ -68,24 +86,15 @@ def ensure_bridge_binary() -> Path:
 
 def _kill_existing_bridges() -> None:
     if sys.platform == "win32":
-        subprocess.run(
-            ["taskkill", "/IM", BRIDGE_NAME, "/F"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
+        # taskkill is a console app; CREATE_NO_WINDOW prevents the flash.
+        _run_hidden(["taskkill", "/IM", BRIDGE_NAME, "/F"])
         return
-    subprocess.run(
-        ["pkill", "-f", BRIDGE_NAME],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
+    _run_hidden(["pkill", "-f", BRIDGE_NAME])
 
 
 def start_bridge(interval_ms: int | None = None) -> subprocess.Popen[bytes]:
     """Start the native bridge writing telemetry under PROJECT_ROOT."""
-    global _bridge_process
+    global _bridge_process, _bridge_stopped
 
     bridge = ensure_bridge_binary()
     telemetry = PROJECT_ROOT / "native_bridge" / TELEMETRY_NAME
@@ -97,11 +106,7 @@ def start_bridge(interval_ms: int | None = None) -> subprocess.Popen[bytes]:
             interval_ms = 100
 
     _kill_existing_bridges()
-    creationflags = 0
-    if sys.platform == "win32":
-        # Hide the console window but keep the child attached so we can stop it.
-        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-
+    _bridge_stopped = False
     _bridge_process = subprocess.Popen(
         [
             str(bridge),
@@ -113,7 +118,7 @@ def start_bridge(interval_ms: int | None = None) -> subprocess.Popen[bytes]:
         cwd=str(PROJECT_ROOT),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        creationflags=creationflags,
+        creationflags=_windows_no_window_flags(),
     )
     atexit.register(stop_bridge)
     return _bridge_process
@@ -121,7 +126,10 @@ def start_bridge(interval_ms: int | None = None) -> subprocess.Popen[bytes]:
 
 def stop_bridge() -> None:
     """Stop the bridge child started by this process, then any leftovers."""
-    global _bridge_process
+    global _bridge_process, _bridge_stopped
+    if _bridge_stopped:
+        return
+    _bridge_stopped = True
     proc = _bridge_process
     _bridge_process = None
     if proc is not None and proc.poll() is None:
@@ -134,6 +142,7 @@ def stop_bridge() -> None:
                 proc.wait(timeout=2)
             except subprocess.TimeoutExpired:
                 pass
+    # Sweep leftovers with a hidden taskkill so Windows never flashes a console.
     _kill_existing_bridges()
 
 
