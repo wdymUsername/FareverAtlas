@@ -139,10 +139,7 @@ jobs:
             dist/FareverAtlas.exe.sha256
 
       - name: VirusTotal scan release assets
-        if: >-
-          steps.release_meta.outputs.tag != ''
-          && steps.release.outputs.id != ''
-          && secrets.VT_API_KEY != ''
+        if: steps.release_meta.outputs.tag != '' && steps.release.outputs.id != ''
         uses: cssnr/virustotal-action@v2
         with:
           vt_api_key: ${{ secrets.VT_API_KEY }}
