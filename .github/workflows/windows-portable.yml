@@ -104,6 +104,8 @@ jobs:
       - name: Resolve release tag
         id: release_meta
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           tag=""
@@ -117,10 +119,15 @@ jobs:
             tag="${{ inputs.tag }}"
             prerelease="${{ inputs.prerelease }}"
           fi
+          exists="false"
+          if [[ -n "${tag}" ]] && gh release view "${tag}" >/dev/null 2>&1; then
+            exists="true"
+          fi
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
           echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
+          echo "exists=${exists}" >> "$GITHUB_OUTPUT"
           if [[ -n "${tag}" ]]; then
-            echo "Publishing release assets for tag ${tag}"
+            echo "Publishing release assets for tag ${tag} (exists=${exists})"
           else
             echo "No release tag; skipping GitHub Release upload"
           fi
@@ -133,7 +140,8 @@ jobs:
           tag_name: ${{ steps.release_meta.outputs.tag }}
           name: ${{ steps.release_meta.outputs.tag }}
           prerelease: ${{ steps.release_meta.outputs.prerelease == 'true' }}
-          generate_release_notes: true
+          # Only auto-generate notes on first create; re-runs must not append again.
+          generate_release_notes: ${{ steps.release_meta.outputs.exists != 'true' }}
           files: |
             dist/FareverAtlas.exe
             dist/FareverAtlas.exe.sha256
@@ -182,6 +190,23 @@ jobs:
             printf '%s\n' "$key"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Strip previous VirusTotal release notes
+        if: steps.vt_key.outputs.value != '' && steps.release_meta.outputs.exists == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release_meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          body="$(gh release view "${TAG}" --json body --jq -r .body)"
+          # Drop any previously appended VirusTotal section so re-runs replace it.
+          cleaned="$(printf '%s\n' "${body}" | awk 'BEGIN{p=1} /^(\*\*)?VirusTotal(\*\*)?[[:space:]]*$/{p=0} p')"
+          cleaned="$(printf '%s\n' "${cleaned}" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')"
+          notes_file="$(mktemp)"
+          printf '%s\n' "${cleaned}" > "${notes_file}"
+          gh release edit "${TAG}" --notes-file "${notes_file}"
+          rm -f "${notes_file}"
 
       - name: VirusTotal scan release assets
         if: steps.vt_key.outputs.value != ''
