@@ -16,6 +16,7 @@ from ...config import (
     safe_int,
 )
 from ...controls import ShieldOverlayBar
+from ...telemetry import _sanitize_player_display_name
 from .data import Snapshot
 
 
@@ -97,12 +98,11 @@ class CharacterStatusWidget(QtWidgets.QWidget):
         self.offline_label.setVisible(False)
         state = snapshot.state if isinstance(snapshot.state, dict) else {}
         player = state.get("player", {}) if isinstance(state, dict) else {}
-        dps = state.get("dps", {}) if isinstance(state, dict) else {}
         if not isinstance(player, dict):
             player = {}
-        if not isinstance(dps, dict):
-            dps = {}
 
+        # Main-style identity: always paint NAME · CLASS LEVEL.
+        # Telemetry already drops prefab/world IDs from player.name.
         name = str(player.get("name") or "Unknown").upper()
         character_class = str(player.get("class") or "Unknown")
         level = safe_int(player.get("level"), 0)
@@ -122,7 +122,13 @@ class CharacterStatusWidget(QtWidgets.QWidget):
             self._observed_max_hp = max(self._observed_max_hp, hp)
         display_max = max_hp if maximum_available else self._observed_max_hp
 
-        in_combat = bool(player.get("in_combat") or dps.get("in_combat"))
+        # Character combat icon follows the hero's in-combat bit. Do not OR with
+        # dps.in_combat here: observed-nearby DPS stays active while others fight
+        # nearby, which falsely kept the ⚔ icon on after leaving combat.
+        in_combat = bool(player.get("in_combat"))
+        if self.combat_icon.isVisible() != in_combat:
+            self.combat_icon.setVisible(in_combat)
+            self._align_vitals_width(in_combat)
         vitals_signature = (
             fmt_hp(hp),
             fmt_hp(display_max),
@@ -138,7 +144,6 @@ class CharacterStatusWidget(QtWidgets.QWidget):
                 float(fmt_hp(display_max)),
                 show_maximum=maximum_available,
             )
-            self.combat_icon.setVisible(in_combat)
             self._align_vitals_width(in_combat)
 
         tooltip_signature = (
@@ -401,7 +406,7 @@ class PartyMemberStatusWidget(QtWidgets.QWidget):
             style = self.style()
             style.unpolish(self)
             style.polish(self)
-        name = str(member.get("name") or "Unknown")
+        name = _sanitize_player_display_name(member.get("name")) or "Unknown"
         character_class = str(member.get("class") or "Unknown")
         distance = safe_float(member.get("_distance_m"), math.nan)
         round_step = max(1, int(distance_round_m))

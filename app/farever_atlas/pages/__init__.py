@@ -1,1 +1,1 @@
-"""Primary Atlas pages (Map, Planner, Codex)."""
+"""Primary Atlas pages (Map, Planner, Codex, Players)."""

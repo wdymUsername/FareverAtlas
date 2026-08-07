@@ -12,7 +12,7 @@ fn main() {
 
 #[cfg(windows)]
 mod windows_bridge {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::ffi::{OsString, c_void};
     use std::mem::{size_of, zeroed};
     use std::os::windows::ffi::OsStringExt;
@@ -56,6 +56,11 @@ mod windows_bridge {
     const SUPPORTED_ENTRYPOINT: u32 = 47_939;
     const PLAYER_TYPE_INDEX: usize = 1_358;
     const HERO_TYPE_INDEX: usize = 1_366;
+    /// ent.Hero.player — flattened index (st.Player owning this hero).
+    /// BaseState(17)+State(10)+Entity(39)+GameObject(17)+Unit(82) = 165.
+    const HERO_PLAYER_FIELD_INDEX: usize = 165;
+    /// ent.Hero.name — flattened index (display name on the hero object).
+    const HERO_NAME_FIELD_INDEX: usize = 173;
     const GROUP_TYPE_INDEX: usize = 1_418;
     const PLAYER_GLOBAL_INDEX: usize = 889;
     const HERO_GLOBAL_INDEX: usize = 380;
@@ -70,6 +75,19 @@ mod windows_bridge {
     const GAME_APP_PLAYER_FIELD_INDEX: usize = 24;
     const GAME_APP_HERO_FIELD_INDEX: usize = 25;
     const GAME_APP_GUI_FIELD_INDEX: usize = 19;
+    /// GameApp.camera / gameCamera — flattened indexes on GameApp (1315).
+    const GAME_APP_CAMERA_FIELD_INDEX: usize = 20;
+    const GAME_APP_GAME_CAMERA_FIELD_INDEX: usize = 21;
+    const BASE_CAMERA_TYPE_INDEX: usize = 1_442;
+    const GAME_CAMERA_TYPE_INDEX: usize = 1_443;
+    const MATRIX_IMPL_TYPE_INDEX: usize = 484;
+    /// Prefer live HashLink field offsets; meter byte offsets differ by build.
+    /// h3d.scene.Object absPos → MatrixImpl translation (_41/_42) for world eye.
+    const BASE_CAMERA_ABS_POS_FIELD_INDEX: usize = 12;
+    const MATRIX_TX_FIELD_INDEX: usize = 12;
+    const MATRIX_TY_FIELD_INDEX: usize = 13;
+    const BASE_CAMERA_CUR_DIRECTION_FIELD_INDEX: usize = 32;
+    const BASE_CAMERA_DIRECTION_FIELD_INDEX: usize = 26;
     const HERO_POS_X_FIELD_INDEX: usize = 27;
     const HERO_POS_Y_FIELD_INDEX: usize = 28;
     const HERO_POS_Z_FIELD_INDEX: usize = 29;
@@ -78,10 +96,36 @@ mod windows_bridge {
     // State + Entity + Unit). st.State.layer is 17 — not BaseState slot 14.
     const HERO_LAYER_FIELD_INDEX: usize = 17;
     const GAME_LAYER_TYPE_INDEX: usize = 782;
-    // st.GameLayer.units is 47. Index 44 is entities (superset, wrong for this
-    // sweep's ArrayObj walk expectations in older builds).
+    // GameLayer inherits BaseState(17) + State(10) = 27 fields. Declared indexes
+    // below are already flattened (declared + 27), matching units=20+27.
+    // getMapId (fn 7274) reads world@32 then World.level@23.
+    const GAME_LAYER_WORLD_FIELD_INDEX: usize = 32;
+    const GAME_LAYER_MAIN_ACTIVITY_FIELD_INDEX: usize = 35;
+    const GAME_LAYER_IS_RIFT_FIELD_INDEX: usize = 36;
+    // st.GameLayer.units is 47. entities (44) is the wider net; meter sweeps
+    // both for heroes (deduped). interactibles is 46.
+    const GAME_LAYER_ENTITIES_FIELD_INDEX: usize = 44;
+    const GAME_LAYER_INTERACTIBLES_FIELD_INDEX: usize = 46;
     const GAME_LAYER_UNITS_FIELD_INDEX: usize = 47;
+    const WORLD_TYPE_INDEX: usize = 787;
+    // world.World inherits h3d.scene.Object (20 fields).
+    const WORLD_LEVEL_FIELD_INDEX: usize = 23;
+    const WORLD_IS_WORLD_MAP_FIELD_INDEX: usize = 45;
+    const ACTIVITY_TYPE_INDEX: usize = 1_590;
+    // st.activity.DungeonBase (5094) / Dungeon (5095) — object_is_a walks supers.
+    const ACTIVITY_DUNGEON_BASE_TYPE_INDEX: usize = 5_094;
+    // st.Activity inherits Entity+State+BaseState (66 fields); kind is declared 0.
+    const ACTIVITY_KIND_FIELD_INDEX: usize = 66;
     const FOE_TYPE_INDEX: usize = 1_381;
+    // Live gatherable / chest markers (GameLayer.interactibles).
+    const GATHERABLE_TYPE_INDEX: usize = 5_898;
+    const CHEST_TYPE_INDEX: usize = 5_096;
+    // ent.Element.kind (String) — flattened index on Gatherable / Chest.
+    const ELEMENT_KIND_FIELD_INDEX: usize = 86;
+    const INTERACTIBLE_ENABLED_FIELD_INDEX: usize = 83;
+    const INTERACTIBLE_SWEEP_RADIUS: f64 = 600.0;
+    const INTERACTIBLE_SWEEP_Z_CULL: f64 = 80.0;
+    const INTERACTIBLE_SWEEP_MAX: usize = 200;
     const STATE_TYPE_INDEX: usize = 781;
     const STATE_REMOVED_FIELD_INDEX: usize = 0;
     // ent.Foe.summonOwner is 167. Index 164 is ent.Unit.lastObjOffset, which is
@@ -92,6 +136,11 @@ mod windows_bridge {
     const ENEMY_SWEEP_RADIUS: f64 = 600.0;
     const ENEMY_SWEEP_Z_CULL: f64 = 60.0;
     const ENEMY_SWEEP_MAX: usize = 150;
+    // Layer roster of non-party players (GameLayer.units + entities / ent.Hero).
+    // No range cull — distance is display-only — matching FareverMeter's
+    // uncapped hero sweep (SWEEP_MAX=400, array length bound 20000).
+    const PLAYER_SWEEP_MAX: usize = 400;
+    const PLAYER_ARRAY_LENGTH_MAX: i32 = 20_000;
     // Runtime field indexes include inherited fields. These indexes are
     // derived from the supported hlboot.dat metadata, never guessed offsets.
     const PLAYER_NAME_FIELD_INDEX: usize = 29;
@@ -237,6 +286,23 @@ mod windows_bridge {
         address: usize,
         size: usize,
     ) -> Result<Vec<u8>, String> {
+        let buffer = read_process_bytes_partial(process, address, size)?;
+        if buffer.len() != size {
+            return Err(format!(
+                "read-only process read at 0x{address:x} failed: requested {size}, read {} (partial)",
+                buffer.len()
+            ));
+        }
+        Ok(buffer)
+    }
+
+    /// Like `read_process_bytes`, but accepts a short read (Wine/Windows
+    /// ERROR_PARTIAL_COPY near page edges). Callers must handle truncation.
+    fn read_process_bytes_partial(
+        process: &OwnedHandle,
+        address: usize,
+        size: usize,
+    ) -> Result<Vec<u8>, String> {
         if size == 0 || size > 4096 {
             return Err(format!("refusing invalid process read size {size}"));
         }
@@ -251,13 +317,39 @@ mod windows_bridge {
                 &mut bytes_read,
             )
         };
-        if succeeded == FALSE || bytes_read != size {
+        if bytes_read == 0 {
+            return Err(format!(
+                "read-only process read at 0x{address:x} failed: requested {size}, read 0 (Win32 error {})",
+                last_error()
+            ));
+        }
+        if succeeded == FALSE && bytes_read < size {
+            // ERROR_PARTIAL_COPY (299) and similar: keep the readable prefix.
+            buffer.truncate(bytes_read);
+            return Ok(buffer);
+        }
+        if succeeded == FALSE {
             return Err(format!(
                 "read-only process read at 0x{address:x} failed: requested {size}, read {bytes_read} (Win32 error {})",
                 last_error()
             ));
         }
+        buffer.truncate(bytes_read);
         Ok(buffer)
+    }
+
+    fn decode_utf16_z(bytes: &[u8], label: &str) -> Result<Option<String>, String> {
+        let mut units = Vec::with_capacity(bytes.len() / 2);
+        for pair in bytes.chunks_exact(2) {
+            let unit = u16::from_le_bytes([pair[0], pair[1]]);
+            if unit == 0 {
+                let value = String::from_utf16(&units)
+                    .map_err(|_| format!("{label} is not valid UTF-16"))?;
+                return Ok(Some(value));
+            }
+            units.push(unit);
+        }
+        Ok(None)
     }
 
     fn verify_live_pe_header(process: &OwnedHandle, module: &ModuleInfo) -> Result<(), String> {
@@ -323,16 +415,35 @@ mod windows_bridge {
         player_offset: usize,
         hero_offset: usize,
         gui_offset: usize,
+        game_camera_offset: usize,
+        camera_offset: usize,
+        camera_abs_pos_offset: usize,
+        matrix_tx_offset: usize,
+        matrix_ty_offset: usize,
+        camera_cur_direction_offset: usize,
+        camera_direction_offset: usize,
         position_x_offset: usize,
         position_y_offset: usize,
         position_z_offset: usize,
         rotation_z_offset: usize,
         layer_offset: usize,
+        game_layer_world_offset: usize,
+        game_layer_main_activity_offset: usize,
+        game_layer_is_rift_offset: usize,
+        game_layer_interactibles_offset: usize,
+        game_layer_entities_offset: usize,
         game_layer_units_offset: usize,
+        world_level_offset: usize,
+        world_is_world_map_offset: usize,
+        activity_kind_offset: usize,
         state_removed_offset: usize,
+        interactible_enabled_offset: usize,
+        element_kind_offset: usize,
         foe_summon_owner_offset: usize,
         player_name_offset: usize,
         player_uid_offset: usize,
+        hero_player_offset: usize,
+        hero_name_offset: usize,
         player_group_offset: usize,
         player_progress_offset: usize,
         player_hero_data_offset: usize,
@@ -392,6 +503,32 @@ mod windows_bridge {
         z: f64,
     }
 
+    /// Live heroes on the current GameLayer that are not the local player and
+    /// not in the party. Distance is for UI sort/display only.
+    struct LayerPlayerSample {
+        address: usize,
+        name: String,
+        uid: String,
+        class_name: String,
+        level: i32,
+        x: f64,
+        y: f64,
+        z: f64,
+        rotation: f64,
+        distance: f64,
+    }
+
+    struct InteractibleSample {
+        address: usize,
+        /// Atlas loot category: ore | plant | chest | gatherable
+        category: &'static str,
+        /// Element.kind / display name (e.g. Ore_Copper_Small).
+        name: String,
+        x: f64,
+        y: f64,
+        z: f64,
+    }
+
     struct ObservedDps {
         previous: HashMap<usize, f64>,
         total: f64,
@@ -427,7 +564,10 @@ mod windows_bridge {
             }
             self.previous = current;
 
-            if damage > 0.0 {
+            // Only extend the observed fight while the local player is in combat.
+            // Nearby damage from other players must not keep dps.in_combat stuck true
+            // after the hero has left combat (that also stuck the Atlas combat icon).
+            if player_in_combat && damage > 0.0 {
                 if !self.active {
                     self.active = true;
                     self.total = 0.0;
@@ -825,6 +965,151 @@ mod windows_bridge {
     /// Walks `st.GameLayer.units`, keeps live `ent.Foe` objects that are not
     /// summons, and culls by horizontal radius / vertical separation. This is
     /// intentionally separate from the legacy DPS health sampler.
+    fn classify_instance(
+        map_id: &str,
+        is_rift: bool,
+        is_dungeon: bool,
+        is_world_map: bool,
+        activity_kind: &str,
+    ) -> &'static str {
+        // Rift flag first, then dungeon activity type (st.activity.DungeonBase),
+        // then world map. Remaining non-world loaded maps stay "instance".
+        if is_rift
+            || map_id.to_ascii_lowercase().contains("rift")
+            || activity_kind.to_ascii_lowercase().contains("rift")
+        {
+            return "rift";
+        }
+        let activity = activity_kind.to_ascii_lowercase();
+        let map = map_id.to_ascii_lowercase();
+        if is_dungeon || activity.contains("dungeon") || map.contains("dungeon") {
+            return "dungeon";
+        }
+        if is_world_map || map_id.starts_with("World/") {
+            return "world";
+        }
+        if !map_id.is_empty() {
+            return "instance";
+        }
+        "unknown"
+    }
+
+    fn read_instance_context(
+        process: &OwnedHandle,
+        code: &CodeAnchor,
+        hero: usize,
+    ) -> InstanceSample {
+        let unknown = InstanceSample {
+            kind: "unknown",
+            map_id: String::new(),
+            is_rift: false,
+            is_dungeon: false,
+            is_world_map: false,
+            activity_kind: String::new(),
+        };
+        let root = &code.player_root;
+        let Ok(layer) = read_object_pointer_field(process, hero, root.layer_offset) else {
+            return unknown;
+        };
+        let Ok(layer_bytes) = read_process_bytes(process, layer, 8) else {
+            return unknown;
+        };
+        let Ok(layer_type) = read_u64_le(&layer_bytes, 0).map(|value| value as usize) else {
+            return unknown;
+        };
+        if layer == 0 || layer_type != code.types_address + GAME_LAYER_TYPE_INDEX * 32 {
+            return unknown;
+        }
+        let is_rift = read_process_bytes(process, layer + root.game_layer_is_rift_offset, 1)
+            .ok()
+            .map(|bytes| bytes[0] != 0)
+            .unwrap_or(false);
+
+        let mut map_id = String::new();
+        let mut is_world_map = false;
+        if let Ok(world) = read_object_pointer_field(process, layer, root.game_layer_world_offset) {
+            if world != 0
+                && object_is_a(
+                    process,
+                    world,
+                    code.types_address + WORLD_TYPE_INDEX * 32,
+                )
+            {
+                is_world_map =
+                    read_process_bytes(process, world + root.world_is_world_map_offset, 1)
+                        .ok()
+                        .map(|bytes| bytes[0] != 0)
+                        .unwrap_or(false);
+                if let Ok(level_pointer) =
+                    read_object_pointer_field(process, world, root.world_level_offset)
+                {
+                    map_id = read_hashlink_string(
+                        process,
+                        code.types_address,
+                        level_pointer,
+                        "world level / map id",
+                    )
+                    .unwrap_or_default();
+                }
+            }
+        }
+
+        let mut activity_kind = String::new();
+        let mut is_dungeon = false;
+        if let Ok(activity) =
+            read_object_pointer_field(process, layer, root.game_layer_main_activity_offset)
+        {
+            if activity != 0
+                && object_is_a(
+                    process,
+                    activity,
+                    code.types_address + ACTIVITY_TYPE_INDEX * 32,
+                )
+            {
+                is_dungeon = object_is_a(
+                    process,
+                    activity,
+                    code.types_address + ACTIVITY_DUNGEON_BASE_TYPE_INDEX * 32,
+                );
+                if let Ok(kind_pointer) =
+                    read_object_pointer_field(process, activity, root.activity_kind_offset)
+                {
+                    activity_kind = read_hashlink_identifier(
+                        process,
+                        code.types_address,
+                        kind_pointer,
+                        "activity kind",
+                    )
+                    .or_else(|_| {
+                        read_hashlink_string(
+                            process,
+                            code.types_address,
+                            kind_pointer,
+                            "activity kind",
+                        )
+                    })
+                    .unwrap_or_default();
+                }
+            }
+        }
+
+        let kind = classify_instance(
+            &map_id,
+            is_rift,
+            is_dungeon,
+            is_world_map,
+            &activity_kind,
+        );
+        InstanceSample {
+            kind,
+            map_id,
+            is_rift,
+            is_dungeon,
+            is_world_map,
+            activity_kind,
+        }
+    }
+
     fn read_nearby_enemies(
         process: &OwnedHandle,
         code: &CodeAnchor,
@@ -948,6 +1233,423 @@ mod windows_bridge {
         Ok(enemies)
     }
 
+    /// Full GameLayer hero roster for the Players page / map (non-party).
+    ///
+    /// Matches FareverMeter `sweepWorld`: walk `units` then `entities`, keep
+    /// live `ent.Hero` objects, **no XY/Z radius cull**. Distance is for UI
+    /// sort/display only. Party heroes stay excluded here so map amber dots
+    /// remain “others”; the Players page merges party/self in UI.
+    /// Prefer `Hero.name` like the meter; enrich from `Hero.player` when it is
+    /// a live `st.Player` (uid / alternate display name).
+    fn read_layer_players(
+        process: &OwnedHandle,
+        code: &CodeAnchor,
+        hero: usize,
+        local_player: usize,
+        excluded_heroes: &[usize],
+        player_x: f64,
+        player_y: f64,
+        _player_z: f64,
+    ) -> Result<Vec<LayerPlayerSample>, String> {
+        let root = &code.player_root;
+        let layer = read_object_pointer_field(process, hero, root.layer_offset)?;
+        if layer == 0
+            || read_u64_le(&read_process_bytes(process, layer, 8)?, 0)? as usize
+                != code.types_address + GAME_LAYER_TYPE_INDEX * 32
+        {
+            return Ok(Vec::new());
+        }
+        let hero_type = code.types_address + HERO_TYPE_INDEX * 32;
+        let player_type = code.types_address + PLAYER_TYPE_INDEX * 32;
+        let mut players = Vec::new();
+        let mut seen = HashSet::new();
+        for array_offset in [
+            root.game_layer_units_offset,
+            root.game_layer_entities_offset,
+        ] {
+            append_layer_heroes_from_array(
+                process,
+                code,
+                root,
+                layer,
+                array_offset,
+                hero,
+                local_player,
+                excluded_heroes,
+                hero_type,
+                player_type,
+                player_x,
+                player_y,
+                &mut seen,
+                &mut players,
+            )?;
+            if players.len() >= PLAYER_SWEEP_MAX {
+                break;
+            }
+        }
+        Ok(players)
+    }
+
+    fn append_layer_heroes_from_array(
+        process: &OwnedHandle,
+        code: &CodeAnchor,
+        root: &PlayerRoot,
+        layer: usize,
+        array_field_offset: usize,
+        local_hero: usize,
+        local_player: usize,
+        excluded_heroes: &[usize],
+        hero_type: usize,
+        player_type: usize,
+        player_x: f64,
+        player_y: f64,
+        seen: &mut HashSet<usize>,
+        players: &mut Vec<LayerPlayerSample>,
+    ) -> Result<(), String> {
+        let units = read_object_pointer_field(process, layer, array_field_offset)?;
+        if units == 0
+            || read_u64_le(&read_process_bytes(process, units, 8)?, 0)? as usize
+                != code.types_address + ARRAY_OBJ_TYPE_INDEX * 32
+        {
+            return Ok(());
+        }
+        let length = i32::from_le_bytes(
+            read_process_bytes(process, units + root.array_length_offset, 4)?
+                .try_into()
+                .unwrap(),
+        );
+        if length <= 0 {
+            return Ok(());
+        }
+        if length > PLAYER_ARRAY_LENGTH_MAX {
+            return Err("GameLayer player array has an invalid length".to_owned());
+        }
+        let storage = read_object_pointer_field(process, units, root.array_storage_offset)?;
+        if storage == 0 {
+            return Ok(());
+        }
+        for index in 0..length as usize {
+            if players.len() >= PLAYER_SWEEP_MAX {
+                break;
+            }
+            let Some(entry) = storage.checked_add(24 + index * 8) else {
+                continue;
+            };
+            let Ok(entry_bytes) = read_process_bytes(process, entry, 8) else {
+                continue;
+            };
+            let Ok(unit) = read_u64_le(&entry_bytes, 0).map(|value| value as usize) else {
+                continue;
+            };
+            if unit == 0 || unit == local_hero || !object_is_a(process, unit, hero_type) {
+                continue;
+            }
+            if !seen.insert(unit) {
+                continue;
+            }
+            if excluded_heroes.contains(&unit) {
+                continue;
+            }
+            let Ok(removed) = read_process_bytes(process, unit + root.state_removed_offset, 1) else {
+                continue;
+            };
+            if removed[0] != 0 {
+                continue;
+            }
+            let Ok(x_bytes) = read_process_bytes(process, unit + root.position_x_offset, 8) else {
+                continue;
+            };
+            let Ok(y_bytes) = read_process_bytes(process, unit + root.position_y_offset, 8) else {
+                continue;
+            };
+            let Ok(z_bytes) = read_process_bytes(process, unit + root.position_z_offset, 8) else {
+                continue;
+            };
+            let Ok(rot_bytes) = read_process_bytes(process, unit + root.rotation_z_offset, 8) else {
+                continue;
+            };
+            let Ok(x) = read_f64_le(&x_bytes, 0) else {
+                continue;
+            };
+            let Ok(y) = read_f64_le(&y_bytes, 0) else {
+                continue;
+            };
+            let Ok(z) = read_f64_le(&z_bytes, 0) else {
+                continue;
+            };
+            let Ok(rotation) = read_f64_le(&rot_bytes, 0) else {
+                continue;
+            };
+            if [x, y, z, rotation]
+                .iter()
+                .any(|value| !value.is_finite() || value.abs() > 10_000_000.0)
+            {
+                continue;
+            }
+            let dx = x - player_x;
+            let dy = y - player_y;
+            let distance = ((dx * dx + dy * dy).sqrt() * 10.0).round() / 10.0;
+
+            // Meter identity is Hero.name. Player fields are optional enrichment.
+            let hero_name_pointer =
+                read_object_pointer_field(process, unit, root.hero_name_offset).unwrap_or(0);
+            let hero_name = read_hashlink_string(
+                process,
+                code.types_address,
+                hero_name_pointer,
+                "layer hero name",
+            )
+            .unwrap_or_default();
+            let mut player_name = String::new();
+            let mut uid = String::new();
+            if let Ok(owner) = read_object_pointer_field(process, unit, root.hero_player_offset) {
+                if owner != 0
+                    && owner != local_player
+                    && read_u64_le(&read_process_bytes(process, owner, 8).unwrap_or_default(), 0)
+                        .map(|value| value as usize)
+                        .unwrap_or(0)
+                        == player_type
+                {
+                    let name_pointer =
+                        read_object_pointer_field(process, owner, root.player_name_offset)
+                            .unwrap_or(0);
+                    let uid_pointer =
+                        read_object_pointer_field(process, owner, root.player_uid_offset)
+                            .unwrap_or(0);
+                    player_name = read_hashlink_string(
+                        process,
+                        code.types_address,
+                        name_pointer,
+                        "layer player name",
+                    )
+                    .unwrap_or_default();
+                    uid = read_hashlink_string(
+                        process,
+                        code.types_address,
+                        uid_pointer,
+                        "layer player uid",
+                    )
+                    .unwrap_or_default();
+                }
+            }
+            let name = pick_player_display_name(&player_name, &hero_name);
+            if name.is_empty() {
+                continue;
+            }
+            let class_name = read_object_pointer_field(process, unit, root.unit_kind_offset)
+                .ok()
+                .and_then(|kind_pointer| {
+                    read_hashlink_identifier(
+                        process,
+                        code.types_address,
+                        kind_pointer,
+                        "layer player unit kind",
+                    )
+                    .ok()
+                })
+                .unwrap_or_default();
+            let class_name = if looks_like_element_kind_id(&class_name) {
+                String::new()
+            } else {
+                class_name
+            };
+            let level = i32::from_le_bytes(
+                read_process_bytes(process, unit + root.level_offset, 4)
+                    .unwrap_or_else(|_| vec![0, 0, 0, 0])
+                    .try_into()
+                    .unwrap_or([0, 0, 0, 0]),
+            );
+            let level = if (1..=10_000).contains(&level) {
+                level
+            } else {
+                0
+            };
+            players.push(LayerPlayerSample {
+                address: unit,
+                name,
+                uid,
+                class_name,
+                level,
+                x: (x * 10.0).round() / 10.0,
+                y: (y * 10.0).round() / 10.0,
+                z: (z * 10.0).round() / 10.0,
+                rotation: (rotation * 1_000.0).round() / 1_000.0,
+                distance,
+            });
+        }
+        Ok(())
+    }
+
+    fn classify_gatherable_category(kind: &str) -> &'static str {
+        let lower = kind.to_ascii_lowercase();
+        if lower.contains("ore")
+            || lower.contains("tungstene")
+            || lower.contains("copper")
+            || lower.contains("iron")
+            || lower.contains("tin")
+        {
+            return "ore";
+        }
+        if lower.contains("plant")
+            || lower.contains("madrigold")
+            || lower.contains("lavendula")
+            || lower.contains("thyme")
+            || lower.contains("zealotus")
+        {
+            return "plant";
+        }
+        "gatherable"
+    }
+
+    /// Nearby gatherables / chests for Atlas map markers.
+    ///
+    /// Walks `st.GameLayer.interactibles`, keeps live Gatherable and Chest
+    /// objects, and culls by radius / z like the enemy sweep.
+    fn read_nearby_interactibles(
+        process: &OwnedHandle,
+        code: &CodeAnchor,
+        hero: usize,
+        player_x: f64,
+        player_y: f64,
+        player_z: f64,
+    ) -> Result<Vec<InteractibleSample>, String> {
+        let root = &code.player_root;
+        let layer = read_object_pointer_field(process, hero, root.layer_offset)?;
+        if layer == 0
+            || read_u64_le(&read_process_bytes(process, layer, 8)?, 0)? as usize
+                != code.types_address + GAME_LAYER_TYPE_INDEX * 32
+        {
+            return Ok(Vec::new());
+        }
+        let interactibles =
+            read_object_pointer_field(process, layer, root.game_layer_interactibles_offset)?;
+        if interactibles == 0
+            || read_u64_le(&read_process_bytes(process, interactibles, 8)?, 0)? as usize
+                != code.types_address + ARRAY_OBJ_TYPE_INDEX * 32
+        {
+            return Ok(Vec::new());
+        }
+        let length = i32::from_le_bytes(
+            read_process_bytes(process, interactibles + root.array_length_offset, 4)?
+                .try_into()
+                .unwrap(),
+        );
+        if !(0..=4_000).contains(&length) {
+            return Err("GameLayer.interactibles has an invalid length".to_owned());
+        }
+        let storage = read_object_pointer_field(process, interactibles, root.array_storage_offset)?;
+        if storage == 0 {
+            return Ok(Vec::new());
+        }
+        let gatherable_type = code.types_address + GATHERABLE_TYPE_INDEX * 32;
+        let chest_type = code.types_address + CHEST_TYPE_INDEX * 32;
+        let radius_sq = INTERACTIBLE_SWEEP_RADIUS * INTERACTIBLE_SWEEP_RADIUS;
+        let mut samples = Vec::new();
+        for index in 0..length as usize {
+            if samples.len() >= INTERACTIBLE_SWEEP_MAX {
+                break;
+            }
+            let Some(entry) = storage.checked_add(24 + index * 8) else {
+                continue;
+            };
+            let Ok(entry_bytes) = read_process_bytes(process, entry, 8) else {
+                continue;
+            };
+            let Ok(object) = read_u64_le(&entry_bytes, 0).map(|value| value as usize) else {
+                continue;
+            };
+            if object == 0 {
+                continue;
+            }
+            let is_gatherable = object_is_a(process, object, gatherable_type);
+            let is_chest = !is_gatherable && object_is_a(process, object, chest_type);
+            if !is_gatherable && !is_chest {
+                continue;
+            }
+            let Ok(removed) = read_process_bytes(process, object + root.state_removed_offset, 1)
+            else {
+                continue;
+            };
+            if removed[0] != 0 {
+                continue;
+            }
+            let Ok(enabled) =
+                read_process_bytes(process, object + root.interactible_enabled_offset, 1)
+            else {
+                continue;
+            };
+            if enabled[0] == 0 {
+                continue;
+            }
+            let Ok(x_bytes) = read_process_bytes(process, object + root.position_x_offset, 8) else {
+                continue;
+            };
+            let Ok(y_bytes) = read_process_bytes(process, object + root.position_y_offset, 8) else {
+                continue;
+            };
+            let Ok(z_bytes) = read_process_bytes(process, object + root.position_z_offset, 8) else {
+                continue;
+            };
+            let Ok(x) = read_f64_le(&x_bytes, 0) else {
+                continue;
+            };
+            let Ok(y) = read_f64_le(&y_bytes, 0) else {
+                continue;
+            };
+            let Ok(z) = read_f64_le(&z_bytes, 0) else {
+                continue;
+            };
+            if [x, y, z]
+                .iter()
+                .any(|value| !value.is_finite() || value.abs() > 10_000_000.0)
+            {
+                continue;
+            }
+            let dx = x - player_x;
+            let dy = y - player_y;
+            if dx * dx + dy * dy > radius_sq {
+                continue;
+            }
+            if (z - player_z).abs() > INTERACTIBLE_SWEEP_Z_CULL {
+                continue;
+            }
+            let name = read_object_pointer_field(process, object, root.element_kind_offset)
+                .ok()
+                .and_then(|kind_pointer| {
+                    read_hashlink_identifier(
+                        process,
+                        code.types_address,
+                        kind_pointer,
+                        "interactible kind",
+                    )
+                    .or_else(|_| {
+                        read_hashlink_string(
+                            process,
+                            code.types_address,
+                            kind_pointer,
+                            "interactible kind",
+                        )
+                    })
+                    .ok()
+                })
+                .unwrap_or_default();
+            let category = if is_chest {
+                "chest"
+            } else {
+                classify_gatherable_category(&name)
+            };
+            samples.push(InteractibleSample {
+                address: object,
+                category,
+                name,
+                x: (x * 10.0).round() / 10.0,
+                y: (y * 10.0).round() / 10.0,
+                z: (z * 10.0).round() / 10.0,
+            });
+        }
+        Ok(samples)
+    }
+
     fn read_player_root(
         process: &OwnedHandle,
         types_address: usize,
@@ -993,6 +1695,34 @@ mod windows_bridge {
             object_field_offset(process, game_app_type_address, GAME_APP_HERO_FIELD_INDEX)?;
         let gui_offset =
             object_field_offset(process, game_app_type_address, GAME_APP_GUI_FIELD_INDEX)?;
+        let game_camera_offset = object_field_offset(
+            process,
+            game_app_type_address,
+            GAME_APP_GAME_CAMERA_FIELD_INDEX,
+        )?;
+        let camera_offset =
+            object_field_offset(process, game_app_type_address, GAME_APP_CAMERA_FIELD_INDEX)?;
+        let base_camera_type_address = types_address + BASE_CAMERA_TYPE_INDEX * 32;
+        let camera_abs_pos_offset = object_field_offset(
+            process,
+            base_camera_type_address,
+            BASE_CAMERA_ABS_POS_FIELD_INDEX,
+        )?;
+        let matrix_type_address = types_address + MATRIX_IMPL_TYPE_INDEX * 32;
+        let matrix_tx_offset =
+            object_field_offset(process, matrix_type_address, MATRIX_TX_FIELD_INDEX)?;
+        let matrix_ty_offset =
+            object_field_offset(process, matrix_type_address, MATRIX_TY_FIELD_INDEX)?;
+        let camera_cur_direction_offset = object_field_offset(
+            process,
+            base_camera_type_address,
+            BASE_CAMERA_CUR_DIRECTION_FIELD_INDEX,
+        )?;
+        let camera_direction_offset = object_field_offset(
+            process,
+            base_camera_type_address,
+            BASE_CAMERA_DIRECTION_FIELD_INDEX,
+        )?;
 
         let game_app_address =
             read_object_pointer_field(process, app_static_holder_address, app_instance_offset)?;
@@ -1035,15 +1765,64 @@ mod windows_bridge {
             object_field_offset(process, hero_type_address, HERO_ROTATION_Z_FIELD_INDEX)?;
         let layer_offset =
             object_field_offset(process, hero_type_address, HERO_LAYER_FIELD_INDEX)?;
+        let game_layer_type_address = types_address + GAME_LAYER_TYPE_INDEX * 32;
+        let game_layer_world_offset = object_field_offset(
+            process,
+            game_layer_type_address,
+            GAME_LAYER_WORLD_FIELD_INDEX,
+        )?;
+        let game_layer_main_activity_offset = object_field_offset(
+            process,
+            game_layer_type_address,
+            GAME_LAYER_MAIN_ACTIVITY_FIELD_INDEX,
+        )?;
+        let game_layer_is_rift_offset = object_field_offset(
+            process,
+            game_layer_type_address,
+            GAME_LAYER_IS_RIFT_FIELD_INDEX,
+        )?;
+        let game_layer_interactibles_offset = object_field_offset(
+            process,
+            game_layer_type_address,
+            GAME_LAYER_INTERACTIBLES_FIELD_INDEX,
+        )?;
+        let game_layer_entities_offset = object_field_offset(
+            process,
+            game_layer_type_address,
+            GAME_LAYER_ENTITIES_FIELD_INDEX,
+        )?;
         let game_layer_units_offset = object_field_offset(
             process,
-            types_address + GAME_LAYER_TYPE_INDEX * 32,
+            game_layer_type_address,
             GAME_LAYER_UNITS_FIELD_INDEX,
+        )?;
+        let world_type_address = types_address + WORLD_TYPE_INDEX * 32;
+        let world_level_offset =
+            object_field_offset(process, world_type_address, WORLD_LEVEL_FIELD_INDEX)?;
+        let world_is_world_map_offset = object_field_offset(
+            process,
+            world_type_address,
+            WORLD_IS_WORLD_MAP_FIELD_INDEX,
+        )?;
+        let activity_kind_offset = object_field_offset(
+            process,
+            types_address + ACTIVITY_TYPE_INDEX * 32,
+            ACTIVITY_KIND_FIELD_INDEX,
         )?;
         let state_removed_offset = object_field_offset(
             process,
             types_address + STATE_TYPE_INDEX * 32,
             STATE_REMOVED_FIELD_INDEX,
+        )?;
+        let interactible_enabled_offset = object_field_offset(
+            process,
+            types_address + GATHERABLE_TYPE_INDEX * 32,
+            INTERACTIBLE_ENABLED_FIELD_INDEX,
+        )?;
+        let element_kind_offset = object_field_offset(
+            process,
+            types_address + GATHERABLE_TYPE_INDEX * 32,
+            ELEMENT_KIND_FIELD_INDEX,
         )?;
         let foe_summon_owner_offset = object_field_offset(
             process,
@@ -1060,6 +1839,10 @@ mod windows_bridge {
             types_address + PLAYER_TYPE_INDEX * 32,
             PLAYER_UID_FIELD_INDEX,
         )?;
+        let hero_player_offset =
+            object_field_offset(process, hero_type_address, HERO_PLAYER_FIELD_INDEX)?;
+        let hero_name_offset =
+            object_field_offset(process, hero_type_address, HERO_NAME_FIELD_INDEX)?;
         let player_group_offset = object_field_offset(
             process,
             types_address + PLAYER_TYPE_INDEX * 32,
@@ -1296,16 +2079,35 @@ mod windows_bridge {
             player_offset,
             hero_offset,
             gui_offset,
+            game_camera_offset,
+            camera_offset,
+            camera_abs_pos_offset,
+            matrix_tx_offset,
+            matrix_ty_offset,
+            camera_cur_direction_offset,
+            camera_direction_offset,
             position_x_offset,
             position_y_offset,
             position_z_offset,
             rotation_z_offset,
             layer_offset,
+            game_layer_world_offset,
+            game_layer_main_activity_offset,
+            game_layer_is_rift_offset,
+            game_layer_interactibles_offset,
+            game_layer_entities_offset,
             game_layer_units_offset,
+            world_level_offset,
+            world_is_world_map_offset,
+            activity_kind_offset,
             state_removed_offset,
+            interactible_enabled_offset,
+            element_kind_offset,
             foe_summon_owner_offset,
             player_name_offset,
             player_uid_offset,
+            hero_player_offset,
+            hero_name_offset,
             player_group_offset,
             player_progress_offset,
             player_hero_data_offset,
@@ -1352,6 +2154,49 @@ mod windows_bridge {
         })
     }
 
+    fn looks_like_element_kind_id(name: &str) -> bool {
+        // Prefab/node ids: Madrigold_Small_Generic, Z1_World_…_Chest_58, etc.
+        // Farever player display names do not contain '_' or '/'.
+        let trimmed = name.trim();
+        if trimmed.is_empty() || !trimmed.is_ascii() {
+            return true;
+        }
+        if trimmed.contains('_') || trimmed.contains('/') {
+            return true;
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        const TOKENS: &[&str] = &[
+            "small",
+            "medium",
+            "large",
+            "generic",
+            "chestorb",
+            "worldchest",
+            "recipe",
+        ];
+        // Only treat token hits as prefab-like when the string also looks
+        // technical (digits / long mixed case already handled by '_').
+        if trimmed.chars().any(|character| character.is_ascii_digit())
+            && TOKENS.iter().any(|token| lower.contains(token))
+        {
+            return true;
+        }
+        false
+    }
+
+    fn pick_player_display_name(player_name: &str, hero_name: &str) -> String {
+        let player = player_name.trim();
+        let hero = hero_name.trim();
+        if !player.is_empty() && !looks_like_element_kind_id(player) {
+            return player.to_owned();
+        }
+        if !hero.is_empty() && !looks_like_element_kind_id(hero) {
+            return hero.to_owned();
+        }
+        // Never emit gatherable/node prefab ids as the player display name.
+        String::new()
+    }
+
     fn read_hashlink_string(
         process: &OwnedHandle,
         types_address: usize,
@@ -1375,16 +2220,11 @@ mod windows_bridge {
         }
         // Character names are short. Keep this read deliberately bounded and
         // require a terminator so an invalid pointer cannot become an
-        // unbounded scan.
-        let bytes = read_process_bytes(process, pointer, 128)?;
-        let mut units = Vec::with_capacity(64);
-        for pair in bytes.chunks_exact(2) {
-            let unit = u16::from_le_bytes([pair[0], pair[1]]);
-            if unit == 0 {
-                return String::from_utf16(&units)
-                    .map_err(|_| format!("{label} is not valid UTF-16"));
-            }
-            units.push(unit);
+        // unbounded scan. Use a partial-tolerant read: short UTF-16 buffers
+        // often sit near page edges under Wine (ERROR_PARTIAL_COPY).
+        let bytes = read_process_bytes_partial(process, pointer, 128)?;
+        if let Some(value) = decode_utf16_z(&bytes, label)? {
+            return Ok(value);
         }
         Err(format!("{label} exceeds the bounded string read"))
     }
@@ -1401,26 +2241,29 @@ mod windows_bridge {
         if value_address == 0 {
             return Ok(String::new());
         }
-        let bytes = read_process_bytes(process, value_address, 64)?;
-        let mut units = Vec::with_capacity(32);
-        for pair in bytes.chunks_exact(2) {
-            let unit = u16::from_le_bytes([pair[0], pair[1]]);
-            if unit == 0 {
-                let value = String::from_utf16(&units)
-                    .map_err(|_| format!("{label} is not valid UTF-16"))?;
-                if !value.is_empty()
-                    && value.len() <= 31
-                    && value
-                        .chars()
-                        .all(|character| character.is_ascii_alphanumeric() || character == '_')
-                {
-                    return Ok(value);
-                }
-                return Err(format!("{label} is not a bounded identifier"));
+        let bytes = read_process_bytes_partial(process, value_address, 64)?;
+        if let Some(value) = decode_utf16_z(&bytes, label)? {
+            if !value.is_empty()
+                && value.len() <= 31
+                && value
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '_')
+            {
+                return Ok(value);
             }
-            units.push(unit);
+            return Err(format!("{label} is not a bounded identifier"));
         }
         Err(format!("{label} exceeds the bounded identifier read"))
+    }
+
+    struct InstanceSample {
+        /// Coarse bucket: world | rift | dungeon | instance | unknown
+        kind: &'static str,
+        map_id: String,
+        is_rift: bool,
+        is_dungeon: bool,
+        is_world_map: bool,
+        activity_kind: String,
     }
 
     struct TelemetrySample {
@@ -1448,7 +2291,12 @@ mod windows_bridge {
         y: f64,
         z: f64,
         rotation: f64,
+        /// BaseCamera.curDirection — view yaw in radians (same frame as rotation_z).
+        camera_yaw: f64,
         party: Vec<PartySample>,
+        /// Hero object addresses for party members (excludes self).
+        party_heroes: Vec<usize>,
+        instance: InstanceSample,
         completed_elements: Vec<String>,
     }
 
@@ -1473,6 +2321,102 @@ mod windows_bridge {
         hero: usize,
         health: Option<usize>,
         shield: Option<usize>,
+    }
+
+    fn wrap_angle_rad(yaw: f64) -> f64 {
+        if !yaw.is_finite() {
+            return f64::NAN;
+        }
+        let wrapped = yaw.rem_euclid(std::f64::consts::TAU);
+        if wrapped > std::f64::consts::PI {
+            wrapped - std::f64::consts::TAU
+        } else {
+            wrapped
+        }
+    }
+
+    fn read_camera_yaw(
+        process: &OwnedHandle,
+        code: &CodeAnchor,
+        game_app: usize,
+        hero_x: f64,
+        hero_y: f64,
+    ) -> f64 {
+        let root = &code.player_root;
+        if game_app == 0 {
+            return f64::NAN;
+        }
+        let game_camera_type = code.types_address + GAME_CAMERA_TYPE_INDEX * 32;
+        let base_camera_type = code.types_address + BASE_CAMERA_TYPE_INDEX * 32;
+        let candidates = [root.game_camera_offset, root.camera_offset];
+        for offset in candidates {
+            let Ok(camera) = read_object_pointer_field(process, game_app, offset) else {
+                continue;
+            };
+            if camera == 0 {
+                continue;
+            }
+            let Ok(type_bytes) = read_process_bytes(process, camera, 8) else {
+                continue;
+            };
+            let Ok(camera_type) = read_u64_le(&type_bytes, 0).map(|value| value as usize) else {
+                continue;
+            };
+            if camera_type != game_camera_type
+                && camera_type != base_camera_type
+                && !object_is_a(process, camera, base_camera_type)
+            {
+                continue;
+            }
+
+            // Prefer yaw from camera eye → hero (third-person look-at on XY).
+            // Use absPos world translation; local Object.x/y can be parent-relative.
+            // curDirection alone can sit on a stale value across samples.
+            // On absPos faults, fall through to curDirection for this camera —
+            // do not abandon the candidate before the direction fallback.
+            if hero_x.is_finite() && hero_y.is_finite() {
+                if let Ok(abs_pos) =
+                    read_object_pointer_field(process, camera, root.camera_abs_pos_offset)
+                {
+                    if abs_pos != 0 {
+                        if let (Ok(x_bytes), Ok(y_bytes)) = (
+                            read_process_bytes(process, abs_pos + root.matrix_tx_offset, 8),
+                            read_process_bytes(process, abs_pos + root.matrix_ty_offset, 8),
+                        ) {
+                            if let (Ok(cam_x), Ok(cam_y)) =
+                                (read_f64_le(&x_bytes, 0), read_f64_le(&y_bytes, 0))
+                            {
+                                if cam_x.is_finite() && cam_y.is_finite() {
+                                    let dx = hero_x - cam_x;
+                                    let dy = hero_y - cam_y;
+                                    if dx.hypot(dy) >= 0.25 {
+                                        // Match hero rotation_z convention (atan2-style yaw).
+                                        return wrap_angle_rad(dy.atan2(dx));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Fall back to BaseCamera.curDirection / direction (radians, possibly unwrapped).
+            for field_offset in [
+                root.camera_cur_direction_offset,
+                root.camera_direction_offset,
+            ] {
+                let Ok(yaw_bytes) = read_process_bytes(process, camera + field_offset, 8) else {
+                    continue;
+                };
+                let Ok(yaw) = read_f64_le(&yaw_bytes, 0) else {
+                    continue;
+                };
+                if yaw.is_finite() {
+                    return wrap_angle_rad(yaw);
+                }
+            }
+        }
+        f64::NAN
     }
 
     fn read_bounded_utf16(
@@ -2247,17 +3191,37 @@ mod windows_bridge {
 
     fn waiting_report(sequence: u64, timestamp_ms: u128, message: &str) -> String {
         format!(
-            "{{\"schema\":1,\"bridge_version\":\"0.12.0\",\"state\":\"waiting\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"message\":{}}}\n",
+            "{{\"schema\":1,\"bridge_version\":\"0.21.9\",\"state\":\"waiting\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"message\":{}}}\n",
             json_string(message)
         )
     }
 
-    fn should_reattach(error: &str) -> bool {
-        error.contains("Win32 error")
+    /// Sample-time failures that are expected during loading / teleport / GC.
+    /// Keep the CodeAnchor and retry instead of tearing down the attach.
+    fn is_transient_sample_error(error: &str) -> bool {
+        error.contains("temporarily unavailable")
+            || error.contains("type mismatch")
             || error.contains("process read")
-            || error.contains("Farever.exe is not running")
+            || error.contains("Win32 error")
+            || error.contains("partial")
+            || error.contains("null")
+            || error.contains("not a HashLink")
+            || error.contains("failed sanity")
+            || error.contains("exceeded its safety bound")
+            || error.contains("invalid length")
+    }
+
+    /// Only drop the process handle for hard attach problems (or after a
+    /// prolonged streak of transient sample failures — handled by the watch loop).
+    fn should_reattach(error: &str) -> bool {
+        error.contains("Farever.exe is not running")
             || error.contains("main module was not found")
             || error.contains("libhl.dll was not found")
+            || error.contains("opening Farever.exe")
+            || error.contains("code header mismatch")
+            || error.contains("hlboot.dat is not supported")
+            || error.contains("Farever build is not supported")
+            || error.contains("HashLink main context")
     }
 
     fn sample_party_member(
@@ -2280,12 +3244,23 @@ mod windows_bridge {
         }
         let name_pointer = read_object_pointer_field(process, player, root.player_name_offset)?;
         let uid_pointer = read_object_pointer_field(process, player, root.player_uid_offset)?;
-        let name = read_hashlink_string(process, code.types_address, name_pointer, "party name")?;
+        let player_name =
+            read_hashlink_string(process, code.types_address, name_pointer, "party name")?;
         let uid = read_hashlink_string(process, code.types_address, uid_pointer, "party uid")?;
+        let hero_name_pointer = read_object_pointer_field(process, hero, root.hero_name_offset)?;
+        let hero_name =
+            read_hashlink_string(process, code.types_address, hero_name_pointer, "party hero name")
+                .unwrap_or_default();
+        let name = pick_player_display_name(&player_name, &hero_name);
         let unit_kind = read_object_pointer_field(process, hero, root.unit_kind_offset)?;
         let class_name =
             read_hashlink_identifier(process, code.types_address, unit_kind, "party unit kind")
                 .unwrap_or_default();
+        let class_name = if looks_like_element_kind_id(&class_name) {
+            String::new()
+        } else {
+            class_name
+        };
         let level = i32::from_le_bytes(
             read_process_bytes(process, hero + root.level_offset, 4)?
                 .try_into()
@@ -2465,13 +3440,24 @@ mod windows_bridge {
             0,
         )?;
         let name_pointer = read_object_pointer_field(process, player, root.player_name_offset)?;
-        let name = read_hashlink_string(process, code.types_address, name_pointer, "player name")?;
+        let player_name =
+            read_hashlink_string(process, code.types_address, name_pointer, "player name")?;
         let uid_pointer = read_object_pointer_field(process, player, root.player_uid_offset)?;
         let uid = read_hashlink_string(process, code.types_address, uid_pointer, "player uid")?;
+        let hero_name_pointer = read_object_pointer_field(process, hero, root.hero_name_offset)?;
+        let hero_name =
+            read_hashlink_string(process, code.types_address, hero_name_pointer, "hero name")
+                .unwrap_or_default();
+        let name = pick_player_display_name(&player_name, &hero_name);
         let unit_kind = read_object_pointer_field(process, hero, root.unit_kind_offset)?;
         let class_name =
             read_hashlink_identifier(process, code.types_address, unit_kind, "hero unit kind")
                 .unwrap_or_default();
+        let class_name = if looks_like_element_kind_id(&class_name) {
+            String::new()
+        } else {
+            class_name
+        };
         let level = i32::from_le_bytes(
             read_process_bytes(process, hero + root.level_offset, 4)?
                 .try_into()
@@ -2640,6 +3626,8 @@ mod windows_bridge {
         if allow_hud_discovery {
             *completed_elements_cache = read_completed_elements(process, code, root, player)?;
         }
+        let instance = read_instance_context(process, code, hero);
+        let camera_yaw = read_camera_yaw(process, code, game_app, x, y);
         Ok(TelemetrySample {
             game_app,
             player,
@@ -2665,7 +3653,10 @@ mod windows_bridge {
             y,
             z,
             rotation,
+            camera_yaw,
             party,
+            party_heroes: active_party_heroes,
+            instance,
             completed_elements: completed_elements_cache.clone(),
         })
     }
@@ -2681,6 +3672,12 @@ mod windows_bridge {
         let mut party_gauge_cache = Vec::new();
         let mut completed_elements_cache = Vec::new();
         let mut observed_dps = ObservedDps::new();
+        let mut last_good_player_name = String::new();
+        let mut last_good_player_uid = String::new();
+        let mut consecutive_sample_failures = 0_u32;
+        // ~15s of soft failures at 100ms before forcing a reattach (dead handle /
+        // wineserver blip). Obelisk teleports usually recover in <2s without this.
+        const SOFT_REATTACH_AFTER: u32 = 150;
         loop {
             sequence = sequence.wrapping_add(1);
             let timestamp_ms = SystemTime::now()
@@ -2697,6 +3694,9 @@ mod windows_bridge {
                         party_gauge_cache.clear();
                         completed_elements_cache.clear();
                         observed_dps = ObservedDps::new();
+                        // Keep last_good_player_name across soft reattaches so
+                        // teleport blips do not wipe the display name.
+                        consecutive_sample_failures = 0;
                     }
                     Err(error) => {
                         std::fs::write(path, waiting_report(sequence, timestamp_ms, &error))
@@ -2722,7 +3722,33 @@ mod windows_bridge {
                     &mut party_gauge_cache,
                     &mut completed_elements_cache,
                 ) {
-                    Ok(sample) => {
+                    Ok(mut sample) => {
+                        consecutive_sample_failures = 0;
+                        // Drop sticky name when the live uid changes (character swap).
+                        if !sample.uid.is_empty()
+                            && !last_good_player_uid.is_empty()
+                            && sample.uid != last_good_player_uid
+                        {
+                            last_good_player_name.clear();
+                        }
+                        if !sample.uid.is_empty() {
+                            last_good_player_uid = sample.uid.clone();
+                        }
+                        if !sample.name.is_empty() && !looks_like_element_kind_id(&sample.name) {
+                            last_good_player_name = sample.name.clone();
+                        } else if !last_good_player_name.is_empty()
+                            && (sample.name.is_empty()
+                                || looks_like_element_kind_id(&sample.name))
+                        {
+                            sample.name = last_good_player_name.clone();
+                        }
+                        // Final guard: never write a prefab id into player.name.
+                        if looks_like_element_kind_id(&sample.name) {
+                            sample.name.clear();
+                            if !last_good_player_name.is_empty() {
+                                sample.name = last_good_player_name.clone();
+                            }
+                        }
                         let now = Instant::now();
                         let foes = read_live_foe_health(process, code, sample.hero)
                             .unwrap_or_default();
@@ -2734,6 +3760,26 @@ mod windows_bridge {
                             0.0
                         };
                         let enemies = read_nearby_enemies(
+                            process,
+                            code,
+                            sample.hero,
+                            sample.x,
+                            sample.y,
+                            sample.z,
+                        )
+                        .unwrap_or_default();
+                        let layer_players = read_layer_players(
+                            process,
+                            code,
+                            sample.hero,
+                            sample.player,
+                            &sample.party_heroes,
+                            sample.x,
+                            sample.y,
+                            sample.z,
+                        )
+                        .unwrap_or_default();
+                        let interactibles = read_nearby_interactibles(
                             process,
                             code,
                             sample.hero,
@@ -2779,15 +3825,63 @@ mod windows_bridge {
                             })
                             .collect::<Vec<_>>()
                             .join(",");
+                        let players_json = layer_players
+                            .iter()
+                            .map(|other| {
+                                format!(
+                                    "{{\"id\":\"0x{:x}\",\"name\":{},\"uid\":{},\"class\":{},\"level\":{},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}},\"heading\":{},\"distance\":{}}}",
+                                    other.address,
+                                    json_string(&other.name),
+                                    json_string(&other.uid),
+                                    json_string(&other.class_name),
+                                    other.level,
+                                    other.x,
+                                    other.y,
+                                    other.z,
+                                    other.rotation,
+                                    other.distance,
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        let interactibles_json = interactibles
+                            .iter()
+                            .map(|item| {
+                                format!(
+                                    "{{\"id\":\"0x{:x}\",\"kind\":{},\"name\":{},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}}}}",
+                                    item.address,
+                                    json_string(item.category),
+                                    json_string(&item.name),
+                                    item.x,
+                                    item.y,
+                                    item.z,
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join(",");
                         let completed_elements_json = sample
                             .completed_elements
                             .iter()
                             .map(|value| json_string(value))
                             .collect::<Vec<_>>()
                             .join(",");
+                        let instance_json = format!(
+                            "{{\"type\":{},\"map_id\":{},\"is_rift\":{},\"is_dungeon\":{},\"is_world_map\":{},\"activity_kind\":{}}}",
+                            json_string(sample.instance.kind),
+                            json_string(&sample.instance.map_id),
+                            sample.instance.is_rift,
+                            sample.instance.is_dungeon,
+                            sample.instance.is_world_map,
+                            json_string(&sample.instance.activity_kind),
+                        );
+                        let camera_yaw_json = if sample.camera_yaw.is_finite() {
+                            format!("{}", sample.camera_yaw)
+                        } else {
+                            "null".to_owned()
+                        };
                         (
                             format!(
-                                "{{\"schema\":1,\"bridge_version\":\"0.12.0\",\"state\":\"connected\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"game_app_address\":\"0x{:x}\",\"player_address\":\"0x{:x}\",\"hero_address\":\"0x{:x}\",\"player\":{{\"name\":{},\"uid\":{},\"class\":{},\"level\":{},\"in_combat\":{},\"vitality\":{},\"health\":{},\"max_health\":{},\"health_regen\":{},\"shield\":{},\"shield_ratio\":{},\"shield_capacity\":{},\"shield_gauge_visible\":{},\"raw_shield\":{},\"shield_gauge_available\":{},\"special_energy\":{},\"special_energy_regen\":{}}},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}},\"rotation_z\":{},\"party\":[{}],\"enemies\":[{}],\"completed_elements\":[{}],\"dps\":{{\"mode\":\"observed_nearby\",\"fight_id\":{},\"current\":{},\"total\":{},\"elapsed\":{},\"in_combat\":{},\"damage_skills\":[{{\"skill\":\"Observed nearby damage\",\"total\":{},\"hits\":0,\"crits\":0,\"max\":0}}],\"healing_skills\":[]}}}}\n",
+                                "{{\"schema\":1,\"bridge_version\":\"0.21.9\",\"state\":\"connected\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"game_app_address\":\"0x{:x}\",\"player_address\":\"0x{:x}\",\"hero_address\":\"0x{:x}\",\"player\":{{\"name\":{},\"uid\":{},\"class\":{},\"level\":{},\"in_combat\":{},\"vitality\":{},\"health\":{},\"max_health\":{},\"health_regen\":{},\"shield\":{},\"shield_ratio\":{},\"shield_capacity\":{},\"shield_gauge_visible\":{},\"raw_shield\":{},\"shield_gauge_available\":{},\"special_energy\":{},\"special_energy_regen\":{}}},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}},\"rotation_z\":{},\"camera_yaw\":{camera_yaw_json},\"party\":[{}],\"enemies\":[{}],\"players\":[{}],\"interactibles\":[{}],\"instance\":{instance_json},\"completed_elements\":[{}],\"dps\":{{\"mode\":\"observed_nearby\",\"fight_id\":{},\"current\":{},\"total\":{},\"elapsed\":{},\"in_combat\":{},\"damage_skills\":[{{\"skill\":\"Observed nearby damage\",\"total\":{},\"hits\":0,\"crits\":0,\"max\":0}}],\"healing_skills\":[]}}}}\n",
                                 sample.game_app,
                                 sample.player,
                                 sample.hero,
@@ -2814,6 +3908,8 @@ mod windows_bridge {
                                 sample.rotation,
                                 party_json,
                                 enemies_json,
+                                players_json,
+                                interactibles_json,
                                 completed_elements_json,
                                 observed_dps.fight_id,
                                 dps_rate,
@@ -2825,10 +3921,22 @@ mod windows_bridge {
                             false,
                         )
                     }
-                    Err(error) => (
-                        waiting_report(sequence, timestamp_ms, &error),
-                        should_reattach(&error),
-                    ),
+                    Err(error) => {
+                        consecutive_sample_failures =
+                            consecutive_sample_failures.saturating_add(1);
+                        // Drop stale HUD pointers so they rediscover after teleport.
+                        hud_health_gauge = None;
+                        hud_shield_gauge = None;
+                        party_gauge_cache.clear();
+                        let soft = is_transient_sample_error(&error);
+                        let drop = should_reattach(&error)
+                            || (soft && consecutive_sample_failures >= SOFT_REATTACH_AFTER)
+                            || (!soft && consecutive_sample_failures >= 5);
+                        (
+                            waiting_report(sequence, timestamp_ms, &error),
+                            drop,
+                        )
+                    }
                 }
             };
             if drop_attach {

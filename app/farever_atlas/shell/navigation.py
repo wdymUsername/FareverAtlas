@@ -219,6 +219,8 @@ class MainNavigationOverlay(QtWidgets.QFrame):
             self.bridge_sections = QtWidgets.QLabel("—")
             self.bridge_player = QtWidgets.QLabel("—")
             self.bridge_coordinates = QtWidgets.QLabel("—")
+            self.bridge_instance = QtWidgets.QLabel("—")
+            self.bridge_map_id = QtWidgets.QLabel("—")
             self.bridge_party = QtWidgets.QLabel("0")
             self.bridge_target = QtWidgets.QLabel("—")
             self.bridge_combat = QtWidgets.QLabel("—")
@@ -236,6 +238,8 @@ class MainNavigationOverlay(QtWidgets.QFrame):
                 self.bridge_sections,
                 self.bridge_player,
                 self.bridge_coordinates,
+                self.bridge_instance,
+                self.bridge_map_id,
                 self.bridge_party,
                 self.bridge_target,
                 self.bridge_combat,
@@ -252,6 +256,7 @@ class MainNavigationOverlay(QtWidgets.QFrame):
                 )
             for label in (
                 self.bridge_sections,
+                self.bridge_map_id,
                 self.bridge_live_path,
                 self.bridge_poi_path,
             ):
@@ -265,6 +270,8 @@ class MainNavigationOverlay(QtWidgets.QFrame):
             details_layout.addRow("Payload sections", self.bridge_sections)
             details_layout.addRow("Player", self.bridge_player)
             details_layout.addRow("Coordinates", self.bridge_coordinates)
+            details_layout.addRow("Instance", self.bridge_instance)
+            details_layout.addRow("Map id", self.bridge_map_id)
             details_layout.addRow("Party entries", self.bridge_party)
             details_layout.addRow("Target", self.bridge_target)
             details_layout.addRow("Combat", self.bridge_combat)
@@ -497,6 +504,26 @@ class MainNavigationOverlay(QtWidgets.QFrame):
             if math.isfinite(x) and math.isfinite(y)
             else "Unavailable"
         )
+        instance = state.get("instance", {})
+        if not isinstance(instance, dict):
+            instance = {}
+        instance_type = str(instance.get("type") or "unknown").strip() or "unknown"
+        flags = []
+        if instance.get("is_world_map"):
+            flags.append("world map")
+        if instance.get("is_dungeon"):
+            flags.append("dungeon activity")
+        if instance.get("is_rift"):
+            flags.append("rift flag")
+        activity_kind = str(instance.get("activity_kind") or "").strip()
+        if activity_kind:
+            flags.append(activity_kind)
+        self.bridge_instance.setText(
+            instance_type if not flags else f"{instance_type} · {', '.join(flags)}"
+        )
+        map_id = str(instance.get("map_id") or "").strip()
+        self.bridge_map_id.setText(map_id or "—")
+        self.bridge_map_id.setToolTip(map_id or "")
         self.bridge_party.setText(str(len(party)))
         self.bridge_target.setText(
             str(target.get("name") or target.get("uid") or "Unavailable")
@@ -531,6 +558,8 @@ class MainNavigationOverlay(QtWidgets.QFrame):
             "Payload sections",
             "Player",
             "Coordinates",
+            "Instance",
+            "Map id",
             "Party entries",
             "Target",
             "Combat",
@@ -549,6 +578,8 @@ class MainNavigationOverlay(QtWidgets.QFrame):
             self.bridge_sections,
             self.bridge_player,
             self.bridge_coordinates,
+            self.bridge_instance,
+            self.bridge_map_id,
             self.bridge_party,
             self.bridge_target,
             self.bridge_combat,

@@ -113,7 +113,8 @@ QToolButton#mainMenuButton::menu-indicator {
 }
 QToolButton#mapPageButton,
 QToolButton#plannerPageButton,
-QToolButton#codexPageButton {
+QToolButton#codexPageButton,
+QToolButton#playersPageButton {
     color: #8493a2;
     background: transparent;
     border: none;
@@ -124,19 +125,22 @@ QToolButton#codexPageButton {
 }
 QToolButton#mapPageButton:hover,
 QToolButton#plannerPageButton:hover,
-QToolButton#codexPageButton:hover {
+QToolButton#codexPageButton:hover,
+QToolButton#playersPageButton:hover {
     color: #dce6ee;
     background: #202b36;
 }
 QToolButton#mapPageButton:checked,
 QToolButton#plannerPageButton:checked,
-QToolButton#codexPageButton:checked {
+QToolButton#codexPageButton:checked,
+QToolButton#playersPageButton:checked {
     color: #eef3f7;
     background: #2a3946;
 }
 QWidget#mapPage,
 QWidget#plannerPage,
 QWidget#codexPage,
+QWidget#playersPage,
 QStackedWidget#mainPageStack {
     background: transparent;
     border: none;
@@ -145,18 +149,219 @@ QWidget#plannerContentPlaceholder {
     background: transparent;
     border: none;
 }
-QLabel#codexPlaceholder {
+QLabel#codexPlaceholder,
+QLabel#playersPlaceholder {
     color: #8493a2;
     font-size: 13px;
     font-weight: 600;
     background: transparent;
     border: none;
 }
+QWidget#playersColumn {
+    background: transparent;
+    border: none;
+}
+QWidget#playersColumnsHost {
+    background: transparent;
+    border: none;
+}
+QWidget#playersColumnGutter {
+    background: transparent;
+    border: none;
+    border-left: 1px solid #24303a;
+    border-right: 1px solid #24303a;
+    margin: 4px 0;
+}
+QLabel#playersColumnTitle {
+    color: #9aabba;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    background: transparent;
+    border: none;
+    padding: 6px 8px 4px 8px;
+}
 QWidget#plannerToolbar,
-QWidget#codexToolbar {
+QWidget#codexToolbar,
+QWidget#playersToolbar {
     background: #151d26;
     border: 1px solid #273340;
     border-radius: 7px;
+}
+QLabel#playersSummaryLabel {
+    color: #dce6ee;
+    font-size: 10px;
+    font-weight: 600;
+    background: transparent;
+    border: none;
+    padding-left: 4px;
+}
+QLineEdit#playersSearchField,
+QComboBox#playersSortCombo {
+    color: #dce6ee;
+    background: #10171e;
+    border: 1px solid #344352;
+    border-radius: 4px;
+    padding: 0 7px;
+    font-size: 10px;
+}
+QLineEdit#playersSearchField:hover,
+QLineEdit#playersSearchField:focus,
+QComboBox#playersSortCombo:hover,
+QComboBox#playersSortCombo:focus {
+    border-color: #587083;
+    background: #141e27;
+}
+QComboBox#playersSortCombo::drop-down {
+    width: 16px;
+    border: none;
+}
+QComboBox#playersSortCombo QAbstractItemView {
+    color: #dce6ee;
+    background: #18212a;
+    border: 1px solid #3a4a58;
+    selection-background-color: #2c4355;
+    selection-color: #ffffff;
+    outline: none;
+}
+QToolButton#playersPartyOnlyButton,
+QToolButton#playersClassPinButton {
+    color: #8493a2;
+    background: #10171e;
+    border: 1px solid #344352;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+}
+QToolButton#playersClassPinButton {
+    padding: 0;
+}
+QToolButton#playersPartyOnlyButton:hover,
+QToolButton#playersClassPinButton:hover {
+    color: #dce6ee;
+    border-color: #587083;
+    background: #141e27;
+}
+QToolButton#playersPartyOnlyButton:checked,
+QToolButton#playersClassPinButton:checked {
+    color: #eef3f7;
+    background: #2a3946;
+    border-color: #4a6275;
+}
+QScrollArea#playersScroll,
+QWidget#playersListHost {
+    background: transparent;
+    border: none;
+}
+QFrame#playersListRow {
+    background: #121920;
+    border: 1px solid #24303a;
+    border-radius: 5px;
+}
+QFrame#playersListRow:hover {
+    background: #18212a;
+    border-color: #344352;
+}
+QFrame#playersListRow[selected="true"] {
+    background: #1c2a36;
+    border-color: #4a6275;
+}
+QLabel#playersRowClassIcon {
+    background: transparent;
+    border: none;
+    color: #8493a2;
+    font-size: 12px;
+}
+QLabel#playersRowName {
+    color: #eef3f7;
+    font-size: 11px;
+    font-weight: 600;
+    background: transparent;
+    border: none;
+}
+QLabel#playersRowMeta {
+    color: #8493a2;
+    font-size: 10px;
+    background: transparent;
+    border: none;
+}
+QLabel#playersRowUid {
+    color: #6f8192;
+    font-size: 10px;
+    font-family: monospace;
+    background: transparent;
+    border: none;
+}
+QLabel#playersRowDistance {
+    color: #9eb0c0;
+    font-size: 10px;
+    font-weight: 600;
+    background: transparent;
+    border: none;
+}
+QLabel#playersRowBadgeYou,
+QLabel#playersRowBadgeParty,
+QLabel#playersRowBadgePresence,
+QLabel#playersRowBadgeSteam {
+    color: #dce6ee;
+    background: #2a3946;
+    border: none;
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-size: 9px;
+    font-weight: 700;
+}
+QLabel#playersRowBadgeYou {
+    background: #315d7c;
+}
+QLabel#playersRowBadgeParty {
+    background: #3a4d3f;
+    color: #b8d9c0;
+}
+QLabel#playersRowBadgePresence[presence="here"] {
+    background: #2a4a36;
+    color: #d9f0df;
+}
+QLabel#playersRowBadgePresence[presence="away"] {
+    background: #2a323a;
+    color: #c5ced6;
+}
+QLabel#playersRowBadgeSteam {
+    background: #24303a;
+    color: #b8c6d2;
+}
+QLabel#playersRowBadgeSteam[steamState="private"] {
+    background: #3a3426;
+    color: #e6d4a8;
+}
+QToolButton#playersRowProfileButton,
+QToolButton#playersRowFocusButton,
+QToolButton#playersRowFriendButton {
+    color: #8493a2;
+    background: #10171e;
+    border: 1px solid #344352;
+    border-radius: 4px;
+    font-size: 9px;
+    font-weight: 600;
+}
+QToolButton#playersRowFriendButton[friendActive="true"] {
+    color: #e6d4a8;
+    border-color: #6a5a3a;
+}
+QToolButton#playersRowProfileButton:hover,
+QToolButton#playersRowFocusButton:hover,
+QToolButton#playersRowFriendButton:hover {
+    color: #dce6ee;
+    border-color: #587083;
+    background: #141e27;
+}
+QToolButton#playersRowProfileButton:disabled,
+QToolButton#playersRowFocusButton:disabled,
+QToolButton#playersRowFriendButton:disabled {
+    color: #556270;
+    background: #10171e;
+    border-color: #2a3540;
 }
 QWidget#plannerLevelSelector {
     background: #10171e;

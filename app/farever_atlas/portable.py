@@ -26,6 +26,8 @@ def ensure_portable_dirs() -> None:
     for relative in (
         Path("user_data") / "waypoints",
         Path("user_data") / "builds",
+        Path("user_data") / "friends",
+        Path("user_data") / "friends" / "cache",
         Path("native_bridge"),
     ):
         (PROJECT_ROOT / relative).mkdir(parents=True, exist_ok=True)
