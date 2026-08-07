@@ -13,6 +13,53 @@ from .config import ASSET_ROOT, PROJECT_ROOT
 from .pages.map.data import Snapshot
 
 
+def _gatherable_size(name: str) -> str:
+    blob = str(name or "").lower()
+    if "small" in blob:
+        return "small"
+    if "medium" in blob:
+        return "medium"
+    if "large" in blob or "_big" in blob:
+        return "large"
+    return ""
+
+
+def _looks_like_element_kind_id(name: str) -> bool:
+    """Prefab/node ids like Madrigold_Small_Generic — not character display names."""
+    trimmed = str(name or "").strip()
+    if not trimmed or not trimmed.isascii():
+        return True
+    # Farever player names do not contain '_' or path separators.
+    if "_" in trimmed or "/" in trimmed:
+        return True
+    lower = trimmed.lower()
+    tokens = (
+        "small",
+        "medium",
+        "large",
+        "generic",
+        "chestorb",
+        "worldchest",
+        "recipe",
+    )
+    if any(ch.isdigit() for ch in trimmed) and any(token in lower for token in tokens):
+        return True
+    return False
+
+
+def _sanitize_player_display_name(name: object) -> str | None:
+    if not isinstance(name, str):
+        return None
+    trimmed = name.strip()
+    if not (1 <= len(trimmed) <= 64):
+        return None
+    if not trimmed.isascii() or not trimmed.isprintable():
+        return None
+    if _looks_like_element_kind_id(trimmed):
+        return None
+    return trimmed
+
+
 class DataHub(QtCore.QObject):
     updated = QtCore.Signal(object)
 
@@ -86,14 +133,10 @@ class DataHub(QtCore.QObject):
         native_player = payload.get("player", {})
         if not isinstance(native_player, dict):
             native_player = {}
-        name = native_player.get("name")
-        if (
-            not isinstance(name, str)
-            or not (1 <= len(name) <= 64)
-            or not name.isascii()
-            or not name.isprintable()
-        ):
-            name = None
+        # Main validation + reject prefab/world IDs (Madrigold_Small_Generic, etc.).
+        # Keep this binding distinct from loop locals below — players/interactibles
+        # must not overwrite the local player display name.
+        player_name = _sanitize_player_display_name(native_player.get("name"))
         health = native_player.get("health")
         max_health = native_player.get("max_health")
         try:
@@ -126,7 +169,7 @@ class DataHub(QtCore.QObject):
                     member_hp_pct = 0.0
                 party.append(
                     {
-                        "name": member.get("name"),
+                        "name": _sanitize_player_display_name(member.get("name")),
                         "uid": member.get("uid"),
                         "class": member.get("class"),
                         "level": member.get("level"),
@@ -167,6 +210,95 @@ class DataHub(QtCore.QObject):
                         "z": enemy_position.get("z"),
                     }
                 )
+        players: list[dict[str, Any]] = []
+        native_players = payload.get("players", [])
+        if isinstance(native_players, list):
+            for other in native_players:
+                if not isinstance(other, dict):
+                    continue
+                other_position = other.get("position", {})
+                if not isinstance(other_position, dict):
+                    other_position = {}
+                other_id = other.get("id")
+                if not isinstance(other_id, str) or not other_id:
+                    continue
+                other_name = other.get("name")
+                if not isinstance(other_name, str) or _looks_like_element_kind_id(
+                    other_name
+                ):
+                    other_name = None
+                class_name = other.get("class")
+                if class_name is not None and not isinstance(class_name, str):
+                    class_name = None
+                uid = other.get("uid")
+                if uid is not None and not isinstance(uid, str):
+                    uid = None
+                players.append(
+                    {
+                        "id": other_id,
+                        "name": other_name,
+                        "uid": uid,
+                        "class": class_name or "",
+                        "level": other.get("level"),
+                        "x": other_position.get("x"),
+                        "y": other_position.get("y"),
+                        "z": other_position.get("z"),
+                        "heading": other.get("heading", 0.0),
+                        "distance": other.get("distance"),
+                    }
+                )
+        interactibles: list[dict[str, Any]] = []
+        native_interactibles = payload.get("interactibles", [])
+        if isinstance(native_interactibles, list):
+            for item in native_interactibles:
+                if not isinstance(item, dict):
+                    continue
+                item_position = item.get("position", {})
+                if not isinstance(item_position, dict):
+                    item_position = {}
+                item_id = item.get("id")
+                kind = item.get("kind")
+                item_name = item.get("name")
+                if not isinstance(item_id, str) or not item_id:
+                    continue
+                if kind is not None and not isinstance(kind, str):
+                    kind = None
+                if item_name is not None and not isinstance(item_name, str):
+                    item_name = None
+                interactibles.append(
+                    {
+                        "id": item_id,
+                        "kind": (kind or "gatherable").strip().lower() or "gatherable",
+                        "name": item_name or "",
+                        "size": _gatherable_size(item_name or ""),
+                        "x": item_position.get("x"),
+                        "y": item_position.get("y"),
+                        "z": item_position.get("z"),
+                        "live": True,
+                    }
+                )
+        instance: dict[str, Any] = {
+            "type": "unknown",
+            "map_id": "",
+            "is_rift": False,
+            "is_dungeon": False,
+            "is_world_map": False,
+            "activity_kind": "",
+        }
+        native_instance = payload.get("instance")
+        if isinstance(native_instance, dict):
+            instance_type = native_instance.get("type")
+            map_id = native_instance.get("map_id")
+            activity_kind = native_instance.get("activity_kind")
+            if isinstance(instance_type, str) and instance_type:
+                instance["type"] = instance_type
+            if isinstance(map_id, str):
+                instance["map_id"] = map_id
+            if isinstance(activity_kind, str):
+                instance["activity_kind"] = activity_kind
+            instance["is_rift"] = bool(native_instance.get("is_rift"))
+            instance["is_dungeon"] = bool(native_instance.get("is_dungeon"))
+            instance["is_world_map"] = bool(native_instance.get("is_world_map"))
         return {
             "schema": 1,
             "bridge_version": payload.get("bridge_version"),
@@ -175,9 +307,12 @@ class DataHub(QtCore.QObject):
             "sections": ["player"],
             "party": party,
             "enemies": enemies,
+            "players": players,
+            "interactibles": interactibles,
+            "instance": instance,
             "completed_elements": payload.get("completed_elements", []),
             "player": {
-                "name": name,
+                "name": player_name,
                 "uid": native_player.get("uid"),
                 "class": native_player.get("class"),
                 "level": native_player.get("level"),
@@ -193,6 +328,7 @@ class DataHub(QtCore.QObject):
                 "y": position.get("y"),
                 "z": position.get("z"),
                 "heading": payload.get("rotation_z"),
+                "camera_heading": payload.get("camera_yaw"),
             },
             "native_bridge": payload,
             "dps": payload.get("dps", {}),
