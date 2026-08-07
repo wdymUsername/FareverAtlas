@@ -27,8 +27,16 @@ Or on native Windows with Python 3.12+:
   packaging\windows\build.bat
 
 GitHub Actions also builds dist/FareverAtlas.exe
-(.github/workflows/windows-portable.yml). Grab the workflow artifact
-FareverAtlas-windows-portable, or the file attached to a Release.
+(.github/workflows/windows-portable.yml).
+
+Release (attaches FareverAtlas.exe + .sha256 to a GitHub Release):
+
+  git tag v0.13.0
+  git push origin v0.13.0
+
+Or Actions → Windows portable exe → Run workflow with a tag input.
+
+Non-release CI runs still upload the FareverAtlas-windows-portable artifact.
 
 WINDOWS (SOURCE / VENV)
 -----------------------

@@ -61,10 +61,19 @@ packaging\windows\build.bat
 ```
 
 GitHub Actions builds the same portable exe on `windows-latest`
-(`.github/workflows/windows-portable.yml`). Download the
-`FareverAtlas-windows-portable` artifact from the workflow run, or the exe
-attached to a GitHub Release. Manual runs: Actions → Windows portable exe →
-Run workflow.
+(`.github/workflows/windows-portable.yml`).
+
+Publish a release build (exe + `.sha256` attached to the GitHub Release):
+
+```bash
+git tag v0.13.0
+git push origin v0.13.0
+```
+
+Or: Actions → Windows portable exe → Run workflow → set `tag` (e.g. `v0.13.0`).
+
+CI pushes still upload the `FareverAtlas-windows-portable` workflow artifact
+without creating a release.
 
 ### Windows (source / venv)
 
