@@ -1,6 +1,7 @@
 # Farever Atlas
 
 [![Windows portable exe](https://github.com/wdymUsername/FareverAtlas/actions/workflows/windows-portable.yml/badge.svg)](https://github.com/wdymUsername/FareverAtlas/actions/workflows/windows-portable.yml)
+[![VirusTotal](https://badges.cssnr.com/vt/wdymUsername/FareverAtlas/FareverAtlas.exe)](https://github.com/wdymUsername/FareverAtlas/releases/latest)
 
 ## Quick start
 
@@ -71,6 +72,11 @@ git push origin v0.13.0
 ```
 
 Or: Actions → Windows portable exe → Run workflow → set `tag` (e.g. `v0.13.0`).
+
+Release jobs also submit `FareverAtlas.exe` to VirusTotal (requires repo secret
+`VT_API_KEY` from https://www.virustotal.com/gui/my-apikey) and append scan
+links to the release notes. The README VirusTotal badge tracks the latest
+release asset.
 
 CI pushes still upload the `FareverAtlas-windows-portable` workflow artifact
 without creating a release.
