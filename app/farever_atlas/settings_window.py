@@ -78,6 +78,8 @@ def apply_settings_defaults(settings: QtCore.QSettings) -> None:
     settings.setValue("map/show_pois", True)
     settings.setValue("map/show_collectibles", False)
     settings.setValue("map/show_enemies", True)
+    settings.setValue("map/show_players", True)
+    settings.setValue("map/show_player_names", False)
     settings.setValue("map/show_dps_overlay", True)
     settings.setValue("party/show_empty_slots", True)
     settings.setValue("party/slot_count", PARTY_SLOT_COUNT)
@@ -123,6 +125,9 @@ class SettingsPanel(QtCore.QObject):
                     self._settings.value("app/restore_window_positions"), True
                 )
             )
+            self.steam_web_api_key.setText(
+                str(self._settings.value("steam/web_api_key", "") or "")
+            )
 
             radius = _as_int(self._settings.value("map/zoom_radius"), 200)
             zoom_index = min(
@@ -157,6 +162,12 @@ class SettingsPanel(QtCore.QObject):
                 )
             self.show_enemies.setChecked(
                 _as_bool(self._settings.value("map/show_enemies"), True)
+            )
+            self.show_players.setChecked(
+                _as_bool(self._settings.value("map/show_players"), True)
+            )
+            self.show_player_names.setChecked(
+                _as_bool(self._settings.value("map/show_player_names"), False)
             )
 
             self.show_empty_slots.setChecked(
@@ -279,6 +290,27 @@ class SettingsPanel(QtCore.QObject):
         self._bind_bool(self.restore_windows, "app/restore_window_positions")
         form.addRow("Restore window positions", self.restore_windows)
         layout.addWidget(behavior)
+
+        steam, steam_form = self._group("Steam")
+        self.steam_web_api_key = QtWidgets.QLineEdit()
+        self.steam_web_api_key.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+        self.steam_web_api_key.setPlaceholderText("Web API key (optional)")
+        self.steam_web_api_key.setClearButtonEnabled(True)
+        self.steam_web_api_key.setToolTip(
+            "Used to cache friend Steam avatars and online status.\n"
+            "Get a key at https://steamcommunity.com/dev/apikey\n"
+            "Private profiles may still show Offline — Atlas labels those Private."
+        )
+        self.steam_web_api_key.editingFinished.connect(self._on_steam_api_key_changed)
+        steam_form.addRow("Web API key", self.steam_web_api_key)
+        steam_note = QtWidgets.QLabel(
+            "Optional. Friends still work with Here/Away from the game layer. "
+            "Private Steam profiles often look Offline — Atlas shows Private instead."
+        )
+        steam_note.setWordWrap(True)
+        steam_note.setObjectName("settingsDeferredNote")
+        steam_form.addRow(steam_note)
+        layout.addWidget(steam)
         return self._finish(page, layout)
 
     def _map_tab(self) -> QtWidgets.QWidget:
@@ -318,6 +350,12 @@ class SettingsPanel(QtCore.QObject):
         self.show_enemies = QtWidgets.QCheckBox()
         self._bind_bool(self.show_enemies, "map/show_enemies")
         default_form.addRow("Nearby enemies", self.show_enemies)
+        self.show_players = QtWidgets.QCheckBox()
+        self._bind_bool(self.show_players, "map/show_players")
+        default_form.addRow("Nearby players", self.show_players)
+        self.show_player_names = QtWidgets.QCheckBox()
+        self._bind_bool(self.show_player_names, "map/show_player_names")
+        default_form.addRow("Player names", self.show_player_names)
         layout.addWidget(defaults)
         return self._finish(page, layout)
 
@@ -465,6 +503,15 @@ class SettingsPanel(QtCore.QObject):
         slider.setEnabled(False)
         slider.setToolTip("Not available yet")
         return slider
+
+    def _on_steam_api_key_changed(self) -> None:
+        if self._suppress:
+            return
+        self._settings.setValue(
+            "steam/web_api_key",
+            self.steam_web_api_key.text().strip(),
+        )
+        self._emit_changed()
 
     def _on_zoom_changed(self, index: int) -> None:
         if self._suppress or not (0 <= index < len(ZOOM_CHOICES)):

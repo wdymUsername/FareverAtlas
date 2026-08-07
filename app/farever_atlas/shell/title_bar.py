@@ -71,9 +71,18 @@ class TitleBarMixin:
         self.codex_page_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.codex_page_button.setToolTip("Show the codex")
 
+        self.players_page_button = QtWidgets.QToolButton(self.app_title_bar)
+        self.players_page_button.setObjectName("playersPageButton")
+        self.players_page_button.setText("Players")
+        self.players_page_button.setCheckable(True)
+        self.players_page_button.setFixedSize(58, 25)
+        self.players_page_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.players_page_button.setToolTip("Show the player list")
+
         self.page_button_group.addButton(self.map_page_button)
         self.page_button_group.addButton(self.planner_page_button)
         self.page_button_group.addButton(self.codex_page_button)
+        self.page_button_group.addButton(self.players_page_button)
         self.app_title_bar_layout.addWidget(
             self.map_page_button, 0, QtCore.Qt.AlignmentFlag.AlignVCenter
         )
@@ -83,6 +92,9 @@ class TitleBarMixin:
         self.app_title_bar_layout.addWidget(
             self.codex_page_button, 0, QtCore.Qt.AlignmentFlag.AlignVCenter
         )
+        self.app_title_bar_layout.addWidget(
+            self.players_page_button, 0, QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
         self.app_title_bar_layout.addSpacing(5)
         self.map_page_button.clicked.connect(lambda: self._set_active_page("map"))
         self.planner_page_button.clicked.connect(
@@ -90,6 +102,9 @@ class TitleBarMixin:
         )
         self.codex_page_button.clicked.connect(
             lambda: self._set_active_page("codex")
+        )
+        self.players_page_button.clicked.connect(
+            lambda: self._set_active_page("players")
         )
 
         self.app_menu_bar = QtWidgets.QMenuBar(self.app_title_bar)

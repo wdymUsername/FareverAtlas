@@ -28,6 +28,7 @@ from ..pages.map.page import MapPage, MapPageMixin
 from ..pages.map.radar import RadarWidget
 from ..pages.map.status import CharacterStatusWidget, PartyMemberStatusWidget, RiftStatusWidget
 from ..pages.planner.page import PlannerPage, PlannerPageMixin
+from ..pages.players.page import PlayersPage, PlayersPageMixin
 from ..theme import MAP_WINDOW_STYLESHEET
 from ..toast import ToastHost
 from ..waypoints import (
@@ -48,6 +49,7 @@ class AtlasWindow(
     MapPageMixin,
     PlannerPageMixin,
     CodexPageMixin,
+    PlayersPageMixin,
 ):
     combatMeterRequested = QtCore.Signal()
     onlineModeChanged = QtCore.Signal(bool)
@@ -160,6 +162,15 @@ class AtlasWindow(
             self._setting_bool("map/show_enemies", True)
         )
         self.enemies_filter.setToolTip("Show or hide nearby enemies on the map")
+
+        self.players_filter = QtWidgets.QPushButton("Players")
+        self.players_filter.setCheckable(True)
+        self.players_filter.setChecked(
+            self._setting_bool("map/show_players", True)
+        )
+        self.players_filter.setToolTip(
+            "Show or hide other players on the map"
+        )
 
         self.poi_section_toggle = SidebarHeaderButton("POI", "sidebarSectionButton")
         self.poi_section_toggle.setToolTip("Hide POI filters")
@@ -427,13 +438,22 @@ class AtlasWindow(
 
         self._init_planner_page()
         self._init_codex_page()
+        self._init_players_page()
 
         self.pages = {
             MapPage.PAGE_ID: MapPage(self.map_toolbar, self.map_body),
             PlannerPage.PAGE_ID: PlannerPage(self.planner_toolbar, self.planner_body),
             CodexPage.PAGE_ID: CodexPage(self.codex_toolbar, self.codex_body),
+            PlayersPage.PAGE_ID: PlayersPage(
+                self.players_toolbar, self.players_body
+            ),
         }
-        self.page_order = (MapPage.PAGE_ID, PlannerPage.PAGE_ID, CodexPage.PAGE_ID)
+        self.page_order = (
+            MapPage.PAGE_ID,
+            PlannerPage.PAGE_ID,
+            CodexPage.PAGE_ID,
+            PlayersPage.PAGE_ID,
+        )
 
         for page_id in self.page_order:
             page = self.pages[page_id]
@@ -509,6 +529,7 @@ class AtlasWindow(
         self._position_main_navigation()
 
         self.enemies_filter.toggled.connect(self._controls_changed)
+        self.players_filter.toggled.connect(self._controls_changed)
         for button in self.poi_filters.values():
             button.toggled.connect(self._poi_filter_changed)
         for button in self.loot_filters.values():
@@ -535,13 +556,14 @@ class AtlasWindow(
         self.dps_overlay.moved.connect(self._dps_overlay_moved)
         self.zoom_out.clicked.connect(lambda: self._step_zoom(1))
         self.zoom_in.clicked.connect(lambda: self._step_zoom(-1))
-        self.recenter.clicked.connect(self.radar.recenter)
+        self.recenter.clicked.connect(self._recenter_map)
         self.map_help_button.toggled.connect(self._set_map_help_visible)
         self.radar.zoomRequested.connect(self._zoom_requested)
         self.radar.panStateChanged.connect(self._pan_state_changed)
         self.radar.customWaypointContextRequested.connect(
             self._show_custom_waypoint_context_menu
         )
+        self.radar.playerContextRequested.connect(self._show_map_player_context_menu)
         self.waypoint_store.changed.connect(self._custom_waypoints_changed)
         initial_radius, _initial_label = self.ZOOM_LEVELS[self.zoom_index]
         self.radar.set_zoom_radius(float(initial_radius), immediate=True)
@@ -577,7 +599,13 @@ class AtlasWindow(
             self.character_status.update_waiting()
         else:
             self.character_status.update_offline()
+        self._update_players_page(
+            {},
+            online=self.online_mode,
+            connected=False,
+        )
         QtCore.QTimer.singleShot(0, self._position_map_overlays)
+        QtCore.QTimer.singleShot(0, self._controls_changed)
 
     def _set_active_page(self, page: str, *, persist: bool = True) -> None:
         if page not in getattr(self, "pages", {}):
@@ -596,6 +624,7 @@ class AtlasWindow(
             self.map_page_button.setChecked(map_active)
             self.planner_page_button.setChecked(planner_active)
             self.codex_page_button.setChecked(page == CodexPage.PAGE_ID)
+            self.players_page_button.setChecked(page == PlayersPage.PAGE_ID)
         if hasattr(self, "position"):
             self.position.setVisible(map_active)
         if not planner_active and hasattr(
@@ -984,12 +1013,19 @@ class AtlasWindow(
         # Wheel up zooms in, which means a smaller visible radius.
         self._step_zoom(-direction)
 
+    def _recenter_map(self) -> None:
+        self.radar.recenter()
+        self._players_last_focus_key = None
+        if hasattr(self, "_refresh_players_roster"):
+            self._refresh_players_roster(force=True)
+
     def _pan_state_changed(self, panned: bool) -> None:
-        self.recenter.setEnabled(panned)
+        self.recenter.setEnabled(panned or self.radar.is_following())
         self.recenter_animation.stop()
 
         current_height = max(0, self.recenter_container.height())
-        target_height = 26 if panned else 0
+        show_recenter = panned or self.radar.is_following()
+        target_height = 26 if show_recenter else 0
         if current_height == target_height:
             self.recenter_container.setMaximumHeight(target_height)
             self._position_map_overlays()
@@ -999,7 +1035,7 @@ class AtlasWindow(
         self.recenter_animation.setEndValue(target_height)
         self.recenter_animation.setEasingCurve(
             QtCore.QEasingCurve.Type.OutCubic
-            if panned
+            if show_recenter
             else QtCore.QEasingCurve.Type.InCubic
         )
         self.recenter_animation.start()
@@ -1025,6 +1061,11 @@ class AtlasWindow(
             self._setting_bool("map/show_enemies", True)
         )
         self.enemies_filter.blockSignals(False)
+        self.players_filter.blockSignals(True)
+        self.players_filter.setChecked(
+            self._setting_bool("map/show_players", True)
+        )
+        self.players_filter.blockSignals(False)
         for kind, button in self.poi_filters.items():
             button.blockSignals(True)
             button.setChecked(
@@ -1101,6 +1142,10 @@ class AtlasWindow(
             "party/dim_invalid", True
         )
         self.radar.show_enemies = self.enemies_filter.isChecked()
+        self.radar.show_players = self.players_filter.isChecked()
+        self.radar.show_player_names = self._setting_bool(
+            "map/show_player_names", False
+        )
         self.radar.show_pois = any(poi_visibility.values())
         visible_custom_waypoints = self._visible_custom_waypoints()
         self.radar.set_custom_waypoints(
@@ -1127,6 +1172,7 @@ class AtlasWindow(
             self._settings.setValue(f"map/loot_use_icon_{kind}", use_icon)
         self._settings.setValue("map/show_collectibles", any(loot_visibility.values()))
         self._settings.setValue("map/show_enemies", self.radar.show_enemies)
+        self._settings.setValue("map/show_players", self.radar.show_players)
         # Retain the aggregate key only for downgrade compatibility.
         self._settings.setValue(
             "map/show_custom_waypoints", bool(visible_custom_waypoints)
@@ -1210,6 +1256,8 @@ class AtlasWindow(
             self.main_navigation_overlay.update_bridge_status(
                 snapshot, self.map_message
             )
+        # Static file POIs always feed the radar: landmarks (obelisk/etc.) and
+        # out-of-range loot. Live interactibles overlay loot when in range.
         self.radar.set_snapshot(snapshot)
         self._update_dps_overlay(
             snapshot.state if isinstance(snapshot.state, dict) else {}
@@ -1284,6 +1332,12 @@ class AtlasWindow(
             self._party_status_signature = party_status_signature
             self._update_party_status(visible_party)
 
+        self._update_players_page(
+            snapshot.state if isinstance(snapshot.state, dict) else {},
+            online=self.online_mode,
+            connected=bool(snapshot.connected),
+        )
+
         message_lower = snapshot.message.lower()
         if snapshot.connected:
             connection_state = "connected"
@@ -1304,6 +1358,8 @@ class AtlasWindow(
             snapshot.message if connection_state == "failure" else "",
             waiting_seconds,
             self.radar.is_panned(),
+            self.radar.is_following(),
+            self.radar.follow_target_name(),
             len(snapshot.pois),
         )
         if connection_signature != self._connection_signature:
@@ -1311,7 +1367,13 @@ class AtlasWindow(
             if connection_state == "offline":
                 self.connection.setText(f"● Offline{poi_suffix}")
             elif connection_state == "connected":
-                view_suffix = " · Free view" if self.radar.is_panned() else ""
+                if self.radar.is_following():
+                    follow_name = self.radar.follow_target_name() or "player"
+                    view_suffix = f" · Following {follow_name}"
+                elif self.radar.is_panned():
+                    view_suffix = " · Free view"
+                else:
+                    view_suffix = ""
                 self.connection.setText(
                     f"● Connected{view_suffix}{poi_suffix}"
                 )
@@ -1363,3 +1425,6 @@ class AtlasWindow(
             self.character_status.update_waiting()
         else:
             self.character_status.update_offline()
+
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # noqa: N802
+        super().closeEvent(event)

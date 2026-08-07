@@ -7,7 +7,13 @@ from typing import Any
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from ...config import WAYPOINT_COLORS, map_heading_degrees, safe_float, safe_int
+from ...config import (
+    WAYPOINT_COLORS,
+    discover_project_asset,
+    map_heading_degrees,
+    safe_float,
+    safe_int,
+)
 from .data import MapTexture, Snapshot
 
 
@@ -15,6 +21,7 @@ class RadarWidget(QtWidgets.QWidget):
     zoomRequested = QtCore.Signal(int)
     panStateChanged = QtCore.Signal(bool)
     customWaypointContextRequested = QtCore.Signal(object, object)
+    playerContextRequested = QtCore.Signal(object)
 
     # Zoom levels are defined against this reference canvas height. Window
     # resizing changes the visible world extent, not the world-to-pixel scale.
@@ -22,6 +29,16 @@ class RadarWidget(QtWidgets.QWidget):
     ICON_ATLAS_CELL_SIZE = 128
     ICON_ATLAS_COLUMNS = 8
     WAYPOINT_ICON_SIZE = 24
+    # Game UI icons/playerCursor.png — white chevron + orange diamond (points +X).
+    PLAYER_ARROW_ASSET = "playerCursor.png"
+    PLAYER_ARROW_SIZE = 28
+    # Must match native_bridge interactible sweep (XY metres / Z cull).
+    # Static loot outside this bubble is drawn from the POI file; inside the
+    # bubble, a static marker is suppressed only when a live interactible
+    # covers it (failed/empty live sweeps must not blank the map).
+    LOOT_LIVE_RANGE_M = 600.0
+    LOOT_LIVE_Z_CULL_M = 80.0
+    LOOT_LIVE_MATCH_M = 12.0
 
     # User-confirmed activities.png mapping. Numbers are one-based, left to
     # right across the first row (1-8), then the second row (9-16).
@@ -56,9 +73,15 @@ class RadarWidget(QtWidgets.QWidget):
         self.show_party_health_rings = True
         self.dim_invalid_party_members = True
         self.show_enemies = True
+        self.show_players = True
+        self.show_player_names = False
         self.show_route_line = True
         # World units of elevation difference before an enemy marker is dimmed.
         self.enemy_z_fade = 30.0
+        # Same elevation fade for non-party player markers.
+        self.player_z_fade = 30.0
+        # Metres of |Δz| before a marker gets an up/down chevron.
+        self.z_indicator_threshold = 2.0
         self.active_custom_waypoint_id: int | None = None
         self.radius_m = 200.0
         self.target_radius_m = 200.0
@@ -88,7 +111,12 @@ class RadarWidget(QtWidgets.QWidget):
         self.map_texture = map_texture
         self._waypoint_icon_cache: dict[int, QtGui.QImage] = {}
         self._loose_kind_icon_cache: dict[str, QtGui.QImage] = {}
+        self._player_arrow_icon_cache: QtGui.QImage | None = None
+        self._player_arrow_icon_asset: str | None = None
+        self._player_arrow_icon_missing = False
         self.view_center_world: tuple[float, float] | None = None
+        self._follow_target_key: str | None = None
+        self._follow_target_name: str = ""
         self._offline_center_world: tuple[float, float] | None = None
         self._drag_last: QtCore.QPointF | None = None
         self._drag_active = False
@@ -96,11 +124,16 @@ class RadarWidget(QtWidgets.QWidget):
         self._drag_started_panned = False
         self._custom_waypoint_hits: list[tuple[QtCore.QRectF, dict[str, Any]]] = []
         self._enemy_hits: list[tuple[QtCore.QRectF, dict[str, Any]]] = []
+        self._interactible_hits: list[tuple[QtCore.QRectF, dict[str, Any]]] = []
+        self._player_hits: list[tuple[QtCore.QRectF, dict[str, Any]]] = []
         self._hovered_custom_waypoint_id: int | None = None
         self._hovered_enemy_id: str | None = None
+        self._hovered_interactible_id: str | None = None
         self._live_marker_signature: tuple[Any, ...] | None = None
         # Generous hit slack around the small enemy dots so hover is usable.
         self._enemy_hit_radius = 9.0
+        self._interactible_hit_radius = 10.0
+        self._player_hit_radius = 12.0
         # Cursor-shape changes cannot be interpolated by Qt, so drag release uses
         # a short staged transition: closed hand -> open hand -> resting cursor.
         # The generation token prevents delayed callbacks from overriding a newer
@@ -126,6 +159,7 @@ class RadarWidget(QtWidgets.QWidget):
         pois_changed = snapshot.pois is not self.pois
         self.state = snapshot.state
         self.pois = snapshot.pois
+        self._sync_follow_center()
         raw = self._raw_player()
         if not self._display_pose_valid() and self._raw_pose_valid(raw):
             self._snap_display_player(raw)
@@ -156,6 +190,33 @@ class RadarWidget(QtWidgets.QWidget):
             for enemy in enemies
             if isinstance(enemy, dict)
         ) if isinstance(enemies, list) else ()
+        nearby_players = self.state.get("players", []) if isinstance(self.state, dict) else []
+        players_signature = tuple(
+            (
+                str(other.get("id") or ""),
+                str(other.get("uid") or other.get("name") or ""),
+                safe_float(other.get("x"), 0.0),
+                safe_float(other.get("y"), 0.0),
+                safe_float(other.get("heading"), 0.0),
+                safe_float(other.get("z"), 0.0),
+            )
+            for other in nearby_players
+            if isinstance(other, dict)
+        ) if isinstance(nearby_players, list) else ()
+        interactibles = (
+            self.state.get("interactibles", []) if isinstance(self.state, dict) else []
+        )
+        interactible_signature = tuple(
+            (
+                str(item.get("id") or ""),
+                str(item.get("kind") or ""),
+                safe_float(item.get("x"), 0.0),
+                safe_float(item.get("y"), 0.0),
+                safe_float(item.get("z"), 0.0),
+            )
+            for item in interactibles
+            if isinstance(item, dict)
+        ) if isinstance(interactibles, list) else ()
         target_signature = (
             (
                 True,
@@ -173,6 +234,8 @@ class RadarWidget(QtWidgets.QWidget):
         live_signature = (
             party_signature,
             enemy_signature,
+            players_signature,
+            interactible_signature,
             target_signature,
             completed_signature,
         )
@@ -242,6 +305,9 @@ class RadarWidget(QtWidgets.QWidget):
         heading = safe_float(raw.get("heading"), math.nan)
         if math.isfinite(heading):
             self._display_player["heading"] = heading
+        camera_heading = safe_float(raw.get("camera_heading"), math.nan)
+        if math.isfinite(camera_heading):
+            self._display_player["camera_heading"] = camera_heading
 
     @staticmethod
     def _shortest_angle_delta(target: float, current: float) -> float:
@@ -317,6 +383,20 @@ class RadarWidget(QtWidgets.QWidget):
                 current_heading = target_heading
             self._display_player["heading"] = current_heading
 
+        target_camera = safe_float(raw.get("camera_heading"), math.nan)
+        if math.isfinite(target_camera):
+            current_camera = self._display_player.get("camera_heading", target_camera)
+            if not math.isfinite(current_camera):
+                current_camera = target_camera
+            camera_delta = self._shortest_angle_delta(target_camera, current_camera)
+            if abs(camera_delta) > 0.0002:
+                camera_alpha = 1.0 - math.exp(-dt / 0.075)
+                current_camera += camera_delta * camera_alpha
+                pose_changed = True
+            else:
+                current_camera = target_camera
+            self._display_player["camera_heading"] = current_camera
+
         if zoom_changed or pose_changed:
             self.update()
 
@@ -329,6 +409,8 @@ class RadarWidget(QtWidgets.QWidget):
         player["y"] = self._display_player["y"]
         if math.isfinite(self._display_player.get("heading", math.nan)):
             player["heading"] = self._display_player["heading"]
+        if math.isfinite(self._display_player.get("camera_heading", math.nan)):
+            player["camera_heading"] = self._display_player["camera_heading"]
         return player
 
     def _view_center(self) -> dict[str, float]:
@@ -348,8 +430,82 @@ class RadarWidget(QtWidgets.QWidget):
     def is_panned(self) -> bool:
         return self.view_center_world is not None
 
+    def is_following(self) -> bool:
+        return bool(self._follow_target_key)
+
+    def follow_target_key(self) -> str | None:
+        return self._follow_target_key
+
+    def follow_target_name(self) -> str:
+        return self._follow_target_name
+
+    @staticmethod
+    def follow_key_for(entry: dict[str, Any]) -> str:
+        uid = str(entry.get("uid") or "").strip()
+        if uid:
+            return uid
+        name = str(entry.get("name") or "").strip()
+        return f"name:{name.lower()}" if name else ""
+
+    def clear_follow(self) -> None:
+        had = bool(self._follow_target_key)
+        self._follow_target_key = None
+        self._follow_target_name = ""
+        if had:
+            self.panStateChanged.emit(self.is_panned())
+
+    def set_follow_target(self, entry: dict[str, Any]) -> bool:
+        key = self.follow_key_for(entry)
+        if not key:
+            return False
+        x = safe_float(entry.get("x"), math.nan)
+        y = safe_float(entry.get("y"), math.nan)
+        if not (math.isfinite(x) and math.isfinite(y)):
+            live = self._lookup_follow_pose(key)
+            if live is None:
+                return False
+            x, y = live
+        self._follow_target_key = key
+        self._follow_target_name = str(entry.get("name") or "").strip()
+        self.center_on(x, y)
+        return True
+
+    def _lookup_follow_pose(self, key: str) -> tuple[float, float] | None:
+        if not key:
+            return None
+        candidates: list[dict[str, Any]] = []
+        party = self.state.get("party", []) if isinstance(self.state, dict) else []
+        players = self.state.get("players", []) if isinstance(self.state, dict) else []
+        if isinstance(party, list):
+            candidates.extend(member for member in party if isinstance(member, dict))
+        if isinstance(players, list):
+            candidates.extend(other for other in players if isinstance(other, dict))
+        for entry in candidates:
+            if self.follow_key_for(entry) != key:
+                continue
+            x = safe_float(entry.get("x"), math.nan)
+            y = safe_float(entry.get("y"), math.nan)
+            if math.isfinite(x) and math.isfinite(y):
+                return (x, y)
+        return None
+
+    def _sync_follow_center(self) -> None:
+        if not self._follow_target_key:
+            return
+        pose = self._lookup_follow_pose(self._follow_target_key)
+        if pose is None:
+            # Target left the layer / lost pose — drop follow so the view does
+            # not freeze on the last point with is_following() still true.
+            self.clear_follow()
+            return
+        next_center = pose
+        if self.map_texture is not None and not self._local_instance_mode():
+            next_center = self.map_texture.clamp_world_center(*next_center)
+        self.view_center_world = next_center
+
     def recenter(self) -> None:
-        was_panned = self.view_center_world is not None
+        was_panned = self.view_center_world is not None or bool(self._follow_target_key)
+        self.clear_follow()
         self.view_center_world = None
         self._drag_last = None
         self._drag_active = False
@@ -364,7 +520,7 @@ class RadarWidget(QtWidgets.QWidget):
         if not (math.isfinite(x) and math.isfinite(y)):
             return
         next_center = (x, y)
-        if self.map_texture is not None:
+        if self.map_texture is not None and not self._local_instance_mode():
             next_center = self.map_texture.clamp_world_center(*next_center)
         self.view_center_world = next_center
         self.panStateChanged.emit(True)
@@ -372,6 +528,15 @@ class RadarWidget(QtWidgets.QWidget):
 
     def _pixels_per_metre(self) -> float:
         return self.ZOOM_REFERENCE_HEIGHT_PX / (2.0 * max(self.radius_m, 1.0))
+
+    def _instance_state(self) -> dict[str, Any]:
+        instance = self.state.get("instance", {}) if isinstance(self.state, dict) else {}
+        return instance if isinstance(instance, dict) else {}
+
+    def _local_instance_mode(self) -> bool:
+        instance = self._instance_state()
+        kind = str(instance.get("type") or "").strip().lower()
+        return kind in {"dungeon", "rift", "instance"} or bool(instance.get("is_dungeon"))
 
     def map_status(self) -> str:
         if self.map_texture is None:
@@ -451,6 +616,38 @@ class RadarWidget(QtWidgets.QWidget):
                 return dict(waypoint)
         return None
 
+    def player_at(self, point: QtCore.QPointF) -> dict[str, Any] | None:
+        best: dict[str, Any] | None = None
+        best_distance = math.inf
+        for hit_rect, player in self._player_hits:
+            if not hit_rect.contains(point):
+                continue
+            center = hit_rect.center()
+            distance = math.hypot(point.x() - center.x(), point.y() - center.y())
+            if distance < best_distance:
+                best_distance = distance
+                best = player
+        return dict(best) if best is not None else None
+
+    def _register_player_hit(
+        self,
+        point: QtCore.QPointF,
+        player: dict[str, Any],
+        *,
+        label_rect: QtCore.QRect | QtCore.QRectF | None = None,
+        hit_radius: float | None = None,
+    ) -> None:
+        radius = self._player_hit_radius if hit_radius is None else float(hit_radius)
+        hit = QtCore.QRectF(
+            point.x() - radius,
+            point.y() - radius,
+            radius * 2.0,
+            radius * 2.0,
+        )
+        if label_rect is not None:
+            hit = hit.united(QtCore.QRectF(label_rect))
+        self._player_hits.append((hit, dict(player)))
+
     def enemy_at(self, point: QtCore.QPointF) -> dict[str, Any] | None:
         # Nearest wins when markers overlap — helpful in dense packs.
         best: dict[str, Any] | None = None
@@ -465,6 +662,19 @@ class RadarWidget(QtWidgets.QWidget):
                 best = enemy
         return dict(best) if best is not None else None
 
+    def interactible_at(self, point: QtCore.QPointF) -> dict[str, Any] | None:
+        best: dict[str, Any] | None = None
+        best_distance = math.inf
+        for hit_rect, item in self._interactible_hits:
+            if not hit_rect.contains(point):
+                continue
+            center = hit_rect.center()
+            distance = math.hypot(point.x() - center.x(), point.y() - center.y())
+            if distance < best_distance:
+                best_distance = distance
+                best = item
+        return dict(best) if best is not None else None
+
     @staticmethod
     def _enemy_display_name(enemy: dict[str, Any]) -> str:
         kind = str(enemy.get("kind") or "").strip()
@@ -472,6 +682,38 @@ class RadarWidget(QtWidgets.QWidget):
             return "Enemy"
         # Creature ids arrive as HashLink identifiers like Crimson_Z2W_Sword_2.
         return " ".join(part for part in kind.replace("_", " ").split() if part)
+
+    @staticmethod
+    def _node_size_label(item: dict[str, Any]) -> str:
+        """Return small/medium/large from live name or static POI name."""
+        explicit = str(item.get("size") or "").strip().lower()
+        if explicit in {"small", "medium", "large"}:
+            return explicit
+        blob = " ".join(
+            str(item.get(key) or "") for key in ("name", "kind", "subkind")
+        ).lower()
+        if "small" in blob:
+            return "small"
+        if "medium" in blob:
+            return "medium"
+        if "large" in blob or "_big" in blob or " big" in blob:
+            return "large"
+        return ""
+
+    @classmethod
+    def _interactible_display_name(cls, item: dict[str, Any]) -> str:
+        name = str(item.get("name") or "").strip()
+        kind = str(item.get("kind") or "").strip()
+        parts = [
+            part
+            for part in name.replace("_", " ").split()
+            if part and part.lower() != "generic"
+        ]
+        pretty = " ".join(parts) if parts else (kind.title() if kind else "Node")
+        size = cls._node_size_label(item)
+        if size and size not in pretty.lower():
+            pretty = f"{pretty} ({size.title()})"
+        return pretty
 
     def _world_in_view(
         self,
@@ -498,6 +740,8 @@ class RadarWidget(QtWidgets.QWidget):
             point = QtCore.QPointF(
                 self.mapFromGlobal(QtGui.QCursor.pos())
             )
+        if self.player_at(point) is not None:
+            return QtCore.Qt.CursorShape.PointingHandCursor
         if self.custom_waypoint_at(point) is not None:
             return QtCore.Qt.CursorShape.PointingHandCursor
         return QtCore.Qt.CursorShape.ArrowCursor
@@ -567,6 +811,11 @@ class RadarWidget(QtWidgets.QWidget):
             event.accept()
             return
         point = QtCore.QPointF(event.pos())
+        player = self.player_at(point)
+        if player is not None and not player.get("is_self"):
+            self.playerContextRequested.emit(player)
+            event.accept()
+            return
         world = self.world_at_screen(point)
         if world is not None:
             waypoint = self.custom_waypoint_at(point)
@@ -585,6 +834,9 @@ class RadarWidget(QtWidgets.QWidget):
             center_y = safe_float(center.get("y"), math.nan)
             if math.isfinite(center_x) and math.isfinite(center_y):
                 self._drag_started_panned = self.is_panned()
+                # Manual pan cancels follow — free view takes over.
+                if self._follow_target_key:
+                    self.clear_follow()
                 self.view_center_world = (center_x, center_y)
                 self._drag_last = event.position()
                 self._drag_active = True
@@ -616,7 +868,7 @@ class RadarWidget(QtWidgets.QWidget):
                     center_x - delta.x() / pixels_per_metre,
                     center_y - delta.y() / pixels_per_metre,
                 )
-                if self.map_texture is not None:
+                if self.map_texture is not None and not self._local_instance_mode():
                     next_center = self.map_texture.clamp_world_center(*next_center)
                 self.view_center_world = next_center
                 self.panStateChanged.emit(True)
@@ -628,13 +880,23 @@ class RadarWidget(QtWidgets.QWidget):
         waypoint_id = safe_int(waypoint.get("id"), -1) if waypoint else None
         enemy = None if waypoint is not None else self.enemy_at(event.position())
         enemy_id = str(enemy.get("id") or "") if enemy is not None else None
+        interactible = (
+            None
+            if waypoint is not None or enemy is not None
+            else self.interactible_at(event.position())
+        )
+        interactible_id = (
+            str(interactible.get("id") or "") if interactible is not None else None
+        )
         hover_changed = (
             waypoint_id != self._hovered_custom_waypoint_id
             or enemy_id != self._hovered_enemy_id
+            or interactible_id != self._hovered_interactible_id
         )
         if hover_changed:
             self._hovered_custom_waypoint_id = waypoint_id
             self._hovered_enemy_id = enemy_id
+            self._hovered_interactible_id = interactible_id
             if waypoint is not None:
                 player = self._player()
                 distance = math.hypot(
@@ -666,6 +928,21 @@ class RadarWidget(QtWidgets.QWidget):
                     event.globalPosition().toPoint(), tooltip, self
                 )
                 self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+            elif interactible is not None:
+                player = self._player()
+                distance = math.hypot(
+                    safe_float(interactible.get("x")) - safe_float(player.get("x")),
+                    safe_float(interactible.get("y")) - safe_float(player.get("y")),
+                )
+                kind = str(interactible.get("kind") or "").strip().title() or "Node"
+                tooltip = (
+                    f"{self._interactible_display_name(interactible)}\n"
+                    f"{kind} · {distance:.1f} m"
+                )
+                QtWidgets.QToolTip.showText(
+                    event.globalPosition().toPoint(), tooltip, self
+                )
+                self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
             else:
                 QtWidgets.QToolTip.hideText()
                 self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
@@ -674,6 +951,7 @@ class RadarWidget(QtWidgets.QWidget):
     def leaveEvent(self, event: QtCore.QEvent) -> None:  # noqa: N802
         self._hovered_custom_waypoint_id = None
         self._hovered_enemy_id = None
+        self._hovered_interactible_id = None
         QtWidgets.QToolTip.hideText()
         if not self._drag_active:
             self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
@@ -694,6 +972,7 @@ class RadarWidget(QtWidgets.QWidget):
             return
         if event.button() == QtCore.Qt.MouseButton.LeftButton and self._drag_active:
             if not self._drag_moved and not self._drag_started_panned:
+                self.clear_follow()
                 self.view_center_world = None
             self._drag_active = False
             self._drag_last = None
@@ -774,6 +1053,43 @@ class RadarWidget(QtWidgets.QWidget):
         self._loose_kind_icon_cache[normalized_kind] = icon
         return icon
 
+    def _player_arrow_icon(self) -> QtGui.QImage | None:
+        asset_name = self.PLAYER_ARROW_ASSET
+        if (
+            self._player_arrow_icon_cache is not None
+            and self._player_arrow_icon_asset == asset_name
+        ):
+            return self._player_arrow_icon_cache
+        if (
+            self._player_arrow_icon_missing
+            and self._player_arrow_icon_asset == asset_name
+        ):
+            return None
+        self._player_arrow_icon_cache = None
+        self._player_arrow_icon_missing = False
+        self._player_arrow_icon_asset = asset_name
+        path = discover_project_asset(asset_name)
+        if path is None:
+            self._player_arrow_icon_missing = True
+            return None
+        reader = QtGui.QImageReader(str(path))
+        reader.setAutoTransform(True)
+        source = reader.read()
+        if source.isNull():
+            self._player_arrow_icon_missing = True
+            return None
+        icon = source.scaled(
+            self.PLAYER_ARROW_SIZE,
+            self.PLAYER_ARROW_SIZE,
+            QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+            QtCore.Qt.TransformationMode.SmoothTransformation,
+        )
+        if icon.isNull():
+            self._player_arrow_icon_missing = True
+            return None
+        self._player_arrow_icon_cache = icon
+        return icon
+
     def icon_available_for_kind(self, kind: str) -> bool:
         normalized_kind = kind.strip().lower()
         if self._loose_kind_icon(normalized_kind) is not None:
@@ -787,8 +1103,23 @@ class RadarWidget(QtWidgets.QWidget):
         point: QtCore.QPointF,
         kind: str,
         subkind: str,
+        *,
+        size: str = "",
     ) -> None:
         normalized_kind = kind.strip().lower()
+        size_key = size.strip().lower()
+        if size_key == "small":
+            scale = 0.72
+            dot_radius = 2.5
+        elif size_key == "large":
+            scale = 1.28
+            dot_radius = 5.0
+        elif size_key == "medium":
+            scale = 1.0
+            dot_radius = 3.5
+        else:
+            scale = 1.0
+            dot_radius = 3.5
         use_icon = self.loot_kind_icon_mode.get(normalized_kind, True)
         if use_icon:
             icon = self._loose_kind_icon(normalized_kind)
@@ -796,14 +1127,33 @@ class RadarWidget(QtWidgets.QWidget):
                 icon_index = self._poi_icon_index(normalized_kind, subkind)
                 icon = self._waypoint_icon(icon_index) if icon_index is not None else None
             if icon is not None:
-                x = point.x() - icon.width() / 2.0
-                y = point.y() - icon.height() / 2.0
-                painter.drawImage(QtCore.QPointF(x, y), icon)
+                width = icon.width() * scale
+                height = icon.height() * scale
+                target = QtCore.QRectF(
+                    point.x() - width / 2.0,
+                    point.y() - height / 2.0,
+                    width,
+                    height,
+                )
+                painter.drawImage(target, icon)
+                if size_key == "large":
+                    # Soft ring so large nodes read clearly next to small ones.
+                    ring = QtGui.QColor(self._poi_color(normalized_kind))
+                    ring.setAlpha(160)
+                    painter.setPen(QtGui.QPen(ring, 1.4))
+                    painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+                    painter.drawEllipse(point, max(width, height) * 0.55, max(width, height) * 0.55)
                 return
 
         painter.setPen(QtGui.QPen(QtGui.QColor("#101318"), 1.0))
         painter.setBrush(self._poi_color(kind))
-        painter.drawEllipse(point, 3.5, 3.5)
+        painter.drawEllipse(point, dot_radius, dot_radius)
+        if size_key == "large":
+            ring = QtGui.QColor(self._poi_color(normalized_kind))
+            ring.setAlpha(170)
+            painter.setPen(QtGui.QPen(ring, 1.3))
+            painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(point, dot_radius + 2.2, dot_radius + 2.2)
 
     @staticmethod
     def _poi_color(kind: str) -> QtGui.QColor:
@@ -819,6 +1169,39 @@ class RadarWidget(QtWidgets.QWidget):
             "obelisk": QtGui.QColor("#7ce4df"),
         }
         return colors.get(kind, QtGui.QColor("#9ba7b4"))
+
+    def _draw_z_indicator(
+        self,
+        painter: QtGui.QPainter,
+        point: QtCore.QPointF,
+        item_z: float,
+        player_z: float,
+        *,
+        gap: float = 5.5,
+        color: QtGui.QColor | None = None,
+    ) -> None:
+        """Tiny chevron above/below a marker when it sits on another floor."""
+        if not (math.isfinite(item_z) and math.isfinite(player_z)):
+            return
+        delta = item_z - player_z
+        if abs(delta) < self.z_indicator_threshold:
+            return
+        above = delta > 0.0
+        fill = color if color is not None else QtGui.QColor("#e8eef5")
+        outline = QtGui.QColor("#0b1117")
+        size = 3.6
+        # Screen Y grows downward: "above player" → chevron pointing up (toward top).
+        if above:
+            tip = point + QtCore.QPointF(0.0, -(gap + size))
+            left = point + QtCore.QPointF(-size, -gap)
+            right = point + QtCore.QPointF(size, -gap)
+        else:
+            tip = point + QtCore.QPointF(0.0, gap + size)
+            left = point + QtCore.QPointF(-size, gap)
+            right = point + QtCore.QPointF(size, gap)
+        painter.setPen(QtGui.QPen(outline, 1.0))
+        painter.setBrush(fill)
+        painter.drawPolygon(QtGui.QPolygonF([tip, left, right]))
 
     @staticmethod
     def _star_polygon(point: QtCore.QPointF, outer: float, inner: float) -> QtGui.QPolygonF:
@@ -952,6 +1335,72 @@ class RadarWidget(QtWidgets.QWidget):
             painter.setPen(QtGui.QColor("#edf3f7"))
             painter.drawText(text_rect, QtCore.Qt.AlignmentFlag.AlignCenter, name)
 
+    def _draw_player_marker(
+        self,
+        painter: QtGui.QPainter,
+        player: dict[str, Any],
+        center: QtCore.QPointF,
+        pixels_per_metre: float,
+        view_center: dict[str, float],
+    ) -> None:
+        player_x = safe_float(player.get("x"), math.nan)
+        player_y = safe_float(player.get("y"), math.nan)
+        if not (math.isfinite(player_x) and math.isfinite(player_y)):
+            return
+        player_point = self._world_to_screen(
+            player, center, pixels_per_metre, view_center
+        )
+        # Farever headings are rotated 90° clockwise relative to the Atlas
+        # triangle forward axis — correct without changing map orientation.
+        body_heading = safe_float(player.get("heading")) + (math.pi / 2.0)
+        body_fx, body_fy = math.sin(body_heading), -math.cos(body_heading)
+        body_sx, body_sy = -body_fy, body_fx
+
+        camera_raw = safe_float(player.get("camera_heading"), math.nan)
+        if math.isfinite(camera_raw):
+            cam_heading = camera_raw + (math.pi / 2.0)
+            cam_fx, cam_fy = math.sin(cam_heading), -math.cos(cam_heading)
+            cam_sx, cam_sy = -cam_fy, cam_fx
+            # Distinct cyan wedge for camera look (under the body arrow).
+            cam_tip = player_point + QtCore.QPointF(cam_fx * 26.0, cam_fy * 26.0)
+            cam_left = player_point + QtCore.QPointF(
+                cam_fx * 5.0 + cam_sx * 11.0, cam_fy * 5.0 + cam_sy * 11.0
+            )
+            cam_right = player_point + QtCore.QPointF(
+                cam_fx * 5.0 - cam_sx * 11.0, cam_fy * 5.0 - cam_sy * 11.0
+            )
+            painter.setPen(QtCore.Qt.PenStyle.NoPen)
+            painter.setBrush(QtGui.QColor(64, 210, 255, 110))
+            painter.drawPolygon(QtGui.QPolygonF([player_point, cam_left, cam_tip, cam_right]))
+            painter.setPen(QtGui.QPen(QtGui.QColor(120, 230, 255, 230), 2.0))
+            painter.drawLine(player_point, cam_tip)
+
+        arrow = self._player_arrow_icon()
+        if arrow is not None:
+            # Asset points +X; atan2(fy, fx) matches screen Y-down clockwise rotation.
+            painter.save()
+            painter.translate(player_point)
+            painter.rotate(math.degrees(math.atan2(body_fy, body_fx)))
+            painter.drawImage(
+                QtCore.QRectF(
+                    -arrow.width() / 2.0,
+                    -arrow.height() / 2.0,
+                    float(arrow.width()),
+                    float(arrow.height()),
+                ),
+                arrow,
+            )
+            painter.restore()
+            return
+
+        tip = player_point + QtCore.QPointF(body_fx * 14.0, body_fy * 14.0)
+        base = player_point - QtCore.QPointF(body_fx * 7.0, body_fy * 7.0)
+        left = base + QtCore.QPointF(body_sx * 7.0, body_sy * 7.0)
+        right = base - QtCore.QPointF(body_sx * 7.0, body_sy * 7.0)
+        painter.setPen(QtGui.QPen(QtGui.QColor("#081016"), 1.5))
+        painter.setBrush(QtGui.QColor("#f4f7fa"))
+        painter.drawPolygon(QtGui.QPolygonF([tip, left, right]))
+
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # noqa: N802
         del event
         painter = QtGui.QPainter(self)
@@ -973,9 +1422,15 @@ class RadarWidget(QtWidgets.QWidget):
         view_center = self._view_center()
         self._custom_waypoint_hits = []
         self._enemy_hits = []
+        self._interactible_hits = []
+        self._player_hits = []
 
         map_drawn = False
-        if self.show_texture and self.map_texture is not None:
+        local_instance = self._local_instance_mode()
+        draw_texture = (
+            self.show_texture and self.map_texture is not None and not local_instance
+        )
+        if draw_texture:
             map_view = self.map_texture.render_view(
                 view_center,
                 pixels_per_metre,
@@ -1000,8 +1455,28 @@ class RadarWidget(QtWidgets.QWidget):
                 painter.drawImage(viewport, fallback)
             painter.restore()
             painter.fillPath(clip_shape, QtGui.QColor(0, 0, 0, 24))
+        elif local_instance:
+            painter.fillPath(clip_shape, QtGui.QColor("#0a0f08"))
+            instance = self._instance_state()
+            label = str(instance.get("type") or "instance").strip() or "instance"
+            map_id = str(instance.get("map_id") or "").strip()
+            banner = label
+            if map_id:
+                banner = f"{banner} · {map_id}"
+            painter.setPen(QtGui.QColor("#9ba7b4"))
+            painter.drawText(
+                viewport.adjusted(14, 12, -14, -14),
+                QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignLeft,
+                banner,
+            )
 
-        collectible_kinds = {"chest", "red_orb", "plant", "ore"}
+        # Player under all other markers so nearby dots stay readable.
+        self._draw_player_marker(painter, player, center, pixels_per_metre, view_center)
+        player_x = safe_float(player.get("x"), math.nan)
+        player_y = safe_float(player.get("y"), math.nan)
+        player_z = safe_float(player.get("z"), math.nan)
+
+        collectible_kinds = {"chest", "red_orb", "plant", "ore", "gatherable"}
         enabled_poi_kinds = {
             kind for kind, enabled in self.poi_kind_visibility.items() if enabled
         }
@@ -1011,18 +1486,123 @@ class RadarWidget(QtWidgets.QWidget):
         all_poi_kinds_enabled = bool(self.poi_kind_visibility) and all(
             self.poi_kind_visibility.values()
         )
-        if enabled_poi_kinds or enabled_loot_kinds:
-            completed_elements = self.state.get("completed_elements", [])
-            completed_element_ids = {
-                str(value) for value in completed_elements
-            } if isinstance(completed_elements, list) else set()
+        completed_elements = self.state.get("completed_elements", [])
+        completed_element_ids = {
+            str(value) for value in completed_elements
+        } if isinstance(completed_elements, list) else set()
+
+        def _loot_kind_visible(kind: str) -> bool:
+            if kind == "gatherable":
+                return bool(enabled_loot_kinds & {"plant", "ore"})
+            return kind in enabled_loot_kinds
+
+        def _in_loot_live_range(poi: dict[str, Any]) -> bool:
+            if not (
+                math.isfinite(player_x)
+                and math.isfinite(player_y)
+            ):
+                return False
+            px = safe_float(poi.get("x"), math.nan)
+            py = safe_float(poi.get("y"), math.nan)
+            if not (math.isfinite(px) and math.isfinite(py)):
+                return False
+            if math.hypot(px - player_x, py - player_y) > self.LOOT_LIVE_RANGE_M:
+                return False
+            pz = safe_float(poi.get("z"), math.nan)
+            if math.isfinite(pz) and math.isfinite(player_z):
+                if abs(pz - player_z) > self.LOOT_LIVE_Z_CULL_M:
+                    return False
+            return True
+
+        def _loot_kinds_compatible(static_kind: str, live_kind: str) -> bool:
+            if static_kind == live_kind:
+                return True
+            if live_kind == "gatherable" and static_kind in {"plant", "ore"}:
+                return True
+            if static_kind == "gatherable" and live_kind in {"plant", "ore"}:
+                return True
+            return False
+
+        # Live gatherables/chests — world and local instance modes.
+        live_nodes = (
+            self.state.get("interactibles", []) if isinstance(self.state, dict) else []
+        )
+        if not isinstance(live_nodes, list):
+            live_nodes = []
+        live_loot_samples: list[tuple[str, float, float]] = []
+        if enabled_loot_kinds:
+            for poi in live_nodes:
+                if not isinstance(poi, dict):
+                    continue
+                kind = str(poi.get("kind", "")).strip().lower()
+                if kind not in collectible_kinds or not _loot_kind_visible(kind):
+                    continue
+                lx = safe_float(poi.get("x"), math.nan)
+                ly = safe_float(poi.get("y"), math.nan)
+                if math.isfinite(lx) and math.isfinite(ly):
+                    live_loot_samples.append((kind, lx, ly))
+                if not self._world_in_view(poi, view_center, viewport):
+                    continue
+                point = self._world_to_screen(poi, center, pixels_per_metre, view_center)
+                draw_kind = "ore" if kind == "gatherable" else kind
+                size = self._node_size_label(poi)
+                self._draw_poi_marker(painter, point, draw_kind, "", size=size)
+                self._draw_z_indicator(
+                    painter,
+                    point,
+                    safe_float(poi.get("z"), math.nan),
+                    player_z,
+                    gap=6.0 if size == "large" else 5.0,
+                )
+                hit = self._interactible_hit_radius
+                if size == "large":
+                    hit += 3.0
+                elif size == "small":
+                    hit -= 1.0
+                marker = dict(poi)
+                marker["size"] = size
+                self._interactible_hits.append(
+                    (
+                        QtCore.QRectF(
+                            point.x() - hit, point.y() - hit, hit * 2.0, hit * 2.0
+                        ),
+                        marker,
+                    )
+                )
+
+        def _covered_by_live_loot(poi: dict[str, Any], kind: str) -> bool:
+            if not live_loot_samples:
+                return False
+            px = safe_float(poi.get("x"), math.nan)
+            py = safe_float(poi.get("y"), math.nan)
+            if not (math.isfinite(px) and math.isfinite(py)):
+                return False
+            match_m = self.LOOT_LIVE_MATCH_M
+            for live_kind, lx, ly in live_loot_samples:
+                if not _loot_kinds_compatible(kind, live_kind):
+                    continue
+                if math.hypot(px - lx, py - ly) <= match_m:
+                    return True
+            return False
+
+        # Static file markers. Landmarks always; in-range loot suppressed only
+        # when a live interactible covers that marker (empty live feed keeps
+        # the file markers so a failed sweep does not blank the bubble).
+        if (enabled_poi_kinds or enabled_loot_kinds) and not local_instance:
             for poi in self.pois:
                 if not isinstance(poi, dict):
                     continue
                 kind = str(poi.get("kind", "")).strip().lower()
                 is_collectible = kind in collectible_kinds
                 if is_collectible:
-                    if kind not in enabled_loot_kinds:
+                    if not _loot_kind_visible(kind):
+                        continue
+                    # Red orbs have no live bridge feed — always use the file.
+                    if (
+                        kind != "red_orb"
+                        and _in_loot_live_range(poi)
+                        and _covered_by_live_loot(poi, kind)
+                    ):
                         continue
                 elif kind in self.poi_kind_visibility:
                     if kind not in enabled_poi_kinds:
@@ -1036,6 +1616,7 @@ class RadarWidget(QtWidgets.QWidget):
                     continue
                 point = self._world_to_screen(poi, center, pixels_per_metre, view_center)
                 subkind = str(poi.get("subkind", "")).strip()
+                size = self._node_size_label(poi) if is_collectible else ""
                 collected = (
                     kind == "red_orb"
                     and str(poi.get("id") or "") in completed_element_ids
@@ -1043,9 +1624,38 @@ class RadarWidget(QtWidgets.QWidget):
                 if collected:
                     painter.save()
                     painter.setOpacity(0.32)
-                self._draw_poi_marker(painter, point, kind, subkind)
+                self._draw_poi_marker(painter, point, kind, subkind, size=size)
                 if collected:
                     painter.restore()
+                else:
+                    self._draw_z_indicator(
+                        painter,
+                        point,
+                        safe_float(poi.get("z"), math.nan),
+                        player_z,
+                        gap=6.0 if size == "large" else 5.0,
+                    )
+                if is_collectible and kind != "red_orb":
+                    hit = self._interactible_hit_radius
+                    if size == "large":
+                        hit += 3.0
+                    elif size == "small":
+                        hit -= 1.0
+                    marker = dict(poi)
+                    marker["size"] = size
+                    if not marker.get("id"):
+                        marker["id"] = (
+                            f"static:{kind}:{safe_float(poi.get('x')):.1f}:"
+                            f"{safe_float(poi.get('y')):.1f}"
+                        )
+                    self._interactible_hits.append(
+                        (
+                            QtCore.QRectF(
+                                point.x() - hit, point.y() - hit, hit * 2.0, hit * 2.0
+                            ),
+                            marker,
+                        )
+                    )
 
         active_waypoint: dict[str, Any] | None = None
         if self.show_custom_waypoints:
@@ -1094,7 +1704,6 @@ class RadarWidget(QtWidgets.QWidget):
                 )
 
         enemies = self.state.get("enemies", []) if isinstance(self.state, dict) else []
-        player_z = safe_float(player.get("z"), 0.0)
         if self.show_enemies and isinstance(enemies, list):
             for enemy in enemies:
                 if not isinstance(enemy, dict):
@@ -1120,6 +1729,9 @@ class RadarWidget(QtWidgets.QWidget):
                 painter.setPen(QtGui.QPen(QtGui.QColor("#190d0d"), 1.0))
                 painter.setBrush(fill)
                 painter.drawEllipse(point, 2.8, 2.8)
+                self._draw_z_indicator(
+                    painter, point, enemy_z, player_z, gap=4.8, color=fill
+                )
                 hit = self._enemy_hit_radius
                 self._enemy_hits.append(
                     (
@@ -1128,6 +1740,79 @@ class RadarWidget(QtWidgets.QWidget):
                         ),
                         dict(enemy),
                     )
+                )
+
+        nearby_players = (
+            self.state.get("players", []) if isinstance(self.state, dict) else []
+        )
+        if self.show_players and isinstance(nearby_players, list):
+            for other in nearby_players:
+                if not isinstance(other, dict):
+                    continue
+                other_x = safe_float(other.get("x"), math.nan)
+                other_y = safe_float(other.get("y"), math.nan)
+                if not (math.isfinite(other_x) and math.isfinite(other_y)):
+                    continue
+                edge_pad = 28.0 if self.show_player_names else 14.0
+                if not self._world_in_view(other, view_center, viewport, edge_pad):
+                    continue
+                point = self._world_to_screen(
+                    other, center, pixels_per_metre, view_center
+                )
+                other_z = safe_float(other.get("z"), player_z)
+                far = (
+                    math.isfinite(other_z)
+                    and math.isfinite(player_z)
+                    and abs(other_z - player_z) > self.player_z_fade
+                )
+                # Amber diamond: distinct from red enemy dots and class-colored
+                # party arrows.
+                fill = QtGui.QColor("#E8B84A")
+                if far:
+                    fill.setAlpha(120)
+                size = 4.2
+                diamond = QtGui.QPolygonF(
+                    [
+                        point + QtCore.QPointF(0, -size),
+                        point + QtCore.QPointF(size, 0),
+                        point + QtCore.QPointF(0, size),
+                        point + QtCore.QPointF(-size, 0),
+                    ]
+                )
+                painter.setPen(QtGui.QPen(QtGui.QColor("#1a1408"), 1.0))
+                painter.setBrush(fill)
+                painter.drawPolygon(diamond)
+                self._draw_z_indicator(
+                    painter, point, other_z, player_z, gap=5.5, color=fill
+                )
+                name = str(other.get("name") or "").strip()
+                label_rect: QtCore.QRect | None = None
+                if self.show_player_names and name:
+                    metrics = painter.fontMetrics()
+                    label_rect = metrics.boundingRect(name).adjusted(-4, -2, 4, 2)
+                    label_rect.moveLeft(round(point.x() + 10))
+                    label_rect.moveBottom(round(point.y() - 3))
+                    painter.setPen(QtGui.QPen(QtGui.QColor("#26333f"), 1.0))
+                    painter.setBrush(QtGui.QColor(12, 18, 24, 218))
+                    painter.drawRoundedRect(QtCore.QRectF(label_rect), 3.0, 3.0)
+                    painter.setPen(QtGui.QColor("#f2f7fc"))
+                    painter.drawText(
+                        label_rect, QtCore.Qt.AlignmentFlag.AlignCenter, name
+                    )
+                self._register_player_hit(
+                    point,
+                    {
+                        "name": name or "Unknown",
+                        "uid": str(other.get("uid") or "").strip(),
+                        "class": str(other.get("class") or "").strip(),
+                        "level": safe_int(other.get("level"), 0),
+                        "x": other.get("x"),
+                        "y": other.get("y"),
+                        "z": other.get("z"),
+                        "in_party": False,
+                        "is_self": False,
+                    },
+                    label_rect=label_rect,
                 )
 
         party = self.state.get("party", []) if isinstance(self.state, dict) else []
@@ -1172,6 +1857,14 @@ class RadarWidget(QtWidgets.QWidget):
             painter.setPen(QtGui.QPen(QtGui.QColor("#081016"), 1.5))
             painter.setBrush(QtGui.QColor(class_color))
             painter.drawPolygon(QtGui.QPolygonF([tip, left, right]))
+            self._draw_z_indicator(
+                painter,
+                point,
+                safe_float(member.get("z"), math.nan),
+                player_z,
+                gap=8.0,
+                color=QtGui.QColor(class_color),
+            )
 
             hp = safe_float(member.get("hp"), math.nan)
             max_hp = safe_float(member.get("max_hp"), math.nan)
@@ -1192,6 +1885,7 @@ class RadarWidget(QtWidgets.QWidget):
                 painter.drawArc(hp_ring, 90 * 16, round(-360 * 16 * hp_ratio))
 
             name = str(member.get("name") or "").strip()
+            label_rect = None
             if self.show_party_names and name:
                 metrics = painter.fontMetrics()
                 label_rect = metrics.boundingRect(name).adjusted(-4, -2, 4, 2)
@@ -1202,6 +1896,22 @@ class RadarWidget(QtWidgets.QWidget):
                 painter.drawRoundedRect(QtCore.QRectF(label_rect), 3.0, 3.0)
                 painter.setPen(QtGui.QColor("#f2f7fc"))
                 painter.drawText(label_rect, QtCore.Qt.AlignmentFlag.AlignCenter, name)
+            self._register_player_hit(
+                point,
+                {
+                    "name": name or "Unknown",
+                    "uid": member_uid,
+                    "class": str(member.get("class") or "").strip(),
+                    "level": safe_int(member.get("level"), 0),
+                    "x": member.get("x"),
+                    "y": member.get("y"),
+                    "z": member.get("z"),
+                    "in_party": True,
+                    "is_self": False,
+                },
+                label_rect=label_rect,
+                hit_radius=14.0,
+            )
             painter.restore()
 
         target_obj = self.state.get("target", {}) or {}
@@ -1217,24 +1927,14 @@ class RadarWidget(QtWidgets.QWidget):
             painter.setPen(QtGui.QPen(QtGui.QColor("#190d0d"), 1.5))
             painter.setBrush(QtGui.QColor("#ff6666"))
             painter.drawPolygon(polygon)
-
-        player_x = safe_float(player.get("x"), math.nan)
-        player_y = safe_float(player.get("y"), math.nan)
-        if math.isfinite(player_x) and math.isfinite(player_y):
-            player_point = self._world_to_screen(player, center, pixels_per_metre, view_center)
-            # Farever's heading value is rotated 90 degrees clockwise relative
-            # to the Atlas player triangle's forward axis. Correct the marker
-            # counter-clockwise by 90 degrees without changing map orientation.
-            heading = safe_float(player.get("heading")) + (math.pi / 2.0)
-            forward_x, forward_y = math.sin(heading), -math.cos(heading)
-            side_x, side_y = -forward_y, forward_x
-            tip = player_point + QtCore.QPointF(forward_x * 14.0, forward_y * 14.0)
-            base = player_point - QtCore.QPointF(forward_x * 7.0, forward_y * 7.0)
-            left = base + QtCore.QPointF(side_x * 7.0, side_y * 7.0)
-            right = base - QtCore.QPointF(side_x * 7.0, side_y * 7.0)
-            painter.setPen(QtGui.QPen(QtGui.QColor("#081016"), 1.5))
-            painter.setBrush(QtGui.QColor("#f4f7fa"))
-            painter.drawPolygon(QtGui.QPolygonF([tip, left, right]))
+            self._draw_z_indicator(
+                painter,
+                point,
+                safe_float(target_obj.get("z"), math.nan),
+                player_z,
+                gap=8.5,
+                color=QtGui.QColor("#ff6666"),
+            )
 
         if self.show_texture and self.map_texture is not None and not map_drawn:
             painter.setPen(QtGui.QColor("#ffd27a"))
