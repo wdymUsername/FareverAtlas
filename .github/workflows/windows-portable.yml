@@ -154,11 +154,17 @@ jobs:
           fi
           echo "::add-mask::${key}"
           echo "VT_API_KEY length=${#key}"
-          echo "VT_API_KEY prefix=${key:0:4}… suffix=…${key: -4}"
-          if [[ ! "$key" =~ ^[A-Za-z0-9_-]{16,}$ ]]; then
-            echo "::error::VT_API_KEY does not look like a VirusTotal API key"
-            exit 1
-          fi
+          # Diagnose paste problems without printing the secret.
+          python - <<'PY'
+          import os, re, sys
+          key = os.environ["RAW_VT_API_KEY"]
+          key = key.replace("\r", "").replace("\n", "").strip().strip("\"'")
+          print(f"trimmed_length={len(key)}")
+          print(f"has_whitespace={any(ch.isspace() for ch in key)}")
+          print(f"is_hex64={bool(re.fullmatch(r'[0-9a-fA-F]{64}', key))}")
+          print(f"is_alnum_dash={bool(re.fullmatch(r'[A-Za-z0-9_-]{16,}', key))}")
+          print(f"unique_non_alnum={sorted({ch for ch in key if not ch.isalnum()})}")
+          PY
           # Sanity-check credentials before uploading the large exe.
           code="$(curl -sS -o /tmp/vt-me.json -w '%{http_code}' \
             -H "x-apikey: ${key}" \
@@ -166,7 +172,7 @@ jobs:
             https://www.virustotal.com/api/v3/users/me)"
           echo "VirusTotal /users/me HTTP ${code}"
           if [[ "$code" != "200" ]]; then
-            echo "::error::VirusTotal rejected VT_API_KEY (HTTP ${code}). Re-copy the key from https://www.virustotal.com/gui/my-apikey"
+            echo "::error::VirusTotal rejected VT_API_KEY (HTTP ${code}). Re-copy the key from https://www.virustotal.com/gui/my-apikey (API key, not the password or a file hash)."
             head -c 400 /tmp/vt-me.json || true
             echo
             exit 1
