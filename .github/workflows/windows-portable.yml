@@ -2,7 +2,19 @@ name: Windows portable exe
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create/update (e.g. v0.13.0). Leave empty to only upload a workflow artifact."
+        required: false
+        type: string
+      prerelease:
+        description: "Mark the release as a pre-release"
+        required: false
+        type: boolean
+        default: false
   push:
+    tags:
+      - "v*"
     branches: [main]
     paths:
       - "app/**"
@@ -68,23 +80,59 @@ jobs:
             --workpath build\pyinstaller `
             packaging\windows\farever_atlas.spec
 
-      - name: Verify exe
+      - name: Verify exe and write SHA256
         shell: pwsh
         run: |
-          if (-not (Test-Path "dist\FareverAtlas.exe")) {
+          $exe = "dist\FareverAtlas.exe"
+          if (-not (Test-Path $exe)) {
             throw "dist\FareverAtlas.exe was not produced"
           }
-          Get-Item "dist\FareverAtlas.exe" | Format-List Name, Length, LastWriteTime
+          Get-Item $exe | Format-List Name, Length, LastWriteTime
+          $hash = (Get-FileHash -Algorithm SHA256 $exe).Hash.ToLowerInvariant()
+          Set-Content -NoNewline -Path "dist\FareverAtlas.exe.sha256" -Value "$hash  FareverAtlas.exe`n"
+          Write-Host "SHA256: $hash"
 
-      - name: Upload artifact
+      - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: FareverAtlas-windows-portable
-          path: dist/FareverAtlas.exe
+          path: |
+            dist/FareverAtlas.exe
+            dist/FareverAtlas.exe.sha256
           if-no-files-found: error
 
+      - name: Resolve release tag
+        id: release_meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=""
+          prerelease="false"
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref_type }}" == "tag" ]]; then
+            tag="${{ github.ref_name }}"
+          elif [[ "${{ github.event_name }}" == "release" ]]; then
+            tag="${{ github.event.release.tag_name }}"
+            prerelease="${{ github.event.release.prerelease }}"
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            tag="${{ inputs.tag }}"
+            prerelease="${{ inputs.prerelease }}"
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
+          if [[ -n "${tag}" ]]; then
+            echo "Publishing release assets for tag ${tag}"
+          else
+            echo "No release tag; skipping GitHub Release upload"
+          fi
+
       - name: Attach exe to GitHub Release
-        if: github.event_name == 'release'
+        if: steps.release_meta.outputs.tag != ''
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/FareverAtlas.exe
+          tag_name: ${{ steps.release_meta.outputs.tag }}
+          name: ${{ steps.release_meta.outputs.tag }}
+          prerelease: ${{ steps.release_meta.outputs.prerelease == 'true' }}
+          generate_release_notes: true
+          files: |
+            dist/FareverAtlas.exe
+            dist/FareverAtlas.exe.sha256
