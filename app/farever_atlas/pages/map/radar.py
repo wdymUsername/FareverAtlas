@@ -2769,8 +2769,6 @@ class RadarWidget(QtWidgets.QWidget):
                     half_height_m=view_half_h,
                 ):
                     continue
-                if self._fog_hides_point(enemy_x, enemy_y):
-                    continue
                 point = self._world_to_screen(
                     enemy, center, pixels_per_metre, view_center
                 )
@@ -2821,8 +2819,6 @@ class RadarWidget(QtWidgets.QWidget):
                     half_width_m=half_w,
                     half_height_m=half_h,
                 ):
-                    continue
-                if self._fog_hides_point(other_x, other_y):
                     continue
                 point = self._world_to_screen(
                     other, center, pixels_per_metre, view_center
@@ -2905,8 +2901,6 @@ class RadarWidget(QtWidgets.QWidget):
                 half_width_m=view_half_w_party,
                 half_height_m=view_half_h_party,
             ):
-                continue
-            if self._fog_hides_point(member_x, member_y):
                 continue
 
             point = self._world_to_screen(member, center, pixels_per_metre, view_center)
