@@ -182,18 +182,7 @@ scan link for that exact asset. If your AV quarantines the file, add an
 exclusion for the Atlas folder or restore it from quarantine after verifying
 the hash.
 
-## Development
-
-```bash
-./farever start --dev
-```
-
-`--dev` is mostly QoL for working on Atlas itself: a Reload button for soft
-in-process UI reloads, plus FoW layer / bake authoring. It is not a full
-debugger, profiler, or bridge toolkit — treat it as convenience options on
-top of a normal run, not a separate development environment.
-
-## Contributing
+## Development and Contributing
 
 Issues and pull requests are welcome. Keep changes focused; say which area
 you’re touching (map, FoW, bridge, Players, packaging, docs).
@@ -206,8 +195,11 @@ you’re touching (map, FoW, bridge, Players, packaging, docs).
 ./farever start --dev
 ```
 
-`--dev` adds QoL options (UI reload, FoW authoring) rather than full
-developer tooling. Start Farever through Steam first on Linux so the Proton
+`--dev` is mostly QoL for working on Atlas itself: a Reload button for soft
+in-process UI reloads, plus FoW layer / bake authoring. It is not a full
+debugger, profiler, or bridge toolkit — treat it as convenience options on
+top of a normal run, not a separate development environment.
+Start Farever through Steam first on Linux so the Proton
 prefix exists.
 
 Windows source workflow: build or copy `farever-atlas-bridge.exe`, then
