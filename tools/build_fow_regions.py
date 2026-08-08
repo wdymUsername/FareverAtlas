@@ -20,6 +20,10 @@ OUT_JSON = ROOT / "assets/map/w1_siagarta_fow.json"
 PATTERN_SRC = ROOT / "extracted/res/UI/Map/Pattern_fog_of_war_512.png"
 PATTERN_DST = ROOT / "assets/map/pattern_fog_of_war_512.png"
 
+# Global world-space nudge (metres). Moves the fog edge that sat at custom
+# waypoint fow1 onto fow2 (delta fow2 − fow1).
+WORLD_NUDGE_M = (16.333, 56.667)
+
 REGIONS = (
     ("Z1_Region", "Skover Island", "Z1"),
     ("Bel_Etir_Region", "Bel Etir", "Z1"),
@@ -109,7 +113,9 @@ def main() -> None:
     inv_sy = 1.0 / scale_y
 
     def to_world(x: float, y: float) -> tuple[float, float]:
-        return (x - offset_x) * inv_sx, (y - offset_y) * inv_sy
+        wx = (x - offset_x) * inv_sx + WORLD_NUDGE_M[0]
+        wy = (y - offset_y) * inv_sy + WORLD_NUDGE_M[1]
+        return wx, wy
 
     regions = []
     for stem, label, tier in REGIONS:
@@ -146,6 +152,8 @@ def main() -> None:
             "scale_y": scale_y,
             "offset_y": offset_y,
         },
+        "world_nudge_m": [WORLD_NUDGE_M[0], WORLD_NUDGE_M[1]],
+        "world_nudge_note": "Shift so fog edge at fow1 moves to fow2",
         "defaults": {
             "enabled": True,
             "accessible_tiers": ["Z1", "Z2"],
