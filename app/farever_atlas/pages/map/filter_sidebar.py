@@ -6,6 +6,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from ...config import LOOSE_KIND_ICON_FILES
 from ...controls import LootFilterButton, SidebarHeaderButton, SlideSwitch
+from .gather_nav import GatherNavPanel
 
 
 class FilterSidebarMixin:
@@ -152,11 +153,41 @@ class FilterSidebarMixin:
         self.sidebar_scroll.setAttribute(
             QtCore.Qt.WidgetAttribute.WA_NoMousePropagation, True
         )
-        sidebar_layout.addWidget(self.sidebar_scroll)
+
+        self.gather_panel = GatherNavPanel(compact=True)
+        self.gather_scroll = QtWidgets.QScrollArea()
+        self.gather_scroll.setObjectName("sidebarScroll")
+        self.gather_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self.gather_scroll.setWidgetResizable(True)
+        self.gather_scroll.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.gather_scroll.setVerticalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self.gather_scroll.setSizeAdjustPolicy(
+            QtWidgets.QAbstractScrollArea.SizeAdjustPolicy.AdjustIgnored
+        )
+        self.gather_scroll.setWidget(self.gather_panel)
+        self.gather_scroll.setMinimumHeight(0)
+        self.gather_scroll.setAttribute(
+            QtCore.Qt.WidgetAttribute.WA_NoMousePropagation, True
+        )
+
+        self.sidebar_tabs = QtWidgets.QTabWidget()
+        self.sidebar_tabs.setObjectName("sidebarTabs")
+        self.sidebar_tabs.setDocumentMode(True)
+        self.sidebar_tabs.setAttribute(
+            QtCore.Qt.WidgetAttribute.WA_NoMousePropagation, True
+        )
+        self.sidebar_tabs.addTab(self.sidebar_scroll, "WAYPOINTS")
+        self.sidebar_tabs.addTab(self.gather_scroll, "GATHER NAV")
+        self.sidebar_tabs.currentChanged.connect(self._on_sidebar_tab_changed)
+        sidebar_layout.addWidget(self.sidebar_tabs)
 
         # The WAYPOINTS header remains full-width at all times. Only the
         # filter rows roll down/up beneath it.
-        self.sidebar_width = 186
+        self.sidebar_width = 220
         self.sidebar.setFixedWidth(self.sidebar_width)
         self._sidebar_body_height = 0
         self.sidebar.raise_()
@@ -165,6 +196,12 @@ class FilterSidebarMixin:
         self.sidebar_animation.setDuration(180)
         self.sidebar_animation.valueChanged.connect(self._sidebar_height_changed)
         self.sidebar_animation.finished.connect(self._sidebar_animation_finished)
+
+    def _on_sidebar_tab_changed(self, _index: int) -> None:
+        if getattr(self, "sidebar_collapsed", False):
+            return
+        self._set_sidebar_body_height(self._sidebar_target_body_height())
+        self._position_map_overlays()
 
     def _toggle_sidebar(self) -> None:
         self._set_sidebar_collapsed(not self.sidebar_collapsed)
@@ -184,9 +221,16 @@ class FilterSidebarMixin:
         )
 
     def _sidebar_content_height(self) -> int:
-        content_layout = self.sidebar_content.layout()
-        content_layout.activate()
-        return max(0, content_layout.sizeHint().height())
+        tab_bar = self.sidebar_tabs.tabBar()
+        tab_bar_height = max(22, tab_bar.sizeHint().height())
+        if self.sidebar_tabs.currentIndex() == 1:
+            self.gather_panel.adjustSize()
+            page_height = max(0, self.gather_panel.sizeHint().height())
+        else:
+            content_layout = self.sidebar_content.layout()
+            content_layout.activate()
+            page_height = max(0, content_layout.sizeHint().height())
+        return tab_bar_height + page_height
 
     def _sidebar_body_limit(self, margin: int = 4) -> int:
         available_height = max(0, self.radar.height() - (margin * 2))
@@ -200,8 +244,8 @@ class FilterSidebarMixin:
     def _set_sidebar_body_height(self, height: int) -> None:
         height = max(0, int(height))
         self._sidebar_body_height = height
-        self.sidebar_scroll.setFixedHeight(height)
-        self.sidebar_scroll.setVisible(height > 0)
+        self.sidebar_tabs.setFixedHeight(height)
+        self.sidebar_tabs.setVisible(height > 0)
 
     def _sidebar_height_changed(self, value: object) -> None:
         try:
