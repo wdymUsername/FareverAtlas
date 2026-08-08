@@ -17,6 +17,7 @@ from ...config import (
 from .data import MapTexture, Snapshot
 from .fog import FogOfWar
 from .fow_layers import canonical_fow_layer
+from .gather_nav import _element_completed
 
 # Built once: rebuilding these per marker cost ~7.6k QColor allocations a frame.
 _POI_COLORS: dict[str, QtGui.QColor] = {
@@ -151,7 +152,7 @@ class RadarWidget(QtWidgets.QWidget):
         # to a pixmap and pre-parse the static POI file into flat tuples, both
         # keyed on the marker filters so a filter change rebuilds them.
         self._marker_sprite_cache: dict[
-            tuple[str, str, str, float], tuple[QtGui.QPixmap, float, float]
+            tuple[str, str, str, bool, float], tuple[QtGui.QPixmap, float, float]
         ] = {}
         self._prepared_source: list[Any] | None = None
         self._prepared_filters: tuple[Any, ...] | None = None
@@ -1988,17 +1989,42 @@ class RadarWidget(QtWidgets.QWidget):
         return icon_index is not None and self._waypoint_icon(icon_index) is not None
 
     def _marker_sprite(
-        self, kind: str, subkind: str, size: str
+        self, kind: str, subkind: str, size: str, *, muted: bool = False
     ) -> tuple[QtGui.QPixmap, float, float]:
         """Pre-rendered marker pixmap plus its centre offset in logical pixels."""
         dpr = float(self.devicePixelRatioF() or 1.0)
-        key = (kind, subkind, size, round(dpr, 3))
+        key = (kind, subkind, size, bool(muted), round(dpr, 3))
         cached = self._marker_sprite_cache.get(key)
         if cached is not None:
             return cached
         entry = self._build_marker_sprite(kind, subkind, size, dpr)
+        if muted:
+            pixmap, half_w, half_h = entry
+            entry = (self._muted_pixmap(pixmap), half_w, half_h)
         self._marker_sprite_cache[key] = entry
         return entry
+
+    @staticmethod
+    def _muted_pixmap(pixmap: QtGui.QPixmap) -> QtGui.QPixmap:
+        """Desaturate a marker so completed one-time collectibles read as done."""
+        image = pixmap.toImage().convertToFormat(
+            QtGui.QImage.Format.Format_ARGB32_Premultiplied
+        )
+        for y in range(image.height()):
+            for x in range(image.width()):
+                color = QtGui.QColor.fromRgba(image.pixel(x, y))
+                if color.alpha() == 0:
+                    continue
+                gray = int(
+                    0.299 * color.red() + 0.587 * color.green() + 0.114 * color.blue()
+                )
+                # Pull toward slate so muted orbs don't look pure white/black.
+                gray = int(gray * 0.55 + 90)
+                color.setRgb(gray, gray, gray, int(color.alpha() * 0.72))
+                image.setPixel(x, y, color.rgba())
+        muted = QtGui.QPixmap.fromImage(image)
+        muted.setDevicePixelRatio(pixmap.devicePixelRatio())
+        return muted
 
     def _build_marker_sprite(
         self, kind: str, subkind: str, size: str, dpr: float
@@ -2505,7 +2531,9 @@ class RadarWidget(QtWidgets.QWidget):
         }
         completed_elements = self.state.get("completed_elements", [])
         completed_element_ids = {
-            str(value) for value in completed_elements
+            str(value).strip()
+            for value in completed_elements
+            if str(value).strip()
         } if isinstance(completed_elements, list) else set()
 
         def _loot_kind_visible(kind: str) -> bool:
@@ -2632,13 +2660,19 @@ class RadarWidget(QtWidgets.QWidget):
                     origin_y + (world_y - cull_y) * pixels_per_metre,
                 )
                 pixmap, sprite_half_w, sprite_half_h = sprite
-                if kind == "red_orb" and poi_id in completed_element_ids:
-                    painter.save()
-                    painter.setOpacity(0.32)
+                if kind == "red_orb" and _element_completed(
+                    poi_id, completed_element_ids
+                ):
+                    # Character-scoped one-time collectible: mute completed orbs.
+                    pixmap, sprite_half_w, sprite_half_h = self._marker_sprite(
+                        kind,
+                        str(poi.get("subkind") or ""),
+                        size,
+                        muted=True,
+                    )
                     self._blit_marker_sprite(
                         painter, point, pixmap, sprite_half_w, sprite_half_h
                     )
-                    painter.restore()
                 else:
                     self._blit_marker_sprite(
                         painter, point, pixmap, sprite_half_w, sprite_half_h

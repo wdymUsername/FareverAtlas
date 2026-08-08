@@ -305,6 +305,7 @@ class CustomWaypointMixin:
             button = QtWidgets.QPushButton(name)
             button.setObjectName("sidebarSubItem")
             button.setCheckable(True)
+            button.setFixedHeight(22)
             button.setChecked(
                 self._setting_bool(f"map/show_custom_waypoint_{waypoint_id}", True)
             )
@@ -335,6 +336,8 @@ class CustomWaypointMixin:
         container.setVisible(True)
         container.setMaximumHeight(16777215)
         container.updateGeometry()
+        if hasattr(self, "_sync_custom_filter_scroll_height"):
+            self._sync_custom_filter_scroll_height()
         sidebar_content = getattr(self, "sidebar_content", None)
         if sidebar_content is not None and isValid(sidebar_content):
             sidebar_content.updateGeometry()
