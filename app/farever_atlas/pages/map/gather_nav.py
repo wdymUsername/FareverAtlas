@@ -77,7 +77,7 @@ def _live_key(item: dict[str, Any]) -> str:
 
 
 class GatherNavPanel(QtWidgets.QWidget):
-    """Controls for gather navigation (sidebar tab or overlay)."""
+    """Controls for gather navigation (floating map overlay)."""
 
     enabledChanged = QtCore.Signal(bool)
     filtersChanged = QtCore.Signal()
@@ -292,6 +292,8 @@ class GatherNavMixin:
             self._gather_missing_since = None
             self._gather_missing_key = None
             self._ensure_gather_loot_filter_visible()
+            if hasattr(self, "_set_gather_sidebar_collapsed"):
+                self._set_gather_sidebar_collapsed(False)
             notify(self, "Gather nav started")
             self._gather_nav_retarget(force=True)
         else:

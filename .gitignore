@@ -41,3 +41,6 @@ extracted/map/
 
 # Third-party research checkouts (kept locally, not vendored)
 usefull/
+
+# Local design notes / sketches
+docs/

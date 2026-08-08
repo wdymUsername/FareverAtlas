@@ -237,7 +237,7 @@ class CustomWaypointMixin:
         menu.exec(button.mapToGlobal(position))
 
     def _custom_filter_layout(self) -> QtWidgets.QVBoxLayout | None:
-        """Return a live custom-filter layout, recreating it if Qt deleted it."""
+        """Return the live custom waypoint list layout (actions stay outside)."""
         container = getattr(self, "custom_filter_container", None)
         if container is None or not isValid(container):
             return None
@@ -248,12 +248,8 @@ class CustomWaypointMixin:
             return layout
 
         layout = QtWidgets.QVBoxLayout(container)
-        layout.setContentsMargins(7, 0, 0, 0)
-        layout.setSpacing(1)
-        for attr in ("custom_add_current", "custom_manage"):
-            button = getattr(self, attr, None)
-            if button is not None and isValid(button):
-                layout.addWidget(button)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
         self.custom_filter_layout = layout
         return layout
 
@@ -336,9 +332,8 @@ class CustomWaypointMixin:
             layout.insertWidget(index, button)
             self.custom_waypoint_buttons[waypoint_id] = button
 
-        if not self.custom_collapsed:
-            container.setVisible(True)
-            container.setMaximumHeight(16777215)
+        container.setVisible(True)
+        container.setMaximumHeight(16777215)
         container.updateGeometry()
         sidebar_content = getattr(self, "sidebar_content", None)
         if sidebar_content is not None and isValid(sidebar_content):

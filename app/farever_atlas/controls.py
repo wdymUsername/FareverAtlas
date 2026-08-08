@@ -293,6 +293,94 @@ class LootFilterButton(QtWidgets.QPushButton):
         self.mode_switch.raise_()
 
 
+class FilterChipButton(QtWidgets.QPushButton):
+    """Compact checkable filter chip with an optional leading map marker."""
+
+    def __init__(
+        self,
+        text: str,
+        *,
+        color: str | None = None,
+        colors: list[str] | None = None,
+        marker: str = "dot",
+        parent: QtWidgets.QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("sidebarFilterChip")
+        self.setText(text)
+        self.setCheckable(True)
+        self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.setFixedHeight(24)
+        self.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        self._marker = str(marker or "dot").strip().lower()
+        palette = [str(item) for item in (colors or []) if str(item).strip()]
+        if color:
+            palette = [color, *palette]
+        self._dot_colors = [QtGui.QColor(item) for item in palette if QtGui.QColor(item).isValid()]
+        self._dot_color = self._dot_colors[0] if self._dot_colors else QtGui.QColor()
+        self.setProperty("hasDot", bool(self._dot_colors))
+        self.setProperty("multiDot", len(self._dot_colors) > 1)
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # noqa: N802
+        super().paintEvent(event)
+        if not self._dot_colors:
+            return
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+        cy = self.height() / 2.0
+        if len(self._dot_colors) > 1:
+            diameter = 4.5
+            start_x = 7.0
+            gap = 1.2
+            for index, base in enumerate(self._dot_colors[:4]):
+                color = QtGui.QColor(base)
+                if not self.isEnabled():
+                    color.setAlpha(110)
+                elif not self.isChecked():
+                    color = color.darker(115)
+                cx = start_x + index * (diameter + gap) + diameter / 2.0
+                painter.setPen(QtCore.Qt.PenStyle.NoPen)
+                painter.setBrush(color)
+                painter.drawEllipse(
+                    QtCore.QRectF(
+                        cx - diameter / 2.0, cy - diameter / 2.0, diameter, diameter
+                    )
+                )
+        else:
+            color = QtGui.QColor(self._dot_colors[0])
+            if not self.isEnabled():
+                color.setAlpha(110)
+            elif not self.isChecked():
+                color = color.darker(115)
+            cx = 11.0
+            if self._marker == "diamond":
+                size = 3.6
+                diamond = QtGui.QPolygonF(
+                    [
+                        QtCore.QPointF(cx, cy - size),
+                        QtCore.QPointF(cx + size, cy),
+                        QtCore.QPointF(cx, cy + size),
+                        QtCore.QPointF(cx - size, cy),
+                    ]
+                )
+                painter.setPen(QtGui.QPen(QtGui.QColor("#1a1408"), 0.9))
+                painter.setBrush(color)
+                painter.drawPolygon(diamond)
+            else:
+                diameter = 6.0
+                painter.setPen(QtCore.Qt.PenStyle.NoPen)
+                painter.setBrush(color)
+                painter.drawEllipse(
+                    QtCore.QRectF(
+                        cx - diameter / 2.0, cy - diameter / 2.0, diameter, diameter
+                    )
+                )
+        painter.end()
+
+
 class SidebarHeaderButton(QtWidgets.QPushButton):
     """Full-width sidebar header with independently aligned title and arrow."""
 
