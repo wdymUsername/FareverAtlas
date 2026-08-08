@@ -6,6 +6,7 @@ import math
 from typing import Any
 
 from PySide6 import QtCore, QtGui, QtWidgets
+from shiboken6 import isValid
 
 from ...config import safe_float, safe_int
 from ...toast import notify
@@ -33,7 +34,7 @@ class CustomWaypointMixin:
             "y": safe_float(position.get("y")),
             "z": safe_float(position.get("z")),
             "color": "cyan",
-            "icon": "pin",
+            "icon": "crosshair",
         }
 
     def _add_custom_waypoint(self, position: dict[str, Any]) -> None:
@@ -101,7 +102,7 @@ class CustomWaypointMixin:
         if new_id > 0:
             self._settings.setValue(f"map/show_custom_waypoint_{new_id}", True)
             button = self.custom_waypoint_buttons.get(new_id)
-            if button is not None:
+            if button is not None and isValid(button):
                 button.setChecked(True)
         name = str(waypoint.get("name") or "Unnamed")
         self._set_waypoint_edit_visible(False)
@@ -183,7 +184,7 @@ class CustomWaypointMixin:
 
     def _custom_waypoint_visible(self, waypoint_id: int) -> bool:
         button = self.custom_waypoint_buttons.get(waypoint_id)
-        if button is not None:
+        if button is not None and isValid(button):
             return button.isChecked()
         return self._setting_bool(f"map/show_custom_waypoint_{waypoint_id}", True)
 
@@ -205,7 +206,7 @@ class CustomWaypointMixin:
     ) -> None:
         waypoint = self.waypoint_store.get(waypoint_id)
         button = self.custom_waypoint_buttons.get(waypoint_id)
-        if waypoint is None or button is None:
+        if waypoint is None or button is None or not isValid(button):
             return
         menu = QtWidgets.QMenu(self)
         if self.active_custom_waypoint_id == waypoint_id:
@@ -235,8 +236,48 @@ class CustomWaypointMixin:
         )
         menu.exec(button.mapToGlobal(position))
 
+    def _custom_filter_layout(self) -> QtWidgets.QVBoxLayout | None:
+        """Return a live custom-filter layout, recreating it if Qt deleted it."""
+        container = getattr(self, "custom_filter_container", None)
+        if container is None or not isValid(container):
+            return None
+
+        layout = container.layout()
+        if isinstance(layout, QtWidgets.QVBoxLayout) and isValid(layout):
+            self.custom_filter_layout = layout
+            return layout
+
+        layout = QtWidgets.QVBoxLayout(container)
+        layout.setContentsMargins(7, 0, 0, 0)
+        layout.setSpacing(1)
+        for attr in ("custom_add_current", "custom_manage"):
+            button = getattr(self, attr, None)
+            if button is not None and isValid(button):
+                layout.addWidget(button)
+        self.custom_filter_layout = layout
+        return layout
+
+    def _sync_radar_custom_waypoints(self) -> None:
+        radar = getattr(self, "radar", None)
+        if radar is None or not isValid(radar):
+            return
+        radar.set_custom_waypoints(
+            self._visible_custom_waypoints(),
+            visible=True,
+            active_id=self.active_custom_waypoint_id,
+        )
+
     @QtCore.Slot()
     def _custom_waypoints_changed(self) -> None:
+        if getattr(self, "_custom_waypoints_refreshing", False):
+            return
+        self._custom_waypoints_refreshing = True
+        try:
+            self._refresh_custom_waypoint_sidebar()
+        finally:
+            self._custom_waypoints_refreshing = False
+
+    def _refresh_custom_waypoint_sidebar(self) -> None:
         waypoints = self.waypoint_store.all()
         if (
             self.active_custom_waypoint_id is not None
@@ -247,11 +288,18 @@ class CustomWaypointMixin:
 
         live_ids = {safe_int(item.get("id"), -1) for item in waypoints}
         for waypoint_id, button in list(self.custom_waypoint_buttons.items()):
-            self.custom_filter_layout.removeWidget(button)
-            button.deleteLater()
+            if isValid(button):
+                button.setParent(None)
+                button.deleteLater()
             if waypoint_id not in live_ids:
                 self._settings.remove(f"map/show_custom_waypoint_{waypoint_id}")
         self.custom_waypoint_buttons.clear()
+
+        layout = self._custom_filter_layout()
+        container = getattr(self, "custom_filter_container", None)
+        if layout is None or container is None or not isValid(container):
+            self._sync_radar_custom_waypoints()
+            return
 
         for index, waypoint in enumerate(waypoints):
             waypoint_id = safe_int(waypoint.get("id"), -1)
@@ -285,25 +333,25 @@ class CustomWaypointMixin:
                     wid, pos
                 )
             )
-            self.custom_filter_layout.insertWidget(index, button)
+            layout.insertWidget(index, button)
             self.custom_waypoint_buttons[waypoint_id] = button
 
         if not self.custom_collapsed:
-            self.custom_filter_container.setVisible(True)
-            self.custom_filter_container.setMaximumHeight(16777215)
-        self.custom_filter_container.updateGeometry()
-        self.sidebar_content.updateGeometry()
-        self.sidebar.updateGeometry()
+            container.setVisible(True)
+            container.setMaximumHeight(16777215)
+        container.updateGeometry()
+        sidebar_content = getattr(self, "sidebar_content", None)
+        if sidebar_content is not None and isValid(sidebar_content):
+            sidebar_content.updateGeometry()
+        sidebar = getattr(self, "sidebar", None)
+        if sidebar is not None and isValid(sidebar):
+            sidebar.updateGeometry()
         QtCore.QTimer.singleShot(0, self._position_map_overlays)
 
-        self.radar.set_custom_waypoints(
-            self._visible_custom_waypoints(),
-            visible=True,
-            active_id=self.active_custom_waypoint_id,
-        )
+        self._sync_radar_custom_waypoints()
 
         manager = getattr(self, "waypoint_manager_overlay", None)
-        if manager is not None and manager.isVisible():
+        if manager is not None and isValid(manager) and manager.isVisible():
             manager.refresh()
 
     @QtCore.Slot(object, object)
