@@ -169,7 +169,21 @@ def discover_game_dir() -> Path | None:
         candidate = Path(env).expanduser()
         if (candidate / "Farever.exe").is_file():
             return candidate.resolve()
-    conf = ROOT / "nyx_game_dir.conf"
+    conf = ROOT / "user_data" / "game_dir.conf"
+    if not conf.is_file():
+        for legacy in (
+            ROOT / "user_data" / "nyx_game_dir.conf",
+            ROOT / "nyx_game_dir.conf",
+            ROOT / "game_dir.conf",
+        ):
+            if not legacy.is_file():
+                continue
+            try:
+                conf.parent.mkdir(parents=True, exist_ok=True)
+                legacy.replace(conf)
+            except OSError:
+                conf = legacy
+            break
     if conf.is_file():
         try:
             line = conf.read_text(encoding="utf-8").splitlines()[0].strip()

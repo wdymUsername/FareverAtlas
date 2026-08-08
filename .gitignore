@@ -5,6 +5,7 @@ __pycache__/
 
 # Local user and machine state
 nyx_game_dir.conf
+game_dir.conf
 user_data/
 user_waypoints_*.json
 user_waypoints_*.json.bak
