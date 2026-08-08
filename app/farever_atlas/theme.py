@@ -303,7 +303,8 @@ QLabel#playersRowDistance {
 QLabel#playersRowBadgeYou,
 QLabel#playersRowBadgeParty,
 QLabel#playersRowBadgePresence,
-QLabel#playersRowBadgeSteam {
+QLabel#playersRowBadgeSteam,
+QLabel#playersRowBadgeSteamFriend {
     color: #dce6ee;
     background: #2a3946;
     border: none;
@@ -335,7 +336,12 @@ QLabel#playersRowBadgeSteam[steamState="private"] {
     background: #3a3426;
     color: #e6d4a8;
 }
+QLabel#playersRowBadgeSteamFriend {
+    background: #1e3a4a;
+    color: #9ec9e0;
+}
 QToolButton#playersRowProfileButton,
+QToolButton#playersRowChatButton,
 QToolButton#playersRowFocusButton,
 QToolButton#playersRowFriendButton {
     color: #8493a2;
@@ -350,6 +356,7 @@ QToolButton#playersRowFriendButton[friendActive="true"] {
     border-color: #6a5a3a;
 }
 QToolButton#playersRowProfileButton:hover,
+QToolButton#playersRowChatButton:hover,
 QToolButton#playersRowFocusButton:hover,
 QToolButton#playersRowFriendButton:hover {
     color: #dce6ee;
@@ -357,6 +364,7 @@ QToolButton#playersRowFriendButton:hover {
     background: #141e27;
 }
 QToolButton#playersRowProfileButton:disabled,
+QToolButton#playersRowChatButton:disabled,
 QToolButton#playersRowFocusButton:disabled,
 QToolButton#playersRowFriendButton:disabled {
     color: #556270;

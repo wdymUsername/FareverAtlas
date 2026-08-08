@@ -10,9 +10,11 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from ...config import CLASS_ICON_FILES, discover_project_asset, safe_float, safe_int
 from .friends import FRIENDS_CACHE_DIR, FriendStore
 from .steam import (
+    SteamFriendListCache,
     SteamProfileCache,
     farever_uid_to_steamid64,
     normalize_steamid64,
+    open_steam_chat,
     open_steam_profile,
     steam_persona_label,
 )
@@ -166,10 +168,20 @@ class PlayersPageMixin:
 
         self._friend_store = FriendStore()
         self._steam_cache = SteamProfileCache(FRIENDS_CACHE_DIR)
+        self._steam_friend_list = SteamFriendListCache(FRIENDS_CACHE_DIR)
         self._steam_cache.set_api_key(
             self._settings.value("steam/web_api_key", "") or ""
         )
+        self._steam_friend_list.set_api_key(
+            self._settings.value("steam/web_api_key", "") or ""
+        )
+        self._steam_friend_list.set_steamid64(
+            self._settings.value("steam/steamid64", "") or ""
+        )
         self._steam_cache.updated.connect(
+            lambda: self._refresh_players_roster(force=False)
+        )
+        self._steam_friend_list.updated.connect(
             lambda: self._refresh_players_roster(force=False)
         )
         self._friends_steam_timer = QtCore.QTimer(self.players_body)
@@ -301,22 +313,43 @@ class PlayersPageMixin:
         self._players_last_state = state if isinstance(state, dict) else {}
         key = str(self._settings.value("steam/web_api_key", "") or "").strip()
         self._steam_cache.set_api_key(key)
+        self._steam_friend_list.set_api_key(key)
+        self._steam_friend_list.set_steamid64(
+            self._settings.value("steam/steamid64", "") or ""
+        )
         self._refresh_players_roster(force=False)
 
-    def _players_request_steam_refresh(self) -> None:
+    def _players_sync_steam_credentials(self) -> None:
         key = str(self._settings.value("steam/web_api_key", "") or "").strip()
         self._steam_cache.set_api_key(key)
-        if not self._steam_cache.has_api_key():
-            return
-        steamids: list[str] = []
-        for friend in self._friend_store.all():
-            sid = str(friend.get("steamid64") or "").strip()
-            if not sid:
-                decoded = farever_uid_to_steamid64(friend.get("uid"))
-                sid = str(decoded) if decoded is not None else ""
-            if sid:
-                steamids.append(sid)
-        self._steam_cache.request_refresh(steamids)
+        self._steam_friend_list.set_api_key(key)
+        self._steam_friend_list.set_steamid64(
+            self._settings.value("steam/steamid64", "") or ""
+        )
+
+    def _players_request_steam_refresh(self) -> None:
+        self._players_sync_steam_credentials()
+        if self._steam_cache.has_api_key():
+            steamids: list[str] = []
+            for friend in self._friend_store.all():
+                sid = str(friend.get("steamid64") or "").strip()
+                if not sid:
+                    decoded = farever_uid_to_steamid64(friend.get("uid"))
+                    sid = str(decoded) if decoded is not None else ""
+                if sid:
+                    steamids.append(sid)
+            self._steam_cache.request_refresh(steamids)
+        self._steam_friend_list.request_refresh(max_age_s=600)
+
+    def _players_resolve_steamid64(self, entry: dict[str, Any]) -> str:
+        sid = normalize_steamid64(entry.get("steamid64"))
+        if sid is not None:
+            return sid
+        decoded = farever_uid_to_steamid64(entry.get("uid"))
+        return str(decoded) if decoded is not None else ""
+
+    def _players_is_steam_friend(self, steamid64: object) -> bool:
+        return self._steam_friend_list.is_friend(steamid64)
 
     def _refresh_players_roster(self, *, force: bool) -> None:
         state = self._players_last_state if isinstance(self._players_last_state, dict) else {}
@@ -331,6 +364,10 @@ class PlayersPageMixin:
             uid = str(row.get("uid") or "").strip()
             friend_key = str(row.get("friend_key") or uid).strip()
             row["is_friend"] = self._friend_store.contains_player(row)
+            steamid64 = self._players_resolve_steamid64(row)
+            if steamid64:
+                row["steamid64"] = steamid64
+            row["is_steam_friend"] = self._players_is_steam_friend(steamid64)
             row_key = uid or friend_key
             row["is_followed"] = bool(follow_key and row_key == follow_key)
             row["focus_armed"] = bool(
@@ -343,6 +380,10 @@ class PlayersPageMixin:
         # Recompute after possible name→uid friend upgrades in update_seen.
         for row in all_rows:
             row["is_friend"] = self._friend_store.contains_player(row)
+            steamid64 = self._players_resolve_steamid64(row)
+            if steamid64:
+                row["steamid64"] = steamid64
+            row["is_steam_friend"] = self._players_is_steam_friend(steamid64)
         rows = self._filter_sort_players_rows(all_rows)
         self._players_layer_by_uid = {
             str(row.get("uid") or ""): row
@@ -420,6 +461,7 @@ class PlayersPageMixin:
                     bool(row.get("is_self")),
                     bool(row.get("in_party")),
                     bool(row.get("is_friend")),
+                    bool(row.get("is_steam_friend")),
                     bool(row.get("is_followed")),
                     bool(row.get("focus_armed")),
                     str(row.get("uid") or ""),
@@ -436,6 +478,7 @@ class PlayersPageMixin:
                 str(row.get("presence") or ""),
                 str(row.get("steam_label") or ""),
                 str(row.get("steamid64") or ""),
+                bool(row.get("is_steam_friend")),
                 bool(row.get("steam_avatar")),
                 safe_int(
                     (row.get("steam_summary") or {}).get("fetched_at")
@@ -590,6 +633,7 @@ class PlayersPageMixin:
                 row.selected.connect(self._players_row_selected)
                 row.activated.connect(self._players_row_activated)
                 row.profileRequested.connect(self._players_open_steam_profile)
+                row.chatRequested.connect(self._players_open_steam_chat)
                 row.focusRequested.connect(self._players_focus_entry)
                 row.friendToggleRequested.connect(self._players_toggle_friend)
             row.set_entry(entry)
@@ -672,6 +716,7 @@ class PlayersPageMixin:
                 "is_self": False,
                 "in_party": bool(live.get("in_party")) if live else False,
                 "is_friend": True,
+                "is_steam_friend": self._players_is_steam_friend(steamid64),
                 "list_kind": "friend",
                 "presence": presence,
                 "steam_summary": summary,
@@ -956,6 +1001,17 @@ class PlayersPageMixin:
             )
         )
 
+        chat_action = menu.addAction("Open Steam Chat")
+        chat_action.setEnabled(
+            farever_uid_to_steamid64(uid) is not None
+            or normalize_steamid64(entry.get("steamid64")) is not None
+        )
+        chat_action.triggered.connect(
+            lambda _checked=False, payload=dict(entry): (
+                self._players_open_steam_chat(payload)
+            )
+        )
+
         friend_key = str(entry.get("friend_key") or uid).strip()
         is_friend = bool(
             hasattr(self, "_friend_store")
@@ -1082,6 +1138,20 @@ class PlayersPageMixin:
             toast = getattr(self, "_toast_host", None)
             if toast is not None:
                 toast.show_message("Could not open Steam profile", kind="error")
+
+    def _players_open_steam_chat(self, entry: object) -> None:
+        if isinstance(entry, dict):
+            self._players_row_selected(entry)
+        else:
+            entry = self._players_selected_entry
+        if not isinstance(entry, dict):
+            return
+        uid = entry.get("uid")
+        steamid64 = entry.get("steamid64")
+        if not open_steam_chat(uid, steamid64=steamid64):
+            toast = getattr(self, "_toast_host", None)
+            if toast is not None:
+                toast.show_message("Could not open Steam chat", kind="error")
 
     def _players_focus_entry(self, entry: object) -> None:
         if isinstance(entry, dict):
