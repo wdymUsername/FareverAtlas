@@ -1,10 +1,10 @@
-"""Floating WAYPOINTS filter panel and separate GATHER routing panel."""
+"""Floating WAYPOINTS filter panel and separate NODE GUIDE panel."""
 
 from __future__ import annotations
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
-from ...config import LOOSE_KIND_ICON_FILES
+from ...config import ASSET_ROOT, LOOSE_KIND_ICON_FILES, discover_project_asset
 from ...controls import SidebarHeaderButton
 from .gather_nav import GatherNavPanel
 
@@ -14,6 +14,11 @@ _FILTER_SEGMENTS = (
     ("loot", "Loot"),
     ("custom", "Custom"),
 )
+
+# Visible custom waypoint rows before the list scrolls inside WAYPOINTS.
+_CUSTOM_WAYPOINT_LIST_MAX_ROWS = 12
+_CUSTOM_WAYPOINT_ROW_HEIGHT = 22
+_CUSTOM_WAYPOINT_ROW_SPACING = 2
 
 
 class FilterSidebarMixin:
@@ -148,7 +153,26 @@ class FilterSidebarMixin:
         self.custom_filter_layout = QtWidgets.QVBoxLayout(self.custom_filter_container)
         self.custom_filter_layout.setContentsMargins(0, 0, 0, 0)
         self.custom_filter_layout.setSpacing(2)
-        custom_page_layout.addWidget(self.custom_filter_container)
+
+        # Cap visible custom rows so a long list scrolls inside WAYPOINTS
+        # instead of growing into the gather panel below.
+        self.custom_filter_scroll = QtWidgets.QScrollArea()
+        self.custom_filter_scroll.setObjectName("customFilterScroll")
+        self.custom_filter_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self.custom_filter_scroll.setWidgetResizable(True)
+        self.custom_filter_scroll.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.custom_filter_scroll.setVerticalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self.custom_filter_scroll.setWidget(self.custom_filter_container)
+        self.custom_filter_scroll.setMinimumHeight(0)
+        self.custom_filter_scroll.setFixedHeight(0)
+        self.custom_filter_scroll.setAttribute(
+            QtCore.Qt.WidgetAttribute.WA_NoMousePropagation, True
+        )
+        custom_page_layout.addWidget(self.custom_filter_scroll)
         custom_page_layout.addStretch(1)
         self.sidebar_filter_stack.addWidget(custom_page)
 
@@ -190,6 +214,29 @@ class FilterSidebarMixin:
         self._init_gather_sidebar()
 
     def _init_gather_sidebar(self) -> None:
+        icon_path = discover_project_asset("collect.svg") or (ASSET_ROOT / "collect.svg")
+        guide_icon = (
+            QtGui.QIcon(str(icon_path)) if icon_path.is_file() else QtGui.QIcon()
+        )
+
+        # Collapsed: bare FAB on the radar (no panel chrome / margins).
+        self.gather_fab = QtWidgets.QToolButton(self.radar)
+        self.gather_fab.setObjectName("gatherSidebarFab")
+        self.gather_fab.setToolTip("Open NODE GUIDE")
+        self.gather_fab.setFixedSize(28, 28)
+        self.gather_fab.setIconSize(QtCore.QSize(16, 16))
+        self.gather_fab.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.gather_fab.setAutoRaise(False)
+        self.gather_fab.setAttribute(
+            QtCore.Qt.WidgetAttribute.WA_NoMousePropagation, True
+        )
+        if not guide_icon.isNull():
+            self.gather_fab.setIcon(guide_icon)
+        else:
+            self.gather_fab.setText("◎")
+        self.gather_fab.clicked.connect(self._on_gather_sidebar_icon_clicked)
+
+        # Expanded panel only — never used as the collapsed chrome.
         self.gather_sidebar = QtWidgets.QWidget(self.radar)
         self.gather_sidebar.setObjectName("minimapSidebar")
         self.gather_sidebar.setAttribute(
@@ -199,14 +246,51 @@ class FilterSidebarMixin:
         gather_layout.setContentsMargins(5, 5, 5, 5)
         gather_layout.setSpacing(5)
 
-        self.gather_sidebar_toggle = SidebarHeaderButton("GATHER", "sidebarHeaderButton")
-        self.gather_sidebar_toggle.setToolTip("Show gather navigation")
-        self.gather_sidebar_toggle.setFixedHeight(26)
-        self.gather_sidebar_toggle.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding,
-            QtWidgets.QSizePolicy.Policy.Fixed,
+        self.gather_header = QtWidgets.QWidget()
+        self.gather_header.setObjectName("gatherSidebarHeader")
+        header_layout = QtWidgets.QHBoxLayout(self.gather_header)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(6)
+
+        self.gather_sidebar_icon = QtWidgets.QLabel()
+        self.gather_sidebar_icon.setObjectName("gatherSidebarHeaderIcon")
+        self.gather_sidebar_icon.setFixedSize(18, 18)
+        self.gather_sidebar_icon.setAttribute(
+            QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents
         )
-        gather_layout.addWidget(self.gather_sidebar_toggle)
+        if not guide_icon.isNull():
+            self.gather_sidebar_icon.setPixmap(
+                guide_icon.pixmap(QtCore.QSize(16, 16))
+            )
+        header_layout.addWidget(
+            self.gather_sidebar_icon, 0, QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+
+        self.gather_sidebar_title = QtWidgets.QLabel("NODE GUIDE")
+        self.gather_sidebar_title.setObjectName("gatherSidebarTitle")
+        self.gather_sidebar_title.setAttribute(
+            QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents
+        )
+        header_layout.addWidget(
+            self.gather_sidebar_title, 0, QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        header_layout.addStretch(1)
+
+        self.gather_sidebar_close = QtWidgets.QToolButton()
+        self.gather_sidebar_close.setObjectName("gatherSidebarCloseButton")
+        self.gather_sidebar_close.setToolTip("Close NODE GUIDE")
+        self.gather_sidebar_close.setFixedSize(22, 22)
+        self.gather_sidebar_close.setIconSize(QtCore.QSize(12, 12))
+        self.gather_sidebar_close.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        close_icon = discover_project_asset("close.svg") or (ASSET_ROOT / "close.svg")
+        if close_icon.is_file():
+            self.gather_sidebar_close.setIcon(QtGui.QIcon(str(close_icon)))
+        else:
+            self.gather_sidebar_close.setText("×")
+        header_layout.addWidget(
+            self.gather_sidebar_close, 0, QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        gather_layout.addWidget(self.gather_header)
 
         self.gather_panel = GatherNavPanel(compact=True)
         self.gather_scroll = QtWidgets.QScrollArea()
@@ -229,11 +313,15 @@ class FilterSidebarMixin:
         )
         gather_layout.addWidget(self.gather_scroll)
 
-        self.gather_sidebar_width = 220
+        self.gather_sidebar_fab_size = 28
+        self.gather_sidebar_expanded_width = 220
+        self.gather_sidebar_width = self.gather_sidebar_expanded_width
         self.gather_sidebar.setFixedWidth(self.gather_sidebar_width)
         self._gather_sidebar_body_height = 0
         self.gather_sidebar_collapsed = True
-        self.gather_sidebar.raise_()
+        self.gather_sidebar.hide()
+        self.gather_fab.show()
+        self.gather_fab.raise_()
 
         self.gather_sidebar_animation = QtCore.QVariantAnimation(self)
         self.gather_sidebar_animation.setDuration(180)
@@ -243,7 +331,45 @@ class FilterSidebarMixin:
         self.gather_sidebar_animation.finished.connect(
             self._gather_sidebar_animation_finished
         )
-        self.gather_sidebar_toggle.clicked.connect(self._toggle_gather_sidebar)
+        self.gather_sidebar_close.clicked.connect(self._close_gather_sidebar)
+
+    def _on_gather_sidebar_icon_clicked(self) -> None:
+        if self.gather_sidebar_collapsed:
+            self._set_gather_sidebar_collapsed(False)
+
+    def _close_gather_sidebar(self) -> None:
+        if not self.gather_sidebar_collapsed:
+            self._set_gather_sidebar_collapsed(True)
+
+    def _custom_waypoint_list_max_height(self) -> int:
+        rows = _CUSTOM_WAYPOINT_LIST_MAX_ROWS
+        if rows <= 0:
+            return 0
+        return (
+            rows * _CUSTOM_WAYPOINT_ROW_HEIGHT
+            + max(0, rows - 1) * _CUSTOM_WAYPOINT_ROW_SPACING
+        )
+
+    def _sync_custom_filter_scroll_height(self) -> None:
+        scroll = getattr(self, "custom_filter_scroll", None)
+        container = getattr(self, "custom_filter_container", None)
+        if scroll is None or container is None:
+            return
+        layout = container.layout()
+        if layout is not None:
+            layout.activate()
+            content_height = max(0, layout.sizeHint().height())
+        else:
+            content_height = 0
+        max_height = self._custom_waypoint_list_max_height()
+        height = min(content_height, max_height)
+        scroll.setMaximumHeight(max_height)
+        scroll.setFixedHeight(height)
+        scroll.setVisible(True)
+        scroll.updateGeometry()
+        sidebar_content = getattr(self, "sidebar_content", None)
+        if sidebar_content is not None:
+            sidebar_content.updateGeometry()
 
     def _on_sidebar_segment_button(self, button: QtWidgets.QAbstractButton) -> None:
         segment_id = str(button.property("segmentId") or "loot")
@@ -268,6 +394,8 @@ class FilterSidebarMixin:
             button.setChecked(True)
             button.blockSignals(blocked)
         self.sidebar_filter_stack.setCurrentIndex(index)
+        if segment_id == "custom":
+            self._sync_custom_filter_scroll_height()
         if not getattr(self, "sidebar_collapsed", False):
             self._set_sidebar_body_height(self._sidebar_target_body_height())
             self._position_map_overlays()
@@ -295,17 +423,17 @@ class FilterSidebarMixin:
         )
 
     def _gather_sidebar_chrome_height(self, body_height: int) -> int:
+        if getattr(self, "gather_sidebar_collapsed", True):
+            return int(getattr(self, "gather_sidebar_fab_size", 28))
         gather_layout = self.gather_sidebar.layout()
         margins = gather_layout.contentsMargins()
         spacing = gather_layout.spacing() if body_height > 0 else 0
-        return (
-            margins.top()
-            + self.gather_sidebar_toggle.height()
-            + spacing
-            + margins.bottom()
-        )
+        header_height = max(22, self.gather_header.sizeHint().height())
+        return margins.top() + header_height + spacing + margins.bottom()
 
     def _sidebar_content_height(self) -> int:
+        if getattr(self, "sidebar_filter_segment", "") == "custom":
+            self._sync_custom_filter_scroll_height()
         content_layout = self.sidebar_content.layout()
         content_layout.activate()
         return max(0, content_layout.sizeHint().height())
@@ -431,30 +559,34 @@ class FilterSidebarMixin:
         animate: bool = True,
     ) -> None:
         self.gather_sidebar_collapsed = bool(collapsed)
-        self.gather_sidebar.setFixedWidth(self.gather_sidebar_width)
-        self.gather_sidebar_toggle.set_expanded(not self.gather_sidebar_collapsed)
-        self.gather_sidebar_toggle.setToolTip(
-            "Show gather navigation"
-            if self.gather_sidebar_collapsed
-            else "Hide gather navigation"
-        )
-
-        self.gather_sidebar_animation.stop()
-        current_height = self._gather_sidebar_body_height
-        target_height = self._gather_sidebar_target_body_height()
-
-        if animate and current_height != target_height:
-            self.gather_sidebar_animation.setStartValue(current_height)
-            self.gather_sidebar_animation.setEndValue(target_height)
-            self.gather_sidebar_animation.setEasingCurve(
-                QtCore.QEasingCurve.Type.InCubic
-                if self.gather_sidebar_collapsed
-                else QtCore.QEasingCurve.Type.OutCubic
-            )
-            self.gather_sidebar_animation.start()
-        else:
-            self._set_gather_sidebar_body_height(target_height)
+        if self.gather_sidebar_collapsed:
+            self.gather_fab.show()
+            self.gather_fab.raise_()
+            self.gather_sidebar.hide()
+            self.gather_sidebar_width = self.gather_sidebar_expanded_width
+            self.gather_sidebar_animation.stop()
+            self._set_gather_sidebar_body_height(0)
             self._position_map_overlays()
+        else:
+            self.gather_fab.hide()
+            self.gather_sidebar.show()
+            self.gather_sidebar_width = self.gather_sidebar_expanded_width
+            self.gather_sidebar.setFixedWidth(self.gather_sidebar_width)
+            self.gather_sidebar.raise_()
+
+            self.gather_sidebar_animation.stop()
+            current_height = self._gather_sidebar_body_height
+            target_height = self._gather_sidebar_target_body_height()
+            if animate and current_height != target_height:
+                self.gather_sidebar_animation.setStartValue(current_height)
+                self.gather_sidebar_animation.setEndValue(target_height)
+                self.gather_sidebar_animation.setEasingCurve(
+                    QtCore.QEasingCurve.Type.OutCubic
+                )
+                self.gather_sidebar_animation.start()
+            else:
+                self._set_gather_sidebar_body_height(target_height)
+                self._position_map_overlays()
 
         if persist:
             self._settings.setValue(

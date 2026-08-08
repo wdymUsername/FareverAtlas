@@ -121,8 +121,15 @@ class AtlasWindow(
         saved_gather_kind = str(
             self._settings.value("map/gather_nav_kind", "plant") or "plant"
         ).strip().lower()
-        if saved_gather_kind in {"plant", "ore", "chest"}:
+        if saved_gather_kind in {"plant", "ore", "chest", "red_orb", "pet"}:
             self.gather_nav_kind = saved_gather_kind
+        saved_gather_type = str(
+            self._settings.value("map/gather_nav_type", "") or ""
+        ).strip().lower()
+        # Activity chests / stub ore types are excluded from NODE GUIDE.
+        if saved_gather_type in {"orbchest", "campchest", "vaultchest", "ironore"}:
+            saved_gather_type = ""
+        self.gather_nav_type = saved_gather_type
         saved_gather_size = str(
             self._settings.value("map/gather_nav_size", "large") or ""
         ).strip().lower()
@@ -1153,53 +1160,68 @@ class AtlasWindow(
         self.sidebar.raise_()
 
         if hasattr(self, "gather_sidebar"):
-            gather_target = self._gather_sidebar_target_body_height(sidebar_margin)
-            if (
-                self.gather_sidebar_animation.state()
-                != QtCore.QAbstractAnimation.State.Running
-            ):
-                self._set_gather_sidebar_body_height(gather_target)
-            elif self._gather_sidebar_body_height > self._gather_sidebar_body_limit(
-                sidebar_margin
-            ):
-                self._set_gather_sidebar_body_height(
-                    self._gather_sidebar_body_limit(sidebar_margin)
-                )
-            gather_height = (
-                self._gather_sidebar_chrome_height(self._gather_sidebar_body_height)
-                + self._gather_sidebar_body_height
-            )
-            # Keep gather below waypoints with a gap when the window is short.
             max_gather_bottom = self.radar.height() - sidebar_margin
             min_gather_top = sidebar_margin + sidebar_height + sidebar_margin
-            if min_gather_top + gather_height > max_gather_bottom:
-                # Prefer shrinking gather body; header stays visible.
-                allowed_body = max(
-                    0,
-                    max_gather_bottom
-                    - min_gather_top
-                    - self._gather_sidebar_chrome_height(1),
+            if getattr(self, "gather_sidebar_collapsed", True) and hasattr(
+                self, "gather_fab"
+            ):
+                fab = self.gather_fab
+                fab_size = int(getattr(self, "gather_sidebar_fab_size", 28))
+                fab.resize(fab_size, fab_size)
+                fab_y = max(
+                    min_gather_top,
+                    max_gather_bottom - fab_size,
                 )
+                fab.move(sidebar_margin, fab_y)
+                fab.raise_()
+            else:
+                gather_target = self._gather_sidebar_target_body_height(sidebar_margin)
                 if (
                     self.gather_sidebar_animation.state()
                     != QtCore.QAbstractAnimation.State.Running
                 ):
+                    self._set_gather_sidebar_body_height(gather_target)
+                elif self._gather_sidebar_body_height > self._gather_sidebar_body_limit(
+                    sidebar_margin
+                ):
                     self._set_gather_sidebar_body_height(
-                        min(self._gather_sidebar_body_height, allowed_body)
+                        self._gather_sidebar_body_limit(sidebar_margin)
                     )
                 gather_height = (
                     self._gather_sidebar_chrome_height(self._gather_sidebar_body_height)
                     + self._gather_sidebar_body_height
                 )
-            gather_y = max(
-                min_gather_top,
-                max_gather_bottom - gather_height,
-            )
-            self.gather_sidebar.resize(
-                self.gather_sidebar_width, max(0, gather_height)
-            )
-            self.gather_sidebar.move(sidebar_margin, gather_y)
-            self.gather_sidebar.raise_()
+                # Keep gather below waypoints with a gap when the window is short.
+                if min_gather_top + gather_height > max_gather_bottom:
+                    # Prefer shrinking gather body; header stays visible.
+                    allowed_body = max(
+                        0,
+                        max_gather_bottom
+                        - min_gather_top
+                        - self._gather_sidebar_chrome_height(1),
+                    )
+                    if (
+                        self.gather_sidebar_animation.state()
+                        != QtCore.QAbstractAnimation.State.Running
+                    ):
+                        self._set_gather_sidebar_body_height(
+                            min(self._gather_sidebar_body_height, allowed_body)
+                        )
+                    gather_height = (
+                        self._gather_sidebar_chrome_height(
+                            self._gather_sidebar_body_height
+                        )
+                        + self._gather_sidebar_body_height
+                    )
+                gather_y = max(
+                    min_gather_top,
+                    max_gather_bottom - gather_height,
+                )
+                self.gather_sidebar.resize(
+                    self.gather_sidebar_width, max(0, gather_height)
+                )
+                self.gather_sidebar.move(sidebar_margin, gather_y)
+                self.gather_sidebar.raise_()
 
         self.map_controls_overlay.adjustSize()
         x = max(margin, self.radar.width() - self.map_controls_overlay.width() - margin)

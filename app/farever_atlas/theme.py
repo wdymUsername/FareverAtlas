@@ -993,6 +993,56 @@ QLabel#gatherNavFieldLabel {
     background: transparent;
     border: none;
 }
+QToolButton#gatherSidebarFab {
+    min-width: 28px;
+    max-width: 28px;
+    min-height: 28px;
+    max-height: 28px;
+    padding: 0;
+    margin: 0;
+    border: 1px solid #3a4856;
+    border-radius: 6px;
+    background: rgba(16, 23, 31, 218);
+    color: #b9c5cf;
+}
+QToolButton#gatherSidebarFab:hover {
+    background: #202b36;
+    border-color: #55778f;
+}
+QWidget#gatherSidebarHeader {
+    background: transparent;
+    border: none;
+    min-height: 22px;
+}
+QLabel#gatherSidebarHeaderIcon {
+    background: transparent;
+    border: none;
+}
+QLabel#gatherSidebarTitle {
+    color: #8493a2;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    background: transparent;
+    border: none;
+}
+QToolButton#gatherSidebarCloseButton {
+    min-width: 22px;
+    max-width: 22px;
+    min-height: 22px;
+    max-height: 22px;
+    padding: 0;
+    margin: 0;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background: transparent;
+    color: #9cabb8;
+}
+QToolButton#gatherSidebarCloseButton:hover {
+    background: #202b36;
+    border-color: #344352;
+    color: #e4ebf1;
+}
 QToolButton#gatherNavSidebarButton {
     color: #b9c5cf;
     background: #111922;
@@ -1022,6 +1072,13 @@ QScrollArea#sidebarScroll {
     border: none;
 }
 QScrollArea#sidebarScroll > QWidget > QWidget {
+    background: transparent;
+}
+QScrollArea#customFilterScroll {
+    background: transparent;
+    border: none;
+}
+QScrollArea#customFilterScroll > QWidget > QWidget {
     background: transparent;
 }
 QWidget#minimapSidebar QPushButton#sidebarHeaderButton {

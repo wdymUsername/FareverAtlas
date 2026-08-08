@@ -1,4 +1,4 @@
-"""Gather-nav mixin and panel: nearest resource → route line → collect → next."""
+"""NODE GUIDE mixin and panel: nearest node → route line → collect → next."""
 
 from __future__ import annotations
 
@@ -16,13 +16,60 @@ GATHER_KINDS = (
     ("plant", "Plant"),
     ("ore", "Ore"),
     ("chest", "Chest"),
+    ("red_orb", "Red Orb"),
+    ("pet", "Pets"),
 )
+
+# Static-only kinds have no live interactible feed; completion / codex gates them.
+_STATIC_GATHER_KINDS = frozenset({"red_orb", "pet"})
+_SIZED_GATHER_KINDS = frozenset({"plant", "ore", "gatherable"})
+_TYPED_GATHER_KINDS = frozenset({"plant", "ore", "chest"})
 
 GATHER_SIZES = (
     ("", "Any size"),
     ("small", "Small"),
     ("medium", "Medium"),
     ("large", "Large"),
+)
+
+# Size / filler tokens only — do not strip "world" (WorldChest) or material words.
+_SIZE_TYPE_TOKENS = frozenset(
+    {"small", "medium", "large", "big", "generic"}
+)
+
+# Fallback labels when a type has not been seen in POIs yet.
+_TYPE_LABELS = {
+    "lavendula": "Lavendula",
+    "madrigold": "Madrigold",
+    "ancientthyme": "Ancient Thyme",
+    "zealotus": "Zealotus",
+    "copperore": "Copper",
+    "tinore": "Tin",
+    "tungstene": "Tungsten",
+    "worldchest": "World Chest",
+    "recipechest": "Recipe Chest",
+    "orbchest": "Orb Chest",
+    "vaultchest": "Vault Chest",
+    "campchest": "Camp Chest",
+}
+
+# Activity-linked chests — found via quest/activity progression, not NODE GUIDE.
+_ACTIVITY_CHEST_TYPES = frozenset({"orbchest", "campchest", "vaultchest"})
+
+_PLANT_TYPE_FALLBACKS = (
+    "lavendula",
+    "madrigold",
+    "ancientthyme",
+    "zealotus",
+)
+_ORE_TYPE_FALLBACKS = (
+    "copperore",
+    "tinore",
+    "tungstene",
+)
+_CHEST_TYPE_FALLBACKS = (
+    "worldchest",
+    "recipechest",
 )
 
 
@@ -42,12 +89,118 @@ def _node_size_label(item: dict[str, Any]) -> str:
     return ""
 
 
-def _display_name(item: dict[str, Any]) -> str:
+def _source_prefab_stem(item: dict[str, Any]) -> str:
+    source = str(item.get("source") or "").strip().replace("\\", "/")
+    if not source:
+        return ""
+    stem = source.rsplit("/", 1)[-1]
+    if stem.lower().endswith(".prefab"):
+        stem = stem[: -len(".prefab")]
+    return stem
+
+
+def _is_opaque_plant_code(name: str) -> bool:
+    """POI export placeholders like R2Plant2 — not the in-game species name."""
+    lowered = str(name or "").strip().lower().replace("-", "_")
+    if not lowered:
+        return False
+    head = lowered.split("_", 1)[0]
+    return head.startswith("r2plant") or head in {"r2plant2", "r2plant3", "r2plantrare"}
+
+
+def _is_generic_chest_name(name: str) -> bool:
+    """Bare 'Chest' name that hides OrbChest / CampChest / etc. in the source."""
+    lowered = str(name or "").strip().lower().replace("-", "_")
+    return lowered in {"", "chest"}
+
+
+def _raw_node_name(item: dict[str, Any]) -> str:
+    """Best species/material/chest id — prefer real prefab over export codes."""
     name = str(item.get("name") or "").strip()
+    source_stem = _source_prefab_stem(item)
+    kind = str(item.get("kind") or "").strip().lower()
+    if source_stem and (
+        not name
+        or (
+            _is_opaque_plant_code(name)
+            and not _is_opaque_plant_code(source_stem)
+        )
+        or (
+            kind == "chest"
+            and _is_generic_chest_name(name)
+            and not _is_generic_chest_name(source_stem)
+        )
+    ):
+        return source_stem
+    if name:
+        return name
+    return source_stem
+
+
+def _type_key_from_raw(raw: str) -> str:
+    if not raw:
+        return ""
+    parts = [
+        part
+        for part in raw.replace("-", "_").replace(" ", "_").split("_")
+        if part and part.lower() not in _SIZE_TYPE_TOKENS
+    ]
+    return "".join(parts).lower() if parts else ""
+
+
+def _node_type_key(item: dict[str, Any]) -> str:
+    """Species / material key with size tokens stripped (lavendula, copperore)."""
+    key = _type_key_from_raw(_raw_node_name(item))
+    # Never surface opaque R2* export codes as selectable types.
+    if _is_opaque_plant_code(key) or key.startswith("r2plant"):
+        return ""
+    return key
+
+
+def _pretty_type_label(type_key: str, sample_name: str = "") -> str:
+    key = str(type_key or "").strip().lower()
+    if not key:
+        return "Unknown"
+    known = _TYPE_LABELS.get(key)
+    if known:
+        return known
+    # Prefer a cleaned sample name (drop size tokens) when available.
+    sample_parts = [
+        part
+        for part in str(sample_name or "").replace("-", "_").split("_")
+        if part and part.lower() not in _SIZE_TYPE_TOKENS
+    ]
+    if sample_parts:
+        return " ".join(sample_parts)
+    if key.endswith("ore") and len(key) > 3:
+        return f"{key[:-3].title()} Ore"
+    return key.title()
+
+
+def _discover_gather_types(
+    items: list[dict[str, Any]], kind: str
+) -> list[tuple[str, str]]:
+    found: dict[str, str] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("kind") or "").strip().lower() != kind:
+            continue
+        type_key = _node_type_key(item)
+        if not type_key:
+            continue
+        if kind == "chest" and type_key in _ACTIVITY_CHEST_TYPES:
+            continue
+        found.setdefault(type_key, _pretty_type_label(type_key, _raw_node_name(item)))
+    return sorted(found.items(), key=lambda pair: pair[1].lower())
+
+
+def _display_name(item: dict[str, Any]) -> str:
+    raw = _raw_node_name(item)
     kind = str(item.get("kind") or "").strip()
     parts = [
         part
-        for part in name.replace("_", " ").split()
+        for part in raw.replace("_", " ").split()
         if part and part.lower() != "generic"
     ]
     pretty = " ".join(parts) if parts else (kind.title() if kind else "Node")
@@ -58,6 +211,9 @@ def _display_name(item: dict[str, Any]) -> str:
 
 
 def _static_key(poi: dict[str, Any]) -> str:
+    poi_id = str(poi.get("id") or "").strip()
+    if poi_id:
+        return f"static-id:{poi_id}"
     return (
         f"static:{str(poi.get('kind') or '').lower()}:"
         f"{safe_float(poi.get('x')):.1f}:"
@@ -76,8 +232,28 @@ def _live_key(item: dict[str, Any]) -> str:
     )
 
 
+def _completion_ids(state: dict[str, Any]) -> set[str]:
+    raw = state.get("completed_elements", [])
+    if not isinstance(raw, list):
+        return set()
+    return {str(value).strip() for value in raw if str(value).strip()}
+
+
+def _element_completed(poi_id: str, completed: set[str]) -> bool:
+    """Match character progress keys to POI ids (exact or path / suffix)."""
+    needle = str(poi_id or "").strip()
+    if not needle or not completed:
+        return False
+    if needle in completed:
+        return True
+    for key in completed:
+        if key.endswith(needle) or key.rsplit("/", 1)[-1] == needle:
+            return True
+    return False
+
+
 class GatherNavPanel(QtWidgets.QWidget):
-    """Controls for gather navigation (floating map overlay)."""
+    """Controls for NODE GUIDE navigation (floating map overlay)."""
 
     enabledChanged = QtCore.Signal(bool)
     filtersChanged = QtCore.Signal()
@@ -103,14 +279,14 @@ class GatherNavPanel(QtWidgets.QWidget):
 
         if not self._compact:
             intro = QtWidgets.QLabel(
-                "Pick the nearest matching resource, draw a route line, then "
-                "advance when the live node disappears after you collect it."
+                "Route to the nearest matching node, then advance when it is "
+                "collected or completed for this character."
             )
             intro.setObjectName("waypointOverlayBody")
             intro.setWordWrap(True)
             root.addWidget(intro)
 
-        kind_label = QtWidgets.QLabel("RESOURCE")
+        kind_label = QtWidgets.QLabel("TARGET")
         kind_label.setObjectName(
             "gatherNavFieldLabel" if self._compact else "waypointColumnHeader"
         )
@@ -121,11 +297,21 @@ class GatherNavPanel(QtWidgets.QWidget):
             self.kind_combo.addItem(label, kind)
         root.addWidget(self.kind_combo)
 
-        size_label = QtWidgets.QLabel("SIZE")
-        size_label.setObjectName(
+        self.type_label = QtWidgets.QLabel("TYPE")
+        self.type_label.setObjectName(
             "gatherNavFieldLabel" if self._compact else "waypointColumnHeader"
         )
-        root.addWidget(size_label)
+        root.addWidget(self.type_label)
+        self.type_combo = QtWidgets.QComboBox()
+        self.type_combo.setObjectName("gatherNavCombo")
+        self.type_combo.addItem("Any type", "")
+        root.addWidget(self.type_combo)
+
+        self.size_label = QtWidgets.QLabel("SIZE")
+        self.size_label.setObjectName(
+            "gatherNavFieldLabel" if self._compact else "waypointColumnHeader"
+        )
+        root.addWidget(self.size_label)
         self.size_combo = QtWidgets.QComboBox()
         self.size_combo.setObjectName("gatherNavCombo")
         for size, label in GATHER_SIZES:
@@ -149,7 +335,7 @@ class GatherNavPanel(QtWidgets.QWidget):
         self.status_detail = QtWidgets.QLabel(
             "Start to route to the closest matching node."
             if self._compact
-            else "Enable gather nav to route to the closest matching node."
+            else "Start NODE GUIDE to find the closest matching node."
         )
         self.status_detail.setObjectName("gatherNavStatusDetail")
         self.status_detail.setWordWrap(True)
@@ -199,27 +385,88 @@ class GatherNavPanel(QtWidgets.QWidget):
 
         self.enable_button.toggled.connect(self._on_enabled_toggled)
         self.skip_button.clicked.connect(self.skipRequested.emit)
-        self.kind_combo.currentIndexChanged.connect(self._on_filters_changed)
+        self.kind_combo.currentIndexChanged.connect(self._on_kind_changed)
+        self.type_combo.currentIndexChanged.connect(self._on_filters_changed)
         self.size_combo.currentIndexChanged.connect(self._on_filters_changed)
+        self._type_options: list[tuple[str, str]] = []
+        self._sync_filter_visibility()
 
     def _on_enabled_toggled(self, checked: bool) -> None:
         self.enable_button.setText("Stop" if checked else "Start")
         self.skip_button.setEnabled(bool(checked))
         self.enabledChanged.emit(bool(checked))
 
+    def _on_kind_changed(self, _index: int = 0) -> None:
+        self._sync_filter_visibility()
+        self.filtersChanged.emit()
+
     def _on_filters_changed(self, _index: int = 0) -> None:
         self.filtersChanged.emit()
+
+    def _sync_filter_visibility(self) -> None:
+        kind = self.kind()
+        typed = kind in _TYPED_GATHER_KINDS
+        self.type_label.setVisible(typed)
+        self.type_combo.setVisible(typed)
+        self.type_combo.setEnabled(typed)
+        sized = kind in _SIZED_GATHER_KINDS
+        self.size_label.setVisible(sized)
+        self.size_combo.setVisible(sized)
+        self.size_combo.setEnabled(sized)
 
     def kind(self) -> str:
         return str(self.kind_combo.currentData() or "plant")
 
+    def node_type(self) -> str:
+        if self.kind() not in _TYPED_GATHER_KINDS:
+            return ""
+        return str(self.type_combo.currentData() or "")
+
     def size(self) -> str:
+        if self.kind() not in _SIZED_GATHER_KINDS:
+            return ""
         return str(self.size_combo.currentData() or "")
 
     def set_kind(self, kind: str) -> None:
         index = self.kind_combo.findData(kind)
         if index >= 0:
+            self.kind_combo.blockSignals(True)
             self.kind_combo.setCurrentIndex(index)
+            self.kind_combo.blockSignals(False)
+        self._sync_filter_visibility()
+
+    def set_type_options(
+        self, options: list[tuple[str, str]], selected: str = ""
+    ) -> None:
+        """Populate TYPE choices as (key, label); always includes Any type."""
+        selected = str(selected or "")
+        normalized = [("", "Any type")]
+        seen = {""}
+        for key, label in options:
+            key = str(key or "").strip().lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            normalized.append((key, str(label or _pretty_type_label(key))))
+        self._type_options = normalized
+        current = self.node_type() if selected == "" else selected
+        self.type_combo.blockSignals(True)
+        self.type_combo.clear()
+        for key, label in normalized:
+            self.type_combo.addItem(label, key)
+        index = self.type_combo.findData(current)
+        if index < 0:
+            index = 0
+        self.type_combo.setCurrentIndex(index)
+        self.type_combo.blockSignals(False)
+        self._sync_filter_visibility()
+
+    def set_type(self, type_key: str) -> None:
+        index = self.type_combo.findData(str(type_key or ""))
+        if index >= 0:
+            self.type_combo.blockSignals(True)
+            self.type_combo.setCurrentIndex(index)
+            self.type_combo.blockSignals(False)
 
     def set_size(self, size: str) -> None:
         index = self.size_combo.findData(size)
@@ -243,7 +490,7 @@ class GatherNavPanel(QtWidgets.QWidget):
 
 
 class GatherNavMixin:
-    """Nearest-resource gather routing driven by live interactibles + static POIs."""
+    """Nearest-node collect routing driven by live interactibles + static POIs."""
 
     LIVE_RANGE_M = 500.0
     LIVE_Z_CULL_M = 160.0
@@ -253,6 +500,7 @@ class GatherNavMixin:
     def _init_gather_nav_state(self) -> None:
         self.gather_nav_enabled = False
         self.gather_nav_kind = "plant"
+        self.gather_nav_type = ""
         self.gather_nav_size = "large"
         self.gather_nav_target: dict[str, Any] | None = None
         self.gather_nav_skipped: set[str] = set()
@@ -265,11 +513,46 @@ class GatherNavMixin:
         panel = getattr(self, "gather_panel", None)
         return panel if isinstance(panel, GatherNavPanel) else None
 
+    def _refresh_gather_type_options(self) -> None:
+        panel = self._gather_nav_panel()
+        if panel is None:
+            return
+        kind = self.gather_nav_kind
+        if kind not in _TYPED_GATHER_KINDS:
+            panel.set_type_options([], selected="")
+            return
+        options = _discover_gather_types(self._gather_pois(), kind)
+        # Keep known species/materials/chest families visible if POIs are thin.
+        if kind == "plant":
+            fallback_keys = _PLANT_TYPE_FALLBACKS
+        elif kind == "ore":
+            fallback_keys = _ORE_TYPE_FALLBACKS
+        elif kind == "chest":
+            fallback_keys = _CHEST_TYPE_FALLBACKS
+        else:
+            fallback_keys = ()
+        known = {
+            key: _TYPE_LABELS[key]
+            for key in fallback_keys
+            if key in _TYPE_LABELS
+        }
+        merged = {**known, **dict(options)}
+        selected = self.gather_nav_type
+        if selected in _ACTIVITY_CHEST_TYPES:
+            selected = ""
+        panel.set_type_options(
+            sorted(merged.items(), key=lambda pair: pair[1].lower()),
+            selected=selected,
+        )
+        self.gather_nav_type = panel.node_type()
+
     def _wire_gather_nav_panel(self) -> None:
         panel = self._gather_nav_panel()
         if panel is None:
             return
         panel.set_kind(self.gather_nav_kind)
+        self._refresh_gather_type_options()
+        panel.set_type(self.gather_nav_type)
         panel.set_size(self.gather_nav_size)
         panel.set_enabled_checked(self.gather_nav_enabled)
         panel.enabledChanged.connect(self._set_gather_nav_enabled)
@@ -294,20 +577,25 @@ class GatherNavMixin:
             self._ensure_gather_loot_filter_visible()
             if hasattr(self, "_set_gather_sidebar_collapsed"):
                 self._set_gather_sidebar_collapsed(False)
-            notify(self, "Gather nav started")
+            notify(self, "NODE GUIDE started")
             self._gather_nav_retarget(force=True)
         else:
             self._clear_gather_nav_target()
-            notify(self, "Gather nav stopped")
+            notify(self, "NODE GUIDE stopped")
             self._refresh_gather_nav_panel()
 
     def _on_gather_nav_filters_changed(self) -> None:
         panel = self._gather_nav_panel()
         if panel is None:
             return
+        previous_kind = self.gather_nav_kind
         self.gather_nav_kind = panel.kind()
+        if self.gather_nav_kind != previous_kind:
+            self._refresh_gather_type_options()
+        self.gather_nav_type = panel.node_type()
         self.gather_nav_size = panel.size()
         self._settings.setValue("map/gather_nav_kind", self.gather_nav_kind)
+        self._settings.setValue("map/gather_nav_type", self.gather_nav_type)
         self._settings.setValue("map/gather_nav_size", self.gather_nav_size)
         if self.gather_nav_enabled:
             self.gather_nav_skipped.clear()
@@ -414,7 +702,12 @@ class GatherNavMixin:
         wanted = self.gather_nav_kind
         if kind == "gatherable":
             return wanted in {"plant", "ore"}
-        return kind == wanted
+        if kind != wanted:
+            return False
+        # Orb / camp / vault chests are activity rewards — skip in NODE GUIDE.
+        if wanted == "chest" and _node_type_key(item) in _ACTIVITY_CHEST_TYPES:
+            return False
+        return True
 
     def _matches_gather_filters(
         self,
@@ -424,13 +717,23 @@ class GatherNavMixin:
     ) -> bool:
         if not self._matches_gather_kind(item):
             return False
+        kind = str(item.get("kind") or "").strip().lower()
+        if kind in _STATIC_GATHER_KINDS or self.gather_nav_kind in _STATIC_GATHER_KINDS:
+            return True
+        type_filter = str(self.gather_nav_type or "").strip().lower()
+        if type_filter in _ACTIVITY_CHEST_TYPES:
+            type_filter = ""
+        if type_filter and self.gather_nav_kind in _TYPED_GATHER_KINDS:
+            item_type = _node_type_key(item)
+            if item_type != type_filter:
+                return False
         size_filter = self.gather_nav_size
         if not size_filter:
             return True
         size = _node_size_label(item)
         if not size:
             # Chests / untagged live names: allow when requested.
-            if str(item.get("kind") or "").strip().lower() == "chest":
+            if kind == "chest":
                 return True
             return bool(allow_unknown_size)
         return size == size_filter
@@ -440,13 +743,15 @@ class GatherNavMixin:
         poi: dict[str, Any],
         live_nodes: list[dict[str, Any]],
     ) -> dict[str, Any] | None:
+        poi_kind = str(poi.get("kind") or "").strip().lower()
+        if poi_kind in _STATIC_GATHER_KINDS:
+            return None
         px = safe_float(poi.get("x"), math.nan)
         py = safe_float(poi.get("y"), math.nan)
         if not (math.isfinite(px) and math.isfinite(py)):
             return None
         best: dict[str, Any] | None = None
         best_dist = self.LIVE_MATCH_M
-        poi_kind = str(poi.get("kind") or "").strip().lower()
         for live in live_nodes:
             live_kind = str(live.get("kind") or "").strip().lower()
             if live_kind == poi_kind:
@@ -572,6 +877,12 @@ class GatherNavMixin:
         player: dict[str, float],
         snapshot: Any = None,
     ) -> list[dict[str, Any]]:
+        if self.gather_nav_kind == "pet":
+            # Placeholder for the future pet Codex / map markers.
+            return []
+
+        state = self._gather_snapshot_state(snapshot)
+        completed = _completion_ids(state)
         all_live = self._gather_live_nodes(snapshot)
         live_feed_active = bool(all_live)
         # Cover checks are kind-only so untagged live names still match a sized
@@ -588,12 +899,16 @@ class GatherNavMixin:
         candidates: list[dict[str, Any]] = []
         px = safe_float(player.get("x"), math.nan)
         py = safe_float(player.get("y"), math.nan)
+        static_only = self.gather_nav_kind in _STATIC_GATHER_KINDS
 
         for poi in self._gather_pois(snapshot):
             kind = str(poi.get("kind") or "").strip().lower()
-            if kind not in {"plant", "ore", "chest", "gatherable"}:
+            if kind not in {"plant", "ore", "chest", "gatherable", "red_orb", "pet"}:
                 continue
             if not self._matches_gather_filters(poi):
+                continue
+            poi_id = str(poi.get("id") or "").strip()
+            if kind == "red_orb" and _element_completed(poi_id, completed):
                 continue
             key = _static_key(poi)
             if key in self.gather_nav_skipped or key in self.gather_nav_depleted:
@@ -604,7 +919,7 @@ class GatherNavMixin:
             ):
                 continue
             live = None
-            if self._in_live_range(player, poi):
+            if not static_only and self._in_live_range(player, poi):
                 live = self._live_covers(poi, kind_live)
                 # Inside the live bubble, only route to nodes that currently
                 # exist as interactibles — otherwise we jump past nearer
@@ -632,41 +947,44 @@ class GatherNavMixin:
                     "x": x,
                     "y": y,
                     "z": z,
+                    "poi_id": poi_id or None,
                     "live_id": str((live or {}).get("id") or "") or None,
                     "distance": distance,
                     "source": "live" if live else "static",
                 }
             )
 
-        for live in sized_live:
-            live_id = str(live.get("id") or "")
-            if live_id and live_id in covered_live_ids:
-                continue
-            key = _live_key(live)
-            if key in self.gather_nav_skipped or key in self.gather_nav_depleted:
-                continue
-            x = safe_float(live.get("x"), math.nan)
-            y = safe_float(live.get("y"), math.nan)
-            z = safe_float(live.get("z"), 0.0)
-            if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(px) and math.isfinite(py)):
-                continue
-            if self._is_gather_position_depleted(x, y):
-                continue
-            distance = math.hypot(x - px, y - py)
-            candidates.append(
-                {
-                    "key": key,
-                    "kind": str(live.get("kind") or self.gather_nav_kind),
-                    "name": _display_name(live),
-                    "size": _node_size_label(live),
-                    "x": x,
-                    "y": y,
-                    "z": z,
-                    "live_id": live_id or None,
-                    "distance": distance,
-                    "source": "live",
-                }
-            )
+        if not static_only:
+            for live in sized_live:
+                live_id = str(live.get("id") or "")
+                if live_id and live_id in covered_live_ids:
+                    continue
+                key = _live_key(live)
+                if key in self.gather_nav_skipped or key in self.gather_nav_depleted:
+                    continue
+                x = safe_float(live.get("x"), math.nan)
+                y = safe_float(live.get("y"), math.nan)
+                z = safe_float(live.get("z"), 0.0)
+                if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(px) and math.isfinite(py)):
+                    continue
+                if self._is_gather_position_depleted(x, y):
+                    continue
+                distance = math.hypot(x - px, y - py)
+                candidates.append(
+                    {
+                        "key": key,
+                        "kind": str(live.get("kind") or self.gather_nav_kind),
+                        "name": _display_name(live),
+                        "size": _node_size_label(live),
+                        "x": x,
+                        "y": y,
+                        "z": z,
+                        "poi_id": None,
+                        "live_id": live_id or None,
+                        "distance": distance,
+                        "source": "live",
+                    }
+                )
 
         # Nearest first; prefer live when distances tie.
         candidates.sort(
@@ -687,6 +1005,16 @@ class GatherNavMixin:
                 detail="Player coordinates unavailable — wait for the bridge.",
             )
             return
+        if self.gather_nav_kind == "pet":
+            self._clear_gather_nav_target()
+            self._refresh_gather_nav_panel(
+                title="Pets soon",
+                detail=(
+                    "Pet markers and Codex completion will plug in here — "
+                    "routing is not available yet."
+                ),
+            )
+            return
         self._revive_depleted_from_live(snapshot)
         candidates = self._gather_candidates(player, snapshot)
         if not candidates:
@@ -694,13 +1022,22 @@ class GatherNavMixin:
             size_note = (
                 f" {self.gather_nav_size}" if self.gather_nav_size else ""
             )
-            self._refresh_gather_nav_panel(
-                title="No nodes",
-                detail=(
-                    f"No matching {self.gather_nav_kind}{size_note} resources "
-                    "found (live or static)."
-                ),
+            label = {
+                "red_orb": "red orb",
+                "plant": "plant",
+                "ore": "ore",
+                "chest": "chest",
+            }.get(self.gather_nav_kind, self.gather_nav_kind)
+            type_note = ""
+            if self.gather_nav_type:
+                type_note = f" {_pretty_type_label(self.gather_nav_type)}"
+            detail = (
+                "No uncollected red orbs found for this character "
+                "(completed ones stay muted on the map)."
+                if self.gather_nav_kind == "red_orb"
+                else f"No matching{type_note} {label}{size_note} nodes found."
             )
+            self._refresh_gather_nav_panel(title="No nodes", detail=detail)
             return
         next_target = candidates[0]
         current = self.gather_nav_target
@@ -726,6 +1063,14 @@ class GatherNavMixin:
         player = self._gather_player_position()
         if target is None or player is None:
             return
+        kind = str(target.get("kind") or self.gather_nav_kind).strip().lower()
+        if kind in _STATIC_GATHER_KINDS:
+            target["distance"] = math.hypot(
+                safe_float(target.get("x")) - safe_float(player.get("x")),
+                safe_float(target.get("y")) - safe_float(player.get("y")),
+            )
+            return
+
         kind_live = [
             item
             for item in self._gather_live_nodes(snapshot)
@@ -796,6 +1141,14 @@ class GatherNavMixin:
         target = self.gather_nav_target
         if target is None:
             return False
+        kind = str(target.get("kind") or self.gather_nav_kind).strip().lower()
+        if kind == "red_orb":
+            poi_id = str(target.get("poi_id") or "").strip()
+            if not poi_id:
+                return False
+            completed = _completion_ids(self._gather_snapshot_state(snapshot))
+            return _element_completed(poi_id, completed)
+
         live_id = str(target.get("live_id") or "")
         if not live_id:
             return False
@@ -833,7 +1186,7 @@ class GatherNavMixin:
                 "x": safe_float(target.get("x")),
                 "y": safe_float(target.get("y")),
                 "z": safe_float(target.get("z")),
-                "name": str(target.get("name") or "Gather target"),
+                "name": str(target.get("name") or "Node target"),
                 "kind": str(target.get("kind") or self.gather_nav_kind),
                 "size": str(target.get("size") or ""),
             }
@@ -854,20 +1207,20 @@ class GatherNavMixin:
         if not self.gather_nav_enabled:
             panel.set_status(
                 "Idle",
-                "Enable gather nav to route to the closest matching node.",
+                "Start to route to the closest matching node.",
             )
             return
         target = self.gather_nav_target
         if target is None:
             panel.set_status(
                 "Searching…",
-                "Looking for the next matching resource.",
+                "Looking for the next matching node.",
             )
             return
         distance = safe_float(target.get("distance"), math.nan)
         distance_text = f"{distance:.1f} m" if math.isfinite(distance) else "—"
         source = str(target.get("source") or "static")
         panel.set_status(
-            str(target.get("name") or "Gather target"),
+            str(target.get("name") or "Node target"),
             f"{distance_text} · {source} · route line active",
         )

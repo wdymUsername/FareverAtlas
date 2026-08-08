@@ -13284,18 +13284,6 @@
     "source_tile": "L0_-9_-3"
   },
   {
-    "kind": "ore",
-    "subkind": null,
-    "name": "IronOre_Small",
-    "id": null,
-    "zone": null,
-    "x": -943.582,
-    "y": -382.44,
-    "z": 27.75,
-    "source": "Gameplay/Prefabs/Gatherables/Ores/IronOre_Small.prefab",
-    "source_tile": "L0_-9_-3"
-  },
-  {
     "kind": "plant",
     "subkind": null,
     "name": "Lavendula_Small",
