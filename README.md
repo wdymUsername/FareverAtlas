@@ -106,12 +106,16 @@ FareverAtlas.exe
 native_bridge/          bridge binary + farever-telemetry.json
 user_data/
   settings.ini
+  game_dir.conf         optional Farever install override
   waypoints/
   builds/
   friends/
+  map/                  custom FoW / layer edits
 ```
 
-No Python install is required for the portable build.
+No Python install is required for the portable build. Source installs use the
+same `user_data/` layout next to the repo root — settings are never stored in
+a shared `~/.config` / AppData location.
 
 ### Windows (source / venv)
 
@@ -146,6 +150,9 @@ Optional environment variables:
 - `FAREVER_TELEMETRY_INTERVAL_MS` — bridge poll interval (default `100`)
 
 Live telemetry is read from `native_bridge/farever-telemetry.json`.
+All local state (settings, waypoints, friends, builds, FoW edits, game-dir
+override, instance lock) lives under that checkout’s `user_data/`, for both
+source installs and the portable exe.
 
 ## Safety
 

@@ -1,4 +1,9 @@
-"""Portable frozen-app bootstrap: dirs, bridge lifecycle, settings paths."""
+"""Checkout/exe-local runtime layout: user_data/, bridge lifecycle, paths.
+
+All mutable user/machine state lives under ``PROJECT_ROOT/user_data/`` for both
+source installs and the frozen portable exe. Nothing is written to a shared
+``~/.config`` / AppData org store.
+"""
 
 from __future__ import annotations
 
@@ -21,24 +26,58 @@ def is_frozen() -> bool:
     return bool(getattr(sys, "frozen", False))
 
 
+def user_data_dir() -> Path:
+    return PROJECT_ROOT / "user_data"
+
+
 def ensure_portable_dirs() -> None:
-    """Create writable runtime directories next to the executable / project root."""
+    """Create writable runtime directories under this checkout / exe folder."""
     for relative in (
+        Path("user_data"),
         Path("user_data") / "waypoints",
         Path("user_data") / "builds",
         Path("user_data") / "friends",
         Path("user_data") / "friends" / "cache",
+        Path("user_data") / "map",
         Path("native_bridge"),
     ):
         (PROJECT_ROOT / relative).mkdir(parents=True, exist_ok=True)
 
 
 def settings_ini_path() -> Path:
-    return PROJECT_ROOT / "user_data" / "settings.ini"
+    return user_data_dir() / "settings.ini"
 
 
 def instance_lock_path() -> Path:
-    return PROJECT_ROOT / "user_data" / "farever-atlas.lock"
+    return user_data_dir() / "farever-atlas.lock"
+
+
+def game_dir_conf_path() -> Path:
+    """Optional Farever install path override (one line)."""
+    return user_data_dir() / "game_dir.conf"
+
+
+def resolve_game_dir_conf() -> Path | None:
+    """Return the game-dir override file, migrating legacy names if needed."""
+    current = game_dir_conf_path()
+    if current.is_file():
+        return current
+
+    legacy_candidates = (
+        user_data_dir() / "nyx_game_dir.conf",
+        PROJECT_ROOT / "nyx_game_dir.conf",
+        PROJECT_ROOT / "game_dir.conf",
+    )
+    for legacy in legacy_candidates:
+        if not legacy.is_file():
+            continue
+        try:
+            current.parent.mkdir(parents=True, exist_ok=True)
+            legacy.replace(current)
+            return current
+        except OSError:
+            return legacy
+    return None
 
 
 def _windows_no_window_flags() -> int:
