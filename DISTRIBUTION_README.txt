@@ -32,7 +32,7 @@ GitHub Actions also builds dist/FareverAtlas.exe
 Nightly release (rolling; attaches FareverAtlas.exe + .sha256):
 
   - automatic: every day at 00:00 UTC
-  - manual: Actions → Windows portable exe → Run workflow
+  - manual: Actions → FareverAtlas.exe → Run workflow
 
 Download: https://github.com/wdymUsername/FareverAtlas/releases/tag/Nightly
 

@@ -1,4 +1,4 @@
-name: Windows portable exe
+name: FareverAtlas.exe
 
 on:
   schedule:
@@ -185,12 +185,52 @@ jobs:
           rm -f "${notes_file}"
 
       - name: VirusTotal scan release assets
+        id: vt
         if: steps.vt_key.outputs.value != ''
         uses: cssnr/virustotal-action@v2
         with:
           vt_api_key: ${{ steps.vt_key.outputs.value }}
           release_id: ${{ steps.release.outputs.id }}
-          update_release: true
+          # Action default links use ephemeral /gui/file-analysis/ IDs that
+          # often look stuck on "Enqueuing...". We rewrite to permanent
+          # /gui/file/<sha256> URLs in the next step.
+          update_release: false
           sha256: true
           release_heading: "**VirusTotal**"
           rate_limit: 4
+
+      - name: Publish permanent VirusTotal links
+        if: steps.vt.outputs.json != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: Nightly
+          BODY: ${{ steps.release_meta.outputs.body }}
+          VT_JSON: ${{ steps.vt.outputs.json }}
+        run: |
+          set -euo pipefail
+          notes_file="$(mktemp)"
+          {
+            printf '%s\n\n' "${BODY}"
+            echo "**VirusTotal**"
+            echo
+            python3 - <<'PY'
+          import json, os
+          items = json.loads(os.environ["VT_JSON"])
+          for item in items:
+              name = item.get("name") or "asset"
+              sha = item.get("sha256") or ""
+              if not sha:
+                  # Fall back to analysis link only if hash is missing.
+                  link = item.get("link") or ""
+                  if link:
+                      print(f"- [{name}]({link})")
+                  continue
+              # Skip checksum sidecars; the exe report is what people want.
+              if name.endswith(".sha256"):
+                  continue
+              print(f"- [{name}](https://www.virustotal.com/gui/file/{sha})")
+          PY
+          } > "${notes_file}"
+          gh release edit "${TAG}" --notes-file "${notes_file}"
+          rm -f "${notes_file}"
