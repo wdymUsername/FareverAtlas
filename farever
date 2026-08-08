@@ -15,7 +15,7 @@ usage() {
 Usage: ./farever <command> [args...]
 
 Commands:
-  setup              Create the Python venv and install dependencies
+  setup              Create the Python venv, install deps, and build the bridge
   start [args...]    Start the native bridge, then Farever Atlas
   stop               Stop Farever Atlas and the native bridge
   restart [args...]  Stop anything running, then start fresh
@@ -73,6 +73,25 @@ cleanup_bridge() {
     stop_matching "$BRIDGE_NAME" TERM
 }
 
+bridge_binary() {
+    local dest="$BRIDGE_DIR/$BRIDGE_NAME"
+    local built="$BRIDGE_DIR/target/x86_64-pc-windows-gnu/release/$BRIDGE_NAME"
+    if [[ -f "$dest" ]]; then
+        printf '%s\n' "$dest"
+    elif [[ -f "$built" ]]; then
+        printf '%s\n' "$built"
+    fi
+}
+
+build_bridge() {
+    [[ -x "$BRIDGE_DIR/build.sh" ]] || die "Bridge build script missing: $BRIDGE_DIR/build.sh"
+    if ! command -v cargo >/dev/null 2>&1; then
+        die "cargo not found. Install Rust (https://rustup.rs), then run: $BRIDGE_DIR/build.sh"
+    fi
+    echo "Building native bridge..."
+    "$BRIDGE_DIR/build.sh"
+}
+
 cmd_setup() {
     local python="${PYTHON:-python3}"
 
@@ -85,12 +104,17 @@ cmd_setup() {
     PYTHONPATH="$ROOT/app${PYTHONPATH:+:$PYTHONPATH}" \
         "$VENV_PYTHON" -m farever_atlas.fonts
 
+    build_bridge
+
     printf '\nSetup complete. Start with:\n  %q start\n' "$ROOT/farever"
 }
 
 cmd_start() {
     [[ -x "$VENV_PYTHON" ]] || die "Python environment missing. Run: $ROOT/farever setup"
     [[ -x "$BRIDGE_WATCH" ]] || die "Bridge launcher missing: $BRIDGE_WATCH"
+    if [[ -z "$(bridge_binary)" ]]; then
+        die "Bridge binary missing. Run: $ROOT/farever setup (or: $BRIDGE_DIR/build.sh)"
+    fi
 
     # Replace any leftover bridge from a previous session.
     stop_matching "$BRIDGE_NAME" TERM
@@ -107,7 +131,9 @@ cmd_start() {
     if ! is_running "$BRIDGE_PID"; then
         wait "$BRIDGE_PID" || true
         if [[ -s "$bridge_log" ]]; then
-            die "Native bridge exited during startup. See $bridge_log"
+            echo "----- $bridge_log -----" >&2
+            cat "$bridge_log" >&2
+            echo "-----------------------" >&2
         fi
         die "Native bridge exited during startup."
     fi
