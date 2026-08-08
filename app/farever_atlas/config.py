@@ -142,6 +142,32 @@ def discover_game_dir() -> Path | None:
         if (candidate / "Farever.exe").is_file():
             return candidate.resolve()
 
+    # Optional override under this checkout/exe user_data/ (migrates legacy names).
+    conf = PROJECT_ROOT / "user_data" / "game_dir.conf"
+    if not conf.is_file():
+        for legacy in (
+            PROJECT_ROOT / "user_data" / "nyx_game_dir.conf",
+            PROJECT_ROOT / "nyx_game_dir.conf",
+            PROJECT_ROOT / "game_dir.conf",
+        ):
+            if not legacy.is_file():
+                continue
+            try:
+                conf.parent.mkdir(parents=True, exist_ok=True)
+                legacy.replace(conf)
+            except OSError:
+                conf = legacy
+            break
+    if conf.is_file():
+        try:
+            line = conf.read_text(encoding="utf-8").splitlines()[0].strip()
+        except OSError:
+            line = ""
+        if line:
+            candidate = Path(line).expanduser()
+            if (candidate / "Farever.exe").is_file():
+                return candidate.resolve()
+
     for root in _steam_roots():
         manifest = root / f"steamapps/appmanifest_{APP_ID}.acf"
         install_name = "Farever"

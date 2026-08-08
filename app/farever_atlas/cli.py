@@ -47,20 +47,18 @@ def apply_palette(app: QtWidgets.QApplication) -> None:
 
 
 def _load_settings() -> QtCore.QSettings:
-    if is_frozen():
-        ensure_portable_dirs()
-        settings = QtCore.QSettings(
-            str(settings_ini_path()), QtCore.QSettings.Format.IniFormat
-        )
-        settings.setFallbacksEnabled(False)
-        return settings
-
-    settings = QtCore.QSettings("Local", "FareverAtlas")
+    # Policy: all settings live in this checkout/exe user_data/settings.ini
+    # (source and portable). Never use a shared ~/.config / AppData org store.
+    ensure_portable_dirs()
+    settings = QtCore.QSettings(
+        str(settings_ini_path()), QtCore.QSettings.Format.IniFormat
+    )
+    settings.setFallbacksEnabled(False)
     if settings.allKeys():
         return settings
 
-    # One-time migration from the previous application name.
-    for legacy_name in ("FareverStandalone", "FareverMinimap"):
+    # One-time migration from the old shared Qt org/app store (and earlier names).
+    for legacy_name in ("FareverAtlas", "FareverStandalone", "FareverMinimap"):
         legacy = QtCore.QSettings("Local", legacy_name)
         keys = legacy.allKeys()
         if not keys:
@@ -68,19 +66,16 @@ def _load_settings() -> QtCore.QSettings:
         for key in keys:
             settings.setValue(key, legacy.value(key))
         settings.sync()
+        # Clear the shared store so a fresh clone does not re-import secrets.
+        legacy.clear()
+        legacy.sync()
         break
     return settings
 
 
 def _instance_lock() -> QtCore.QLockFile:
-    if is_frozen():
-        ensure_portable_dirs()
-        return QtCore.QLockFile(str(instance_lock_path()))
-    runtime_dir = QtCore.QStandardPaths.writableLocation(
-        QtCore.QStandardPaths.StandardLocation.RuntimeLocation
-    )
-    lock_dir = Path(runtime_dir) if runtime_dir else Path(QtCore.QDir.tempPath())
-    return QtCore.QLockFile(str(lock_dir / "farever-atlas.lock"))
+    ensure_portable_dirs()
+    return QtCore.QLockFile(str(instance_lock_path()))
 
 
 def parse_args() -> argparse.Namespace:
@@ -115,6 +110,7 @@ def main() -> int:
     game_dir = args.game_dir.expanduser() if args.game_dir else discover_game_dir()
     app = QtWidgets.QApplication(sys.argv)
     app.setApplicationName("Farever Atlas")
+    # Organization name is unused for settings (IniFormat file under user_data/).
     app.setOrganizationName("Local")
     apply_palette(app)
 
