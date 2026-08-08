@@ -506,15 +506,22 @@ class GameTimeStatusWidget(QtWidgets.QWidget):
         root_layout.setContentsMargins(3, 0, 3, 0)
         root_layout.setSpacing(5)
 
-        self.label = QtWidgets.QLabel("· --:-- · —")
+        self.icon = QtWidgets.QLabel("·")
+        self.icon.setObjectName("gameTimeIcon")
+        self.icon.setFixedSize(30, 30)
+        self.icon.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+
+        self.label = QtWidgets.QLabel("--:-- · —")
         self.label.setObjectName("gameTimeLabel")
         self.label.setAlignment(
             QtCore.Qt.AlignmentFlag.AlignLeft
             | QtCore.Qt.AlignmentFlag.AlignVCenter
         )
+        root_layout.addWidget(self.icon)
         root_layout.addWidget(self.label)
-        self.setToolTip("In-game time of day")
-        self.label.setToolTip("In-game time of day")
+        tooltip = "In-game time of day"
+        for widget in (self, self.icon, self.label):
+            widget.setToolTip(tooltip)
 
     @classmethod
     def _period_for_factor(cls, factor: float) -> tuple[str, str]:
@@ -530,25 +537,28 @@ class GameTimeStatusWidget(QtWidgets.QWidget):
             signature = ("missing",)
             if signature != self._signature:
                 self._signature = signature
-                self.label.setText("· --:-- · —")
+                self.icon.setText("·")
+                self.label.setText("--:-- · —")
             return
         factor = safe_float(tod.get("factor"), math.nan)
         if not math.isfinite(factor):
             signature = ("invalid",)
             if signature != self._signature:
                 self._signature = signature
-                self.label.setText("· --:-- · —")
+                self.icon.setText("·")
+                self.label.setText("--:-- · —")
             return
         factor = factor % 1.0
         total_minutes = int(factor * 24 * 60) % (24 * 60)
         hours, minutes = divmod(total_minutes, 60)
         period, icon = self._period_for_factor(factor)
         paused = bool(tod.get("paused"))
-        signature = (hours, minutes, period, paused)
+        signature = (hours, minutes, period, icon, paused)
         if signature == self._signature:
             return
         self._signature = signature
-        text = f"{icon} · {hours:02d}:{minutes:02d} · {period}"
+        self.icon.setText(icon)
+        text = f"{hours:02d}:{minutes:02d} · {period}"
         if paused:
             text = f"{text} · paused"
         self.label.setText(text)

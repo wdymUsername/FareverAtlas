@@ -949,6 +949,13 @@ QLabel#riftCountdown {
 QWidget#gameTimeStatus {
     background: transparent;
 }
+QLabel#gameTimeIcon {
+    color: #eef3f7;
+    background: transparent;
+    border: none;
+    font-size: 20px;
+    font-weight: 600;
+}
 QLabel#gameTimeLabel {
     color: #eef3f7;
     font-size: 10px;
