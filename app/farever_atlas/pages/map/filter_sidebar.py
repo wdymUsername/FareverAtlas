@@ -429,7 +429,10 @@ class FilterSidebarMixin:
 
         self.custom_filter_animation.stop()
         current_height = max(0, self.custom_filter_container.height())
-        expanded_height = max(0, self.custom_filter_container.layout().sizeHint().height())
+        custom_layout = self.custom_filter_container.layout()
+        expanded_height = (
+            max(0, custom_layout.sizeHint().height()) if custom_layout is not None else 0
+        )
         target_height = 0 if self.custom_collapsed else expanded_height
 
         if not self.custom_collapsed:
