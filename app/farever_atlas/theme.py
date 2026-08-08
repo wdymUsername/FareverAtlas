@@ -1009,7 +1009,8 @@ QLabel#gatherNavFieldLabel {
     background: transparent;
     border: none;
 }
-QToolButton#gatherSidebarFab {
+QToolButton#gatherSidebarFab,
+QToolButton#fowToolsFab {
     min-width: 28px;
     max-width: 28px;
     min-height: 28px;
@@ -1021,20 +1022,24 @@ QToolButton#gatherSidebarFab {
     background: rgba(16, 23, 31, 218);
     color: #b9c5cf;
 }
-QToolButton#gatherSidebarFab:hover {
+QToolButton#gatherSidebarFab:hover,
+QToolButton#fowToolsFab:hover {
     background: #202b36;
     border-color: #55778f;
 }
-QWidget#gatherSidebarHeader {
+QWidget#gatherSidebarHeader,
+QWidget#fowToolsHeader {
     background: transparent;
     border: none;
     min-height: 22px;
 }
-QLabel#gatherSidebarHeaderIcon {
+QLabel#gatherSidebarHeaderIcon,
+QLabel#fowToolsHeaderIcon {
     background: transparent;
     border: none;
 }
-QLabel#gatherSidebarTitle {
+QLabel#gatherSidebarTitle,
+QLabel#fowToolsTitle {
     color: #8493a2;
     font-size: 10px;
     font-weight: 600;
@@ -1042,7 +1047,8 @@ QLabel#gatherSidebarTitle {
     background: transparent;
     border: none;
 }
-QToolButton#gatherSidebarCloseButton {
+QToolButton#gatherSidebarCloseButton,
+QToolButton#fowToolsCloseButton {
     min-width: 22px;
     max-width: 22px;
     min-height: 22px;
@@ -1054,7 +1060,8 @@ QToolButton#gatherSidebarCloseButton {
     background: transparent;
     color: #9cabb8;
 }
-QToolButton#gatherSidebarCloseButton:hover {
+QToolButton#gatherSidebarCloseButton:hover,
+QToolButton#fowToolsCloseButton:hover {
     background: #202b36;
     border-color: #344352;
     color: #e4ebf1;
