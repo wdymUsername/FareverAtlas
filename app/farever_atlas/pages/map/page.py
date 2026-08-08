@@ -5,10 +5,13 @@ from __future__ import annotations
 from .custom_waypoints import CustomWaypointMixin
 from .dps_overlay import DpsOverlayMixin
 from .filter_sidebar import FilterSidebarMixin
+from .gather_nav import GatherNavMixin
 
 
-class MapPageMixin(FilterSidebarMixin, CustomWaypointMixin, DpsOverlayMixin):
-    """Map filters, waypoints, and DPS overlay behavior."""
+class MapPageMixin(
+    FilterSidebarMixin, CustomWaypointMixin, GatherNavMixin, DpsOverlayMixin
+):
+    """Map filters, waypoints, gather nav, and DPS overlay behavior."""
 
 
 class MapPage:

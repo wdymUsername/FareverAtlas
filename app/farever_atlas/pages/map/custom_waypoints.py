@@ -166,6 +166,8 @@ class CustomWaypointMixin:
     def _set_active_custom_waypoint(self, waypoint_id: int | None) -> None:
         if waypoint_id is not None and self.waypoint_store.get(waypoint_id) is None:
             waypoint_id = None
+        if waypoint_id is not None and hasattr(self, "_stop_gather_nav_for_waypoint"):
+            self._stop_gather_nav_for_waypoint()
         self.active_custom_waypoint_id = waypoint_id
         self._settings.setValue(
             "map/active_custom_waypoint_id",

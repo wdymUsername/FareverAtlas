@@ -71,6 +71,10 @@ def apply_settings_defaults(settings: QtCore.QSettings) -> None:
     settings.setValue("map/zoom_radius", 200)
     settings.setValue("map/show_texture", True)
     settings.setValue("map/show_route_line", True)
+    settings.setValue("map/fog_enabled", True)
+    settings.setValue("map/fog_show_outlines", True)
+    settings.setValue("map/fog_hide_markers", True)
+    settings.setValue("map/fog_max_tier", "Z2")
     for kind, _label in POI_DEFAULT_KINDS:
         settings.setValue(f"map/show_poi_{kind}", True)
     for kind, _label in LOOT_DEFAULT_KINDS:
@@ -141,6 +145,20 @@ class SettingsPanel(QtCore.QObject):
             self.show_route.setChecked(
                 _as_bool(self._settings.value("map/show_route_line"), True)
             )
+            self.fog_enabled.setChecked(
+                _as_bool(self._settings.value("map/fog_enabled"), True)
+            )
+            self.fog_show_outlines.setChecked(
+                _as_bool(self._settings.value("map/fog_show_outlines"), True)
+            )
+            self.fog_hide_markers.setChecked(
+                _as_bool(self._settings.value("map/fog_hide_markers"), True)
+            )
+            fog_tier = str(
+                self._settings.value("map/fog_max_tier", "Z2") or "Z2"
+            ).upper()
+            fog_index = max(0, self.fog_max_tier.findData(fog_tier))
+            self.fog_max_tier.setCurrentIndex(fog_index)
 
             legacy_pois = _as_bool(self._settings.value("map/show_pois"), True)
             for kind, checkbox in self.poi_defaults.items():
@@ -332,6 +350,31 @@ class SettingsPanel(QtCore.QObject):
         form.addRow("Waypoint route line", self.show_route)
         layout.addWidget(display)
 
+        fog, fog_form = self._group("Fog of war (prototype)")
+        self.fog_enabled = QtWidgets.QCheckBox()
+        self._bind_bool(self.fog_enabled, "map/fog_enabled")
+        fog_form.addRow("Enable fog", self.fog_enabled)
+
+        self.fog_max_tier = QtWidgets.QComboBox()
+        self.fog_max_tier.addItem("Z1 Skover only", "Z1")
+        self.fog_max_tier.addItem("Z1–Z2 (EA default)", "Z2")
+        self.fog_max_tier.addItem("Z1–Z3 + Crimson", "Z3")
+        self.fog_max_tier.addItem("All regions", "Z4")
+        saved_tier = str(self._settings.value("map/fog_max_tier", "Z2") or "Z2").upper()
+        tier_index = max(0, self.fog_max_tier.findData(saved_tier))
+        self.fog_max_tier.setCurrentIndex(tier_index)
+        self.fog_max_tier.currentIndexChanged.connect(self._on_fog_tier_changed)
+        fog_form.addRow("Accessible through", self.fog_max_tier)
+
+        self.fog_show_outlines = QtWidgets.QCheckBox()
+        self._bind_bool(self.fog_show_outlines, "map/fog_show_outlines")
+        fog_form.addRow("Region outlines", self.fog_show_outlines)
+
+        self.fog_hide_markers = QtWidgets.QCheckBox()
+        self._bind_bool(self.fog_hide_markers, "map/fog_hide_markers")
+        fog_form.addRow("Hide markers under fog", self.fog_hide_markers)
+        layout.addWidget(fog)
+
         defaults, default_form = self._group("Default visibility")
         self.poi_defaults: dict[str, QtWidgets.QCheckBox] = {}
         for kind, label in POI_DEFAULT_KINDS:
@@ -517,6 +560,15 @@ class SettingsPanel(QtCore.QObject):
         if self._suppress or not (0 <= index < len(ZOOM_CHOICES)):
             return
         self._set_int("map/zoom_radius", ZOOM_CHOICES[index][1])
+
+    def _on_fog_tier_changed(self, index: int) -> None:
+        if self._suppress or not (0 <= index < self.fog_max_tier.count()):
+            return
+        tier = self.fog_max_tier.itemData(index)
+        if tier is None:
+            return
+        self._settings.setValue("map/fog_max_tier", str(tier))
+        self._emit_changed()
 
     def _on_distance_round_changed(self, index: int) -> None:
         if self._suppress or not (0 <= index < len(DISTANCE_ROUND_CHOICES)):

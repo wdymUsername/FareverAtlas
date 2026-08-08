@@ -23,6 +23,7 @@ from ..controls import (
     SlideSwitch,
 )
 from ..pages.map.data import MapTexture, Snapshot
+from ..pages.map.fog import FOW_TIER_LABELS, FOW_TIER_ORDER
 from ..pages.codex.page import CodexPage, CodexPageMixin
 from ..pages.map.page import MapPage, MapPageMixin
 from ..pages.map.radar import RadarWidget
@@ -113,6 +114,17 @@ class AtlasWindow(
             if saved_active_id > 0 and waypoint_store.get(saved_active_id) is not None
             else None
         )
+        self._init_gather_nav_state()
+        saved_gather_kind = str(
+            self._settings.value("map/gather_nav_kind", "plant") or "plant"
+        ).strip().lower()
+        if saved_gather_kind in {"plant", "ore", "chest"}:
+            self.gather_nav_kind = saved_gather_kind
+        saved_gather_size = str(
+            self._settings.value("map/gather_nav_size", "large") or ""
+        ).strip().lower()
+        if saved_gather_size in {"", "small", "medium", "large"}:
+            self.gather_nav_size = saved_gather_size
         self.waypoint_manager_overlay: WaypointManagerOverlay | None = None
         self.latest_snapshot = Snapshot({}, [], False, "Waiting for bridge output", None)
         self._connection_signature: tuple[object, ...] | None = None
@@ -359,6 +371,19 @@ class AtlasWindow(
         self.recenter_animation.setDuration(160)
         self.recenter_animation.valueChanged.connect(self._overlay_animation_step)
 
+        self.fog_cycle = QtWidgets.QToolButton()
+        self.fog_cycle.setObjectName("centerButton")
+        self.fog_cycle.setFixedHeight(26)
+        self.fog_cycle.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        self.fog_cycle.setToolTip(
+            "Cycle fog accessible tiers (prototype).\n"
+            "Right-click toggles region outlines."
+        )
+        map_controls_layout.addWidget(self.fog_cycle)
+
         zoom_row = QtWidgets.QHBoxLayout()
         zoom_row.setContentsMargins(0, 0, 0, 0)
         zoom_row.setSpacing(2)
@@ -413,6 +438,7 @@ class AtlasWindow(
             ("Right-click", "Add or manage custom waypoints"),
             ("Double-click", "Recenter on player"),
             ("Mouse wheel", "Zoom"),
+            ("Fog button", "Cycle accessible regions (prototype)"),
         )
         for row, (gesture, action) in enumerate(controls, start=1):
             gesture_label = QtWidgets.QLabel(gesture)
@@ -504,6 +530,7 @@ class AtlasWindow(
             lambda: self._set_waypoint_manager_visible(False)
         )
         self.waypoint_manager_overlay.hide()
+        self._wire_gather_nav_panel()
         self._position_waypoint_overlays()
 
         self.main_navigation_overlay = MainNavigationOverlay(self, self._settings)
@@ -557,6 +584,11 @@ class AtlasWindow(
         self.zoom_out.clicked.connect(lambda: self._step_zoom(1))
         self.zoom_in.clicked.connect(lambda: self._step_zoom(-1))
         self.recenter.clicked.connect(self._recenter_map)
+        self.fog_cycle.clicked.connect(self._cycle_fog_tier)
+        self.fog_cycle.setContextMenuPolicy(
+            QtCore.Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        self.fog_cycle.customContextMenuRequested.connect(self._toggle_fog_outlines)
         self.map_help_button.toggled.connect(self._set_map_help_visible)
         self.radar.zoomRequested.connect(self._zoom_requested)
         self.radar.panStateChanged.connect(self._pan_state_changed)
@@ -1019,6 +1051,41 @@ class AtlasWindow(
         if hasattr(self, "_refresh_players_roster"):
             self._refresh_players_roster(force=True)
 
+    def _update_fog_cycle_button(self) -> None:
+        if not hasattr(self, "fog_cycle"):
+            return
+        tier = self.radar.fog.max_tier
+        if not self.radar.fog.enabled:
+            self.fog_cycle.setText("Fog off")
+            self.fog_cycle.setToolTip(
+                "Fog of war is disabled in Settings.\n"
+                "Right-click toggles region outlines."
+            )
+            return
+        label = FOW_TIER_LABELS.get(tier, tier)
+        self.fog_cycle.setText(f"Fog {tier}")
+        self.fog_cycle.setToolTip(
+            f"Accessible: {label}\n"
+            "Click to cycle tiers (prototype).\n"
+            "Right-click toggles region outlines."
+        )
+
+    def _cycle_fog_tier(self) -> None:
+        result = self.radar.fog.cycle_max_tier()
+        self._settings.setValue("map/fog_enabled", self.radar.fog.enabled)
+        if self.radar.fog.enabled:
+            self._settings.setValue("map/fog_max_tier", self.radar.fog.max_tier)
+        self._update_fog_cycle_button()
+        del result
+        self.radar.update()
+
+    def _toggle_fog_outlines(self, _pos: QtCore.QPoint = None) -> None:
+        del _pos
+        self.radar.fog.show_outlines = not self.radar.fog.show_outlines
+        self._settings.setValue("map/fog_show_outlines", self.radar.fog.show_outlines)
+        self._update_fog_cycle_button()
+        self.radar.update()
+
     def _pan_state_changed(self, panned: bool) -> None:
         self.recenter.setEnabled(panned or self.radar.is_following())
         self.recenter_animation.stop()
@@ -1121,6 +1188,14 @@ class AtlasWindow(
         self.radar.show_route_line = self._setting_bool("map/show_route_line", True)
         self.radar.heading_up = False
         self.radar.rounded = False
+        self.radar.fog.enabled = self._setting_bool("map/fog_enabled", True)
+        self.radar.fog.show_outlines = self._setting_bool("map/fog_show_outlines", True)
+        self.radar.fog.hide_markers = self._setting_bool("map/fog_hide_markers", True)
+        fog_tier = str(self._settings.value("map/fog_max_tier", "Z2") or "Z2").upper()
+        if fog_tier not in FOW_TIER_ORDER:
+            fog_tier = "Z2"
+        self.radar.fog.set_max_tier(fog_tier)
+        self._update_fog_cycle_button()
         poi_visibility = {
             kind: button.isChecked() for kind, button in self.poi_filters.items()
         }
@@ -1173,6 +1248,10 @@ class AtlasWindow(
         self._settings.setValue("map/show_collectibles", any(loot_visibility.values()))
         self._settings.setValue("map/show_enemies", self.radar.show_enemies)
         self._settings.setValue("map/show_players", self.radar.show_players)
+        self._settings.setValue("map/fog_enabled", self.radar.fog.enabled)
+        self._settings.setValue("map/fog_show_outlines", self.radar.fog.show_outlines)
+        self._settings.setValue("map/fog_hide_markers", self.radar.fog.hide_markers)
+        self._settings.setValue("map/fog_max_tier", self.radar.fog.max_tier)
         # Retain the aggregate key only for downgrade compatibility.
         self._settings.setValue(
             "map/show_custom_waypoints", bool(visible_custom_waypoints)
@@ -1259,6 +1338,7 @@ class AtlasWindow(
         # Static file POIs always feed the radar: landmarks (obelisk/etc.) and
         # out-of-range loot. Live interactibles overlay loot when in range.
         self.radar.set_snapshot(snapshot)
+        self._gather_nav_tick(snapshot)
         self._update_dps_overlay(
             snapshot.state if isinstance(snapshot.state, dict) else {}
         )

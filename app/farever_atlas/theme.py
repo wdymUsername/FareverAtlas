@@ -946,6 +946,70 @@ QWidget#minimapSidebar {
     border: 1px solid #3a4856;
     border-radius: 7px;
 }
+QTabWidget#sidebarTabs {
+    background: transparent;
+    border: none;
+}
+QTabWidget#sidebarTabs::pane {
+    background: transparent;
+    border: none;
+    top: 0;
+}
+QTabWidget#sidebarTabs QTabBar {
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid #2e3e4b;
+}
+QTabWidget#sidebarTabs QTabBar::tab {
+    min-height: 22px;
+    max-height: 22px;
+    color: #7f929f;
+    background: transparent;
+    border: none;
+    padding: 0 8px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+}
+QTabWidget#sidebarTabs QTabBar::tab:hover {
+    color: #d8e3e9;
+}
+QTabWidget#sidebarTabs QTabBar::tab:selected {
+    color: #eef4f8;
+    border-bottom: 2px solid #6f8fa3;
+}
+QLabel#gatherNavFieldLabel {
+    color: #7f91a0;
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+    background: transparent;
+    border: none;
+}
+QToolButton#gatherNavSidebarButton {
+    color: #b9c5cf;
+    background: #111922;
+    border: 1px solid #344352;
+    border-radius: 4px;
+    padding: 0 8px;
+    font-size: 9px;
+    font-weight: 600;
+}
+QToolButton#gatherNavSidebarButton:hover {
+    color: #ffffff;
+    background: #203546;
+    border-color: #55778f;
+}
+QToolButton#gatherNavSidebarButton:checked {
+    color: #eef4f8;
+    background: #203546;
+    border-color: #6a8da5;
+}
+QToolButton#gatherNavSidebarButton:disabled {
+    color: #667682;
+    background: #10171e;
+    border-color: #293945;
+}
 QScrollArea#sidebarScroll {
     background: transparent;
     border: none;
@@ -1363,6 +1427,51 @@ QFrame#waypointConfirmOverlay {
     background: #0b1016;
     border: 1px solid #344352;
     border-radius: 8px;
+}
+QWidget#gatherNavPanel {
+    background: transparent;
+    border: none;
+}
+QComboBox#gatherNavCombo {
+    color: #dce6ee;
+    background: #111922;
+    border: 1px solid #344352;
+    border-radius: 4px;
+    padding: 3px 6px;
+    min-height: 22px;
+    font-size: 10px;
+}
+QComboBox#gatherNavCombo:hover {
+    border-color: #55778f;
+}
+QComboBox#gatherNavCombo::drop-down {
+    border: none;
+    width: 18px;
+}
+QComboBox#gatherNavCombo QAbstractItemView {
+    color: #dce6ee;
+    background: #111922;
+    border: 1px solid #344352;
+    selection-background-color: #203546;
+    outline: none;
+}
+QFrame#gatherNavStatus {
+    background: #10171e;
+    border: 1px solid #293945;
+    border-radius: 4px;
+}
+QLabel#gatherNavStatusTitle {
+    color: #dce6ee;
+    font-size: 10px;
+    font-weight: 700;
+    background: transparent;
+    border: none;
+}
+QLabel#gatherNavStatusDetail {
+    color: #91a1ad;
+    font-size: 9px;
+    background: transparent;
+    border: none;
 }
 QFrame#waypointEditOverlay QLabel {
     color: #aab9c5;

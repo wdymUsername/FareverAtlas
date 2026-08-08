@@ -15,6 +15,7 @@ from ...config import (
     safe_int,
 )
 from .data import MapTexture, Snapshot
+from .fog import FogOfWar
 
 
 class RadarWidget(QtWidgets.QWidget):
@@ -83,6 +84,7 @@ class RadarWidget(QtWidgets.QWidget):
         # Metres of |Δz| before a marker gets an up/down chevron.
         self.z_indicator_threshold = 2.0
         self.active_custom_waypoint_id: int | None = None
+        self.active_gather_target: dict[str, Any] | None = None
         self.radius_m = 200.0
         self.target_radius_m = 200.0
         self.heading_up = False
@@ -108,6 +110,7 @@ class RadarWidget(QtWidgets.QWidget):
         }
         self.show_texture = True
         self.rounded = False
+        self.fog = FogOfWar.load()
         self.map_texture = map_texture
         self._waypoint_icon_cache: dict[int, QtGui.QImage] = {}
         self._loose_kind_icon_cache: dict[str, QtGui.QImage] = {}
@@ -277,6 +280,12 @@ class RadarWidget(QtWidgets.QWidget):
         self.custom_waypoints = [dict(item) for item in waypoints]
         self.show_custom_waypoints = bool(visible)
         self.active_custom_waypoint_id = active_id
+
+    def set_gather_target(self, target: dict[str, Any] | None) -> None:
+        if target is None:
+            self.active_gather_target = None
+        else:
+            self.active_gather_target = dict(target)
         self.update()
 
     def _raw_player(self) -> dict[str, Any]:
@@ -537,6 +546,13 @@ class RadarWidget(QtWidgets.QWidget):
         instance = self._instance_state()
         kind = str(instance.get("type") or "").strip().lower()
         return kind in {"dungeon", "rift", "instance"} or bool(instance.get("is_dungeon"))
+
+    def _fog_hides_point(self, x: float, y: float) -> bool:
+        if not self.fog.enabled or not self.fog.hide_markers:
+            return False
+        if not (math.isfinite(x) and math.isfinite(y)):
+            return False
+        return not self.fog.world_is_accessible(x, y)
 
     def map_status(self) -> str:
         if self.map_texture is None:
@@ -1455,6 +1471,15 @@ class RadarWidget(QtWidgets.QWidget):
                 painter.drawImage(viewport, fallback)
             painter.restore()
             painter.fillPath(clip_shape, QtGui.QColor(0, 0, 0, 24))
+            if map_drawn:
+                self.fog.paint(
+                    painter,
+                    viewport=viewport,
+                    center=center,
+                    pixels_per_metre=pixels_per_metre,
+                    view_center=view_center,
+                    world_to_screen=self._world_to_screen,
+                )
         elif local_instance:
             painter.fillPath(clip_shape, QtGui.QColor("#0a0f08"))
             instance = self._instance_state()
@@ -1514,22 +1539,12 @@ class RadarWidget(QtWidgets.QWidget):
                     return False
             return True
 
-        def _loot_kinds_compatible(static_kind: str, live_kind: str) -> bool:
-            if static_kind == live_kind:
-                return True
-            if live_kind == "gatherable" and static_kind in {"plant", "ore"}:
-                return True
-            if static_kind == "gatherable" and live_kind in {"plant", "ore"}:
-                return True
-            return False
-
         # Live gatherables/chests — world and local instance modes.
         live_nodes = (
             self.state.get("interactibles", []) if isinstance(self.state, dict) else []
         )
         if not isinstance(live_nodes, list):
             live_nodes = []
-        live_loot_samples: list[tuple[str, float, float]] = []
         if enabled_loot_kinds:
             for poi in live_nodes:
                 if not isinstance(poi, dict):
@@ -1537,10 +1552,11 @@ class RadarWidget(QtWidgets.QWidget):
                 kind = str(poi.get("kind", "")).strip().lower()
                 if kind not in collectible_kinds or not _loot_kind_visible(kind):
                     continue
-                lx = safe_float(poi.get("x"), math.nan)
-                ly = safe_float(poi.get("y"), math.nan)
-                if math.isfinite(lx) and math.isfinite(ly):
-                    live_loot_samples.append((kind, lx, ly))
+                if self._fog_hides_point(
+                    safe_float(poi.get("x"), math.nan),
+                    safe_float(poi.get("y"), math.nan),
+                ):
+                    continue
                 if not self._world_in_view(poi, view_center, viewport):
                     continue
                 point = self._world_to_screen(poi, center, pixels_per_metre, view_center)
@@ -1570,25 +1586,12 @@ class RadarWidget(QtWidgets.QWidget):
                     )
                 )
 
-        def _covered_by_live_loot(poi: dict[str, Any], kind: str) -> bool:
-            if not live_loot_samples:
-                return False
-            px = safe_float(poi.get("x"), math.nan)
-            py = safe_float(poi.get("y"), math.nan)
-            if not (math.isfinite(px) and math.isfinite(py)):
-                return False
-            match_m = self.LOOT_LIVE_MATCH_M
-            for live_kind, lx, ly in live_loot_samples:
-                if not _loot_kinds_compatible(kind, live_kind):
-                    continue
-                if math.hypot(px - lx, py - ly) <= match_m:
-                    return True
-            return False
-
-        # Static file markers. Landmarks always; in-range loot suppressed only
-        # when a live interactible covers that marker (empty live feed keeps
-        # the file markers so a failed sweep does not blank the bubble).
+        # Static file markers. Landmarks always. Inside the live interactible
+        # bubble, collectibles come only from the live feed — so collected /
+        # missing nodes disappear until they respawn (empty feed keeps file
+        # markers so a failed sweep does not blank the map).
         if (enabled_poi_kinds or enabled_loot_kinds) and not local_instance:
+            live_feed_active = bool(live_nodes)
             for poi in self.pois:
                 if not isinstance(poi, dict):
                     continue
@@ -1600,8 +1603,8 @@ class RadarWidget(QtWidgets.QWidget):
                     # Red orbs have no live bridge feed — always use the file.
                     if (
                         kind != "red_orb"
+                        and live_feed_active
                         and _in_loot_live_range(poi)
-                        and _covered_by_live_loot(poi, kind)
                     ):
                         continue
                 elif kind in self.poi_kind_visibility:
@@ -1611,6 +1614,11 @@ class RadarWidget(QtWidgets.QWidget):
                     # Preserve forward compatibility for unknown non-loot marker
                     # kinds without adding a premature UI category. Unknown kinds
                     # are shown only when the complete POI group is enabled.
+                    continue
+                if self._fog_hides_point(
+                    safe_float(poi.get("x"), math.nan),
+                    safe_float(poi.get("y"), math.nan),
+                ):
                     continue
                 if not self._world_in_view(poi, view_center, viewport):
                     continue
@@ -1657,6 +1665,44 @@ class RadarWidget(QtWidgets.QWidget):
                         )
                     )
 
+        player_x = safe_float(player.get("x"), math.nan)
+        player_y = safe_float(player.get("y"), math.nan)
+        gather_target = (
+            self.active_gather_target
+            if isinstance(self.active_gather_target, dict)
+            else None
+        )
+        if (
+            gather_target is not None
+            and self.show_route_line
+            and math.isfinite(player_x)
+            and math.isfinite(player_y)
+        ):
+            gather_x = safe_float(gather_target.get("x"), math.nan)
+            gather_y = safe_float(gather_target.get("y"), math.nan)
+            if math.isfinite(gather_x) and math.isfinite(gather_y):
+                player_point_for_route = self._world_to_screen(
+                    player, center, pixels_per_metre, view_center
+                )
+                destination_point = self._world_to_screen(
+                    gather_target, center, pixels_per_metre, view_center
+                )
+                route_color = QtGui.QColor(
+                    self._poi_color(str(gather_target.get("kind") or "plant"))
+                )
+                route_color.setAlpha(160)
+                painter.setPen(
+                    QtGui.QPen(route_color, 1.8, QtCore.Qt.PenStyle.DashLine)
+                )
+                painter.drawLine(player_point_for_route, destination_point)
+                self._draw_poi_marker(
+                    painter,
+                    destination_point,
+                    str(gather_target.get("kind") or "plant"),
+                    "",
+                    size=str(gather_target.get("size") or ""),
+                )
+
         active_waypoint: dict[str, Any] | None = None
         if self.show_custom_waypoints:
             for waypoint in self.custom_waypoints:
@@ -1666,9 +1712,13 @@ class RadarWidget(QtWidgets.QWidget):
                     active_waypoint = waypoint
                     break
 
-            player_x = safe_float(player.get("x"), math.nan)
-            player_y = safe_float(player.get("y"), math.nan)
-            if active_waypoint is not None and self.show_route_line and math.isfinite(player_x) and math.isfinite(player_y):
+            if (
+                gather_target is None
+                and active_waypoint is not None
+                and self.show_route_line
+                and math.isfinite(player_x)
+                and math.isfinite(player_y)
+            ):
                 player_point_for_route = self._world_to_screen(
                     player, center, pixels_per_metre, view_center
                 )
@@ -1689,6 +1739,11 @@ class RadarWidget(QtWidgets.QWidget):
 
             for waypoint in self.custom_waypoints:
                 if not isinstance(waypoint, dict):
+                    continue
+                if self._fog_hides_point(
+                    safe_float(waypoint.get("x"), math.nan),
+                    safe_float(waypoint.get("y"), math.nan),
+                ):
                     continue
                 if not self._world_in_view(waypoint, view_center, viewport, 24.0):
                     continue
@@ -1711,6 +1766,8 @@ class RadarWidget(QtWidgets.QWidget):
                 enemy_x = safe_float(enemy.get("x"), math.nan)
                 enemy_y = safe_float(enemy.get("y"), math.nan)
                 if not (math.isfinite(enemy_x) and math.isfinite(enemy_y)):
+                    continue
+                if self._fog_hides_point(enemy_x, enemy_y):
                     continue
                 if not self._world_in_view(enemy, view_center, viewport, 10.0):
                     continue
@@ -1752,6 +1809,8 @@ class RadarWidget(QtWidgets.QWidget):
                 other_x = safe_float(other.get("x"), math.nan)
                 other_y = safe_float(other.get("y"), math.nan)
                 if not (math.isfinite(other_x) and math.isfinite(other_y)):
+                    continue
+                if self._fog_hides_point(other_x, other_y):
                     continue
                 edge_pad = 28.0 if self.show_player_names else 14.0
                 if not self._world_in_view(other, view_center, viewport, edge_pad):
@@ -1826,6 +1885,8 @@ class RadarWidget(QtWidgets.QWidget):
             member_x = safe_float(member.get("x"), math.nan)
             member_y = safe_float(member.get("y"), math.nan)
             if not (math.isfinite(member_x) and math.isfinite(member_y)):
+                continue
+            if self._fog_hides_point(member_x, member_y):
                 continue
             member_uid = str(member.get("uid") or "")
             if player_uid and member_uid == player_uid:
