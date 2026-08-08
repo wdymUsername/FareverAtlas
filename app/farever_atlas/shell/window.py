@@ -12,6 +12,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from ..config import (
     LOOSE_KIND_ICON_FILES,
     ASSET_ROOT,
+    discover_project_asset,
     fmt_hp,
     fmt_number,
     safe_float,
@@ -634,6 +635,11 @@ class AtlasWindow(
             persist=False,
             animate=False,
         )
+        if self.dev_mode and hasattr(self, "_set_fow_tools_collapsed"):
+            self._set_fow_tools_collapsed(
+                self._setting_bool("map/fow_tools_collapsed", True),
+                persist=False,
+            )
         self._controls_changed()
         self._custom_waypoints_changed()
         self._apply_user_settings()
@@ -876,6 +882,29 @@ class AtlasWindow(
 
     def _init_map_fow_edit_overlay(self) -> None:
         """Dev-only FOW / zone edit controls (separate from zoom overlay)."""
+        icon_path = discover_project_asset("fog.svg") or (ASSET_ROOT / "fog.svg")
+        fow_icon = (
+            QtGui.QIcon(str(icon_path)) if icon_path.is_file() else QtGui.QIcon()
+        )
+
+        # Collapsed: bare FAB on the radar (no panel chrome / margins).
+        self.fow_tools_fab = QtWidgets.QToolButton(self.radar)
+        self.fow_tools_fab.setObjectName("fowToolsFab")
+        self.fow_tools_fab.setToolTip("Open FOW TOOLS")
+        self.fow_tools_fab.setFixedSize(28, 28)
+        self.fow_tools_fab.setIconSize(QtCore.QSize(16, 16))
+        self.fow_tools_fab.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.fow_tools_fab.setAutoRaise(False)
+        self.fow_tools_fab.setAttribute(
+            QtCore.Qt.WidgetAttribute.WA_NoMousePropagation, True
+        )
+        if not fow_icon.isNull():
+            self.fow_tools_fab.setIcon(fow_icon)
+        else:
+            self.fow_tools_fab.setText("FOW")
+        self.fow_tools_fab.clicked.connect(self._on_fow_tools_fab_clicked)
+
+        # Expanded panel only — never used as the collapsed chrome.
         self.map_fow_edit_overlay = QtWidgets.QWidget(self.radar)
         self.map_fow_edit_overlay.setObjectName("mapFowEditOverlay")
         self.map_fow_edit_overlay.setAttribute(
@@ -884,6 +913,58 @@ class AtlasWindow(
         layout = QtWidgets.QVBoxLayout(self.map_fow_edit_overlay)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
+
+        self.fow_tools_header = QtWidgets.QWidget()
+        self.fow_tools_header.setObjectName("fowToolsHeader")
+        header_layout = QtWidgets.QHBoxLayout(self.fow_tools_header)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(6)
+
+        self.fow_tools_header_icon = QtWidgets.QLabel()
+        self.fow_tools_header_icon.setObjectName("fowToolsHeaderIcon")
+        self.fow_tools_header_icon.setFixedSize(18, 18)
+        self.fow_tools_header_icon.setAttribute(
+            QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents
+        )
+        if not fow_icon.isNull():
+            self.fow_tools_header_icon.setPixmap(
+                fow_icon.pixmap(QtCore.QSize(16, 16))
+            )
+        header_layout.addWidget(
+            self.fow_tools_header_icon, 0, QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+
+        self.fow_tools_title = QtWidgets.QLabel("FOW TOOLS")
+        self.fow_tools_title.setObjectName("fowToolsTitle")
+        self.fow_tools_title.setAttribute(
+            QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents
+        )
+        header_layout.addWidget(
+            self.fow_tools_title, 0, QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        header_layout.addStretch(1)
+
+        self.fow_tools_close = QtWidgets.QToolButton()
+        self.fow_tools_close.setObjectName("fowToolsCloseButton")
+        self.fow_tools_close.setToolTip("Close FOW TOOLS")
+        self.fow_tools_close.setFixedSize(22, 22)
+        self.fow_tools_close.setIconSize(QtCore.QSize(12, 12))
+        self.fow_tools_close.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        close_icon = discover_project_asset("close.svg") or (ASSET_ROOT / "close.svg")
+        if close_icon.is_file():
+            self.fow_tools_close.setIcon(QtGui.QIcon(str(close_icon)))
+        else:
+            self.fow_tools_close.setText("×")
+        header_layout.addWidget(
+            self.fow_tools_close, 0, QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        layout.addWidget(self.fow_tools_header)
+
+        self.fow_tools_body = QtWidgets.QWidget()
+        self.fow_tools_body.setObjectName("fowToolsBody")
+        body = QtWidgets.QVBoxLayout(self.fow_tools_body)
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(6)
 
         def section(title: str) -> QtWidgets.QLabel:
             label = QtWidgets.QLabel(title)
@@ -924,9 +1005,9 @@ class AtlasWindow(
         )
         top_row.addWidget(self.fog_toggle_button)
         top_row.addWidget(self.fog_feather_button)
-        layout.addLayout(top_row)
+        body.addLayout(top_row)
 
-        layout.addWidget(section("ZONES"))
+        body.addWidget(section("ZONES"))
         self.fog_layer_buttons: dict[str, QtWidgets.QToolButton] = {}
         zone_groups = (
             ("Ship", [layer for layer in FOW_LAYER_ORDER if layer == "Baked"]),
@@ -985,7 +1066,7 @@ class AtlasWindow(
                 group_row.addWidget(btn)
             if group_title in {"Ship", "Z0", "Z3+"}:
                 group_row.addStretch(1)
-            layout.addLayout(group_row)
+            body.addLayout(group_row)
 
         self.fow_bake_all_button = tool_button(
             "Bake all → Baked",
@@ -994,7 +1075,7 @@ class AtlasWindow(
                 "into the shipping Baked asset, then disable the other zone layers."
             ),
         )
-        layout.addWidget(self.fow_bake_all_button)
+        body.addWidget(self.fow_bake_all_button)
 
         self.z4_align_container = QtWidgets.QWidget()
         z4_align_layout = QtWidgets.QVBoxLayout(self.z4_align_container)
@@ -1116,9 +1197,9 @@ class AtlasWindow(
         z4_align_layout.addWidget(self.z4_status_label)
 
         self.z4_align_container.hide()
-        layout.addWidget(self.z4_align_container)
+        body.addWidget(self.z4_align_container)
 
-        layout.addWidget(section("CUSTOM"))
+        body.addWidget(section("CUSTOM"))
         fow_line_row = QtWidgets.QHBoxLayout()
         fow_line_row.setContentsMargins(0, 0, 0, 0)
         fow_line_row.setSpacing(4)
@@ -1137,11 +1218,56 @@ class AtlasWindow(
             self.fow_line_clear_button,
         ):
             fow_line_row.addWidget(btn)
-        layout.addLayout(fow_line_row)
+        body.addLayout(fow_line_row)
 
-        self.map_fow_edit_overlay.setFixedWidth(188)
+        layout.addWidget(self.fow_tools_body)
+
+        self.fow_tools_fab_size = 28
+        self.fow_tools_expanded_width = 188
+        self.map_fow_edit_overlay.setFixedWidth(self.fow_tools_expanded_width)
         self.map_fow_edit_overlay.adjustSize()
-        self.map_fow_edit_overlay.raise_()
+        self.fow_tools_collapsed = True
+        self.map_fow_edit_overlay.hide()
+        self.fow_tools_fab.show()
+        self.fow_tools_fab.raise_()
+        self.fow_tools_close.clicked.connect(self._close_fow_tools)
+
+    def _on_fow_tools_fab_clicked(self) -> None:
+        if getattr(self, "fow_tools_collapsed", True):
+            self._set_fow_tools_collapsed(False)
+
+    def _close_fow_tools(self) -> None:
+        if not getattr(self, "fow_tools_collapsed", True):
+            self._set_fow_tools_collapsed(True)
+
+    def _set_fow_tools_collapsed(
+        self,
+        collapsed: bool,
+        *,
+        persist: bool = True,
+    ) -> None:
+        if not hasattr(self, "map_fow_edit_overlay") or not hasattr(
+            self, "fow_tools_fab"
+        ):
+            return
+        self.fow_tools_collapsed = bool(collapsed)
+        if self.fow_tools_collapsed:
+            self.fow_tools_fab.show()
+            self.fow_tools_fab.raise_()
+            self.map_fow_edit_overlay.hide()
+        else:
+            self.fow_tools_fab.hide()
+            self.map_fow_edit_overlay.setFixedWidth(
+                int(getattr(self, "fow_tools_expanded_width", 188))
+            )
+            self.map_fow_edit_overlay.adjustSize()
+            self.map_fow_edit_overlay.show()
+            self.map_fow_edit_overlay.raise_()
+        self._position_map_overlays()
+        if persist:
+            self._settings.setValue(
+                "map/fow_tools_collapsed", self.fow_tools_collapsed
+            )
 
     def _position_map_overlays(self) -> None:
         if not hasattr(self, "map_controls_overlay") or not hasattr(self, "sidebar"):
@@ -1243,19 +1369,40 @@ class AtlasWindow(
         self.map_controls_overlay.raise_()
 
         if hasattr(self, "map_fow_edit_overlay"):
-            self.map_fow_edit_overlay.adjustSize()
             fow_x = max(
                 margin,
-                self.radar.width() - self.map_fow_edit_overlay.width() - margin,
+                self.radar.width()
+                - (
+                    int(getattr(self, "fow_tools_fab_size", 28))
+                    if getattr(self, "fow_tools_collapsed", True)
+                    else self.map_fow_edit_overlay.width()
+                )
+                - margin,
             )
-            fow_y = margin
-            # Keep clear of the zoom overlay if the canvas is short.
-            zoom_top = self.map_controls_overlay.y()
-            max_bottom = zoom_top - 8
-            if fow_y + self.map_fow_edit_overlay.height() > max_bottom:
-                fow_y = max(margin, max_bottom - self.map_fow_edit_overlay.height())
-            self.map_fow_edit_overlay.move(fow_x, max(margin, fow_y))
-            self.map_fow_edit_overlay.raise_()
+            if getattr(self, "fow_tools_collapsed", True) and hasattr(
+                self, "fow_tools_fab"
+            ):
+                fab = self.fow_tools_fab
+                fab_size = int(getattr(self, "fow_tools_fab_size", 28))
+                fab.resize(fab_size, fab_size)
+                fab.move(fow_x, margin)
+                fab.raise_()
+            else:
+                self.map_fow_edit_overlay.adjustSize()
+                fow_y = margin
+                # Keep clear of the zoom overlay if the canvas is short.
+                zoom_top = self.map_controls_overlay.y()
+                max_bottom = zoom_top - 8
+                if fow_y + self.map_fow_edit_overlay.height() > max_bottom:
+                    fow_y = max(
+                        margin, max_bottom - self.map_fow_edit_overlay.height()
+                    )
+                fow_x = max(
+                    margin,
+                    self.radar.width() - self.map_fow_edit_overlay.width() - margin,
+                )
+                self.map_fow_edit_overlay.move(fow_x, max(margin, fow_y))
+                self.map_fow_edit_overlay.raise_()
 
         if hasattr(self, "map_help_button") and hasattr(self, "map_help_panel"):
             help_x = (
@@ -1267,11 +1414,20 @@ class AtlasWindow(
                 margin,
                 self.map_controls_overlay.y() - self.map_help_button.height() - 4,
             )
-            if hasattr(self, "map_fow_edit_overlay"):
-                fow_bottom = (
-                    self.map_fow_edit_overlay.y()
-                    + self.map_fow_edit_overlay.height()
-                )
+            if hasattr(self, "map_fow_edit_overlay") or hasattr(self, "fow_tools_fab"):
+                if getattr(self, "fow_tools_collapsed", True) and hasattr(
+                    self, "fow_tools_fab"
+                ):
+                    fow_bottom = (
+                        self.fow_tools_fab.y() + self.fow_tools_fab.height()
+                    )
+                elif hasattr(self, "map_fow_edit_overlay"):
+                    fow_bottom = (
+                        self.map_fow_edit_overlay.y()
+                        + self.map_fow_edit_overlay.height()
+                    )
+                else:
+                    fow_bottom = margin
                 help_y = max(help_y, fow_bottom + 4)
             self.map_help_button.move(help_x, help_y)
             self.map_help_button.raise_()
