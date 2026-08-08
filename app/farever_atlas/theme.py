@@ -1115,7 +1115,8 @@ QToolButton:checked {
     background: #285f8b;
     border-color: #3979a9;
 }
-QWidget#mapControlsOverlay {
+QWidget#mapControlsOverlay,
+QWidget#mapFowEditOverlay {
     background: rgba(16, 23, 31, 218);
     border: 1px solid #3a4856;
     border-radius: 7px;
@@ -1142,23 +1143,87 @@ QLabel#zoomValue {
     font-weight: 600;
     letter-spacing: 1px;
 }
-QWidget#mapControlsOverlay QToolButton#centerButton {
+QWidget#mapControlsOverlay QToolButton#centerButton,
+QWidget#mapFowEditOverlay QToolButton#centerButton,
+QWidget#mapFowEditOverlay QToolButton#fowEditButton {
     min-height: 24px;
     max-height: 24px;
-    padding: 0;
+    padding: 0 4px;
     text-align: center;
     font-size: 10px;
     font-weight: 600;
-    letter-spacing: 1px;
-    background: transparent;
+    letter-spacing: 0.5px;
+    color: #b7c3cf;
+    background: #1a242e;
+    border: 1px solid #3a4856;
+    border-radius: 4px;
 }
-QWidget#mapControlsOverlay QToolButton#centerButton:hover {
+QWidget#mapControlsOverlay QToolButton#centerButton:hover,
+QWidget#mapFowEditOverlay QToolButton#centerButton:hover,
+QWidget#mapFowEditOverlay QToolButton#fowEditButton:hover {
+    color: #e4ebf1;
     background: #263440;
     border-color: #455769;
 }
-QWidget#mapControlsOverlay QToolButton#centerButton:disabled {
+QWidget#mapControlsOverlay QToolButton#centerButton:checked,
+QWidget#mapFowEditOverlay QToolButton#centerButton:checked,
+QWidget#mapFowEditOverlay QToolButton#fowEditButton:checked {
+    color: #ffffff;
+    background: #285f8b;
+    border-color: #3979a9;
+}
+QWidget#mapControlsOverlay QToolButton#centerButton:disabled,
+QWidget#mapFowEditOverlay QToolButton#centerButton:disabled,
+QWidget#mapFowEditOverlay QToolButton#fowEditButton:disabled {
     color: #687582;
-    background: transparent;
+    background: #151c24;
+    border-color: #2c3845;
+}
+QWidget#mapFowEditOverlay QToolButton#fowEditButton[inverted="true"] {
+    border-color: #c48a3a;
+}
+QWidget#mapFowEditOverlay QToolButton#fowEditButton[inverted="true"]:checked {
+    border-color: #e0a84a;
+}
+QLabel#fowEditSection {
+    color: #6f7f90;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1.2px;
+    padding: 2px 0 0 0;
+}
+QLabel#fowEditStatus {
+    color: #8493a2;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+    padding: 2px 0;
+}
+QComboBox#fowEditCombo {
+    min-height: 24px;
+    max-height: 24px;
+    padding: 0 6px;
+    color: #b7c3cf;
+    font-size: 10px;
+    font-weight: 600;
+    background: #1a242e;
+    border: 1px solid #3a4856;
+    border-radius: 4px;
+}
+QComboBox#fowEditCombo:hover,
+QComboBox#fowEditCombo:focus {
+    border-color: #455769;
+    color: #e4ebf1;
+}
+QComboBox#fowEditCombo::drop-down {
+    width: 16px;
+    border: none;
+}
+QComboBox#fowEditCombo QAbstractItemView {
+    background: #1a242e;
+    color: #e4ebf1;
+    border: 1px solid #3a4856;
+    selection-background-color: #285f8b;
 }
 QToolButton#mapHelpButton {
     min-width: 19px;

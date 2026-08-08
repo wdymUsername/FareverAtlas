@@ -16,6 +16,26 @@ from ...config import (
 )
 from .data import MapTexture, Snapshot
 from .fog import FogOfWar
+from .fow_layers import canonical_fow_layer
+
+# Built once: rebuilding these per marker cost ~7.6k QColor allocations a frame.
+_POI_COLORS: dict[str, QtGui.QColor] = {
+    "chest": QtGui.QColor("#e4b84a"),
+    "red_orb": QtGui.QColor("#e35b62"),
+    "plant": QtGui.QColor("#63c174"),
+    "ore": QtGui.QColor("#aeb6c2"),
+    "merchant": QtGui.QColor("#b785e5"),
+    "dungeon": QtGui.QColor("#f28c54"),
+    "activity": QtGui.QColor("#5ba6e6"),
+    "respawn": QtGui.QColor("#f0f0f0"),
+    "obelisk": QtGui.QColor("#7ce4df"),
+}
+_POI_COLOR_FALLBACK = QtGui.QColor("#9ba7b4")
+
+_COLLECTIBLE_KINDS = frozenset({"chest", "red_orb", "plant", "ore", "gatherable"})
+# Coarse enough that most views touch few buckets, fine enough that a bucket
+# holds a handful of POIs. Only used to narrow the per-frame view cull.
+_POI_GRID_CELL_M = 128.0
 
 
 class RadarWidget(QtWidgets.QWidget):
@@ -23,6 +43,9 @@ class RadarWidget(QtWidgets.QWidget):
     panStateChanged = QtCore.Signal(bool)
     customWaypointContextRequested = QtCore.Signal(object, object)
     playerContextRequested = QtCore.Signal(object)
+    fowLineToolChanged = QtCore.Signal(bool)
+    fowLineDraftChanged = QtCore.Signal()
+    fowLayerDirtyChanged = QtCore.Signal()
 
     # Zoom levels are defined against this reference canvas height. Window
     # resizing changes the visible world extent, not the world-to-pixel scale.
@@ -114,6 +137,17 @@ class RadarWidget(QtWidgets.QWidget):
         self.map_texture = map_texture
         self._waypoint_icon_cache: dict[int, QtGui.QImage] = {}
         self._loose_kind_icon_cache: dict[str, QtGui.QImage] = {}
+        # Marker rendering is the paint hot path: pre-render each marker variant
+        # to a pixmap and pre-parse the static POI file into flat tuples, both
+        # keyed on the marker filters so a filter change rebuilds them.
+        self._marker_sprite_cache: dict[
+            tuple[str, str, str, float], tuple[QtGui.QPixmap, float, float]
+        ] = {}
+        self._prepared_source: list[Any] | None = None
+        self._prepared_filters: tuple[Any, ...] | None = None
+        self._prepared_pois: list[tuple[Any, ...]] = []
+        self._poi_grid: dict[tuple[int, int], list[int]] = {}
+        self._poi_grid_origin: tuple[float, float] = (0.0, 0.0)
         self._player_arrow_icon_cache: QtGui.QImage | None = None
         self._player_arrow_icon_asset: str | None = None
         self._player_arrow_icon_missing = False
@@ -142,6 +176,32 @@ class RadarWidget(QtWidgets.QWidget):
         # The generation token prevents delayed callbacks from overriding a newer
         # hover state or a newly started drag.
         self._cursor_release_generation = 0
+
+        # FOW Points tool: edit vertices on the Align edit layer.
+        # Empty draft click starts a new ring; Close commits into the edit layer.
+        self._fow_line_tool = False
+        self._fow_line_draft: list[tuple[float, float]] = []
+        self._fow_line_cursor: tuple[float, float] | None = None
+        self._fow_edit_ring: int | None = None
+        self._fow_edit_vertex: int | None = None
+        self._fow_edit_dragging = False
+        self._fow_edit_drag_last_world: tuple[float, float] | None = None
+        self._fow_hover_ring: int | None = None
+        self._fow_hover_vertex: int | None = None
+        self._fow_hover_edge: int | None = None
+        self._fow_selected: set[tuple[int, int]] = set()
+        self._fow_marquee_origin: QtCore.QPointF | None = None
+        self._fow_marquee_current: QtCore.QPointF | None = None
+        self._fow_marquee_active = False
+        self._fow_marquee_add = False
+        self._fow_marquee_threshold_px = 5.0
+        self._fow_vertex_hit_px = 9.0
+        self._fow_edge_hit_px = 7.0
+        self._z4_drag_mode = False
+        self._z4_dragging = False
+        self._z4_drag_last_world: tuple[float, float] | None = None
+        self._fow_edit_layer = "Z4"
+        self.setFocusPolicy(QtCore.Qt.FocusPolicy.ClickFocus)
 
         # Telemetry arrives in discrete samples. Render a continuously interpolated
         # player pose so both map-follow movement and arrow rotation remain stable.
@@ -512,6 +572,389 @@ class RadarWidget(QtWidgets.QWidget):
             next_center = self.map_texture.clamp_world_center(*next_center)
         self.view_center_world = next_center
 
+    @property
+    def fow_line_tool_active(self) -> bool:
+        return self._fow_line_tool
+
+    @property
+    def fow_line_draft_count(self) -> int:
+        return len(self._fow_line_draft)
+
+    @property
+    def fow_edit_layer(self) -> str:
+        return self._fow_edit_layer
+
+    @property
+    def fow_selection_count(self) -> int:
+        return len(self._fow_selected)
+
+    def set_fow_edit_layer(self, tier: str) -> None:
+        key = canonical_fow_layer(tier)
+        if key is None:
+            return
+        if key == self._fow_edit_layer:
+            return
+        if self._fow_line_tool and self.fog.any_layer_dirty():
+            self.fog.bake_dirty_layers()
+            self.fowLayerDirtyChanged.emit()
+        self._fow_edit_layer = key
+        self._fow_line_draft.clear()
+        self._fow_line_cursor = None
+        self._fow_clear_edit_state()
+        if self._fow_line_tool:
+            self.fog.promote_layer_for_edit(key)
+            self.fowLayerDirtyChanged.emit()
+        self.fowLineDraftChanged.emit()
+        self.update()
+
+    def set_z4_drag_mode(self, active: bool) -> None:
+        active = bool(active)
+        if active == self._z4_drag_mode:
+            return
+        self._z4_drag_mode = active
+        self._z4_dragging = False
+        self._z4_drag_last_world = None
+        if active:
+            self.set_fow_line_tool(False)
+            self.setFocus(QtCore.Qt.FocusReason.OtherFocusReason)
+            self.setCursor(QtCore.Qt.CursorShape.SizeAllCursor)
+        elif not self._fow_line_tool:
+            self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        self.update()
+
+    @property
+    def z4_drag_mode_active(self) -> bool:
+        return self._z4_drag_mode
+
+    def set_fow_line_tool(self, active: bool) -> None:
+        active = bool(active)
+        if active == self._fow_line_tool:
+            return
+        if active:
+            self.set_z4_drag_mode(False)
+            self.fog.promote_layer_for_edit(self._fow_edit_layer)
+            self.fowLayerDirtyChanged.emit()
+        self._fow_line_tool = active
+        if not active:
+            if self.fog.any_layer_dirty():
+                self.fog.bake_dirty_layers()
+                self.fowLayerDirtyChanged.emit()
+            self._fow_line_draft.clear()
+            self._fow_line_cursor = None
+            self._fow_clear_edit_state()
+            self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        else:
+            self.setFocus(QtCore.Qt.FocusReason.OtherFocusReason)
+            self.setCursor(QtCore.Qt.CursorShape.CrossCursor)
+        self.fowLineToolChanged.emit(self._fow_line_tool)
+        self.fowLineDraftChanged.emit()
+        self.update()
+
+    def fow_line_undo(self) -> None:
+        if not self._fow_line_draft:
+            return
+        self._fow_line_draft.pop()
+        self.fowLineDraftChanged.emit()
+        self.update()
+
+    def fow_line_close(self) -> bool:
+        if len(self._fow_line_draft) < 3:
+            return False
+        layer = self._fow_edit_layer
+        rings = [list(ring) for ring in self.fog.source_rings(layer)]
+        local_ring = [
+            self.fog.layer_local_point(layer, float(x), float(y))
+            for x, y in self._fow_line_draft
+        ]
+        rings.append(local_ring)
+        self._fow_commit_rings(rings)
+        if not self.fog.layer_enabled(layer):
+            self.fog.set_layer_enabled(layer, True)
+        self._fow_line_draft.clear()
+        self._fow_line_cursor = None
+        self.fowLineDraftChanged.emit()
+        self.update()
+        return True
+
+    def fow_line_clear_custom(self) -> None:
+        """Clear editable rings for the current edit layer (session Clear)."""
+        self._fow_line_draft.clear()
+        self._fow_line_cursor = None
+        self._fow_clear_edit_state()
+        self._fow_commit_rings([])
+        self.fowLineDraftChanged.emit()
+        self.update()
+
+    def bake_fow_edit_layer(self) -> bool:
+        ok = self.fog.bake_layer(self._fow_edit_layer)
+        self.fowLayerDirtyChanged.emit()
+        self.update()
+        return ok
+
+    def reset_fow_edit_geometry(self) -> bool:
+        ok = self.fog.reset_layer_geometry(self._fow_edit_layer)
+        self._fow_clear_edit_state()
+        if self._fow_line_tool:
+            self.fog.promote_layer_for_edit(self._fow_edit_layer)
+        self.fowLayerDirtyChanged.emit()
+        self.fowLineDraftChanged.emit()
+        self.update()
+        return ok
+
+    def _fow_clear_edit_state(self) -> None:
+        self._fow_edit_ring = None
+        self._fow_edit_vertex = None
+        self._fow_edit_dragging = False
+        self._fow_edit_drag_last_world = None
+        self._fow_hover_ring = None
+        self._fow_hover_vertex = None
+        self._fow_hover_edge = None
+        self._fow_selected.clear()
+        self._fow_clear_marquee()
+
+    def _fow_clear_marquee(self) -> None:
+        self._fow_marquee_origin = None
+        self._fow_marquee_current = None
+        self._fow_marquee_active = False
+        self._fow_marquee_add = False
+
+    def _fow_commit_rings(self, rings: list[list[tuple[float, float]]]) -> None:
+        self.fog.set_editable_rings(self._fow_edit_layer, rings, mark_dirty=True)
+        self.fowLayerDirtyChanged.emit()
+
+    def _fow_line_add_vertex_at(self, screen_point: QtCore.QPointF) -> bool:
+        world = self.world_at_screen(screen_point)
+        if world is None:
+            return False
+        self._fow_line_draft.append((float(world["x"]), float(world["y"])))
+        self.fowLineDraftChanged.emit()
+        self.update()
+        return True
+
+    def _fow_screen_point(
+        self, x: float, y: float
+    ) -> QtCore.QPointF | None:
+        viewport = QtCore.QRectF(self.rect().adjusted(3, 3, -3, -3))
+        center = viewport.center()
+        view_center = self._view_center()
+        pixels_per_metre = self._pixels_per_metre()
+        if pixels_per_metre <= 1e-9:
+            return None
+        return self._world_to_screen(
+            {"x": x, "y": y}, center, pixels_per_metre, view_center
+        )
+
+    def _fow_hit_test(
+        self, screen_point: QtCore.QPointF
+    ) -> tuple[str, int, int] | None:
+        """Return ('vertex'|'edge', ring_index, index) or None."""
+        best_vertex: tuple[float, int, int] | None = None
+        best_edge: tuple[float, int, int] | None = None
+        for ring_i, ring in enumerate(
+            self.fog.transformed_layer_rings(self._fow_edit_layer)
+        ):
+            n = len(ring)
+            if n < 3:
+                continue
+            screen_pts: list[QtCore.QPointF] = []
+            for x, y in ring:
+                pt = self._fow_screen_point(x, y)
+                if pt is None:
+                    screen_pts = []
+                    break
+                screen_pts.append(pt)
+            if len(screen_pts) != n:
+                continue
+            for vert_i, pt in enumerate(screen_pts):
+                dist = math.hypot(
+                    pt.x() - screen_point.x(), pt.y() - screen_point.y()
+                )
+                if dist <= self._fow_vertex_hit_px and (
+                    best_vertex is None or dist < best_vertex[0]
+                ):
+                    best_vertex = (dist, ring_i, vert_i)
+            for edge_i in range(n):
+                a = screen_pts[edge_i]
+                b = screen_pts[(edge_i + 1) % n]
+                dist, _t, _proj = self._point_segment_distance(screen_point, a, b)
+                if dist <= self._fow_edge_hit_px and (
+                    best_edge is None or dist < best_edge[0]
+                ):
+                    best_edge = (dist, ring_i, edge_i)
+        if best_vertex is not None:
+            return ("vertex", best_vertex[1], best_vertex[2])
+        if best_edge is not None:
+            return ("edge", best_edge[1], best_edge[2])
+        return None
+
+    @staticmethod
+    def _point_segment_distance(
+        point: QtCore.QPointF, a: QtCore.QPointF, b: QtCore.QPointF
+    ) -> tuple[float, float, QtCore.QPointF]:
+        ax, ay = a.x(), a.y()
+        bx, by = b.x(), b.y()
+        dx, dy = bx - ax, by - ay
+        length_sq = dx * dx + dy * dy
+        if length_sq <= 1e-12:
+            return math.hypot(point.x() - ax, point.y() - ay), 0.0, QtCore.QPointF(ax, ay)
+        t = ((point.x() - ax) * dx + (point.y() - ay) * dy) / length_sq
+        t = max(0.0, min(1.0, t))
+        proj = QtCore.QPointF(ax + t * dx, ay + t * dy)
+        return math.hypot(point.x() - proj.x(), point.y() - proj.y()), t, proj
+
+    def _fow_begin_vertex_edit(self, ring_i: int, vert_i: int) -> None:
+        self._fow_edit_ring = ring_i
+        self._fow_edit_vertex = vert_i
+        self._fow_edit_dragging = True
+        self._fow_edit_drag_last_world = None
+        self.setCursor(QtCore.Qt.CursorShape.SizeAllCursor)
+
+    def _fow_insert_vertex_on_edge(
+        self, ring_i: int, edge_i: int, screen_point: QtCore.QPointF
+    ) -> bool:
+        world = self.world_at_screen(screen_point)
+        if world is None:
+            return False
+        layer = self._fow_edit_layer
+        rings = [list(ring) for ring in self.fog.source_rings(layer)]
+        if ring_i < 0 or ring_i >= len(rings):
+            return False
+        ring = rings[ring_i]
+        insert_at = edge_i + 1
+        ring.insert(
+            insert_at,
+            self.fog.layer_local_point(
+                layer, float(world["x"]), float(world["y"])
+            ),
+        )
+        self._fow_commit_rings(rings)
+        self._fow_selected = {(ring_i, insert_at)}
+        self._fow_begin_vertex_edit(ring_i, insert_at)
+        self.fowLineDraftChanged.emit()
+        self.update()
+        return True
+
+    def _fow_move_edit_vertex(self, screen_point: QtCore.QPointF) -> bool:
+        if self._fow_edit_ring is None or self._fow_edit_vertex is None:
+            return False
+        world = self.world_at_screen(screen_point)
+        if world is None:
+            return False
+        wx, wy = float(world["x"]), float(world["y"])
+        layer = self._fow_edit_layer
+        rings = [list(ring) for ring in self.fog.source_rings(layer)]
+        selection = self._fow_selected or {
+            (self._fow_edit_ring, self._fow_edit_vertex)
+        }
+        if self._fow_edit_drag_last_world is None:
+            # First move: snap primary vertex to cursor; others keep relative offset.
+            primary = (self._fow_edit_ring, self._fow_edit_vertex)
+            if primary[0] < 0 or primary[0] >= len(rings):
+                return False
+            if primary[1] < 0 or primary[1] >= len(rings[primary[0]]):
+                return False
+            old_world = self.fog.layer_world_point(
+                layer, *rings[primary[0]][primary[1]]
+            )
+            dx = wx - old_world[0]
+            dy = wy - old_world[1]
+        else:
+            dx = wx - self._fow_edit_drag_last_world[0]
+            dy = wy - self._fow_edit_drag_last_world[1]
+        if abs(dx) + abs(dy) <= 1e-12:
+            self._fow_edit_drag_last_world = (wx, wy)
+            return True
+        for ring_i, vert_i in selection:
+            if ring_i < 0 or ring_i >= len(rings):
+                continue
+            if vert_i < 0 or vert_i >= len(rings[ring_i]):
+                continue
+            ox, oy = self.fog.layer_world_point(layer, *rings[ring_i][vert_i])
+            rings[ring_i][vert_i] = self.fog.layer_local_point(
+                layer, ox + dx, oy + dy
+            )
+        self._fow_edit_drag_last_world = (wx, wy)
+        self._fow_commit_rings(rings)
+        self.update()
+        return True
+
+    def _fow_finish_vertex_edit(self) -> None:
+        self._fow_edit_ring = None
+        self._fow_edit_vertex = None
+        self._fow_edit_dragging = False
+        self._fow_edit_drag_last_world = None
+        self.fowLineDraftChanged.emit()
+        if self._fow_line_tool:
+            self.setCursor(QtCore.Qt.CursorShape.CrossCursor)
+
+    def _fow_delete_vertex(self, ring_i: int, vert_i: int) -> bool:
+        return self._fow_delete_vertices({(ring_i, vert_i)})
+
+    def _fow_delete_vertices(self, victims: set[tuple[int, int]]) -> bool:
+        if not victims:
+            return False
+        layer = self._fow_edit_layer
+        rings = [list(ring) for ring in self.fog.source_rings(layer)]
+        by_ring: dict[int, list[int]] = {}
+        for ring_i, vert_i in victims:
+            by_ring.setdefault(ring_i, []).append(vert_i)
+        for ring_i in sorted(by_ring.keys(), reverse=True):
+            if ring_i < 0 or ring_i >= len(rings):
+                continue
+            verts = sorted(set(by_ring[ring_i]), reverse=True)
+            ring = rings[ring_i]
+            for vert_i in verts:
+                if 0 <= vert_i < len(ring):
+                    ring.pop(vert_i)
+            if len(ring) < 3:
+                rings.pop(ring_i)
+        self._fow_commit_rings(rings)
+        self._fow_clear_edit_state()
+        self.fowLineDraftChanged.emit()
+        self.update()
+        return True
+
+    def _fow_select_marquee(self) -> None:
+        if (
+            self._fow_marquee_origin is None
+            or self._fow_marquee_current is None
+        ):
+            return
+        rect = QtCore.QRectF(self._fow_marquee_origin, self._fow_marquee_current).normalized()
+        hits: set[tuple[int, int]] = set()
+        for ring_i, ring in enumerate(
+            self.fog.transformed_layer_rings(self._fow_edit_layer)
+        ):
+            for vert_i, (x, y) in enumerate(ring):
+                pt = self._fow_screen_point(x, y)
+                if pt is not None and rect.contains(pt):
+                    hits.add((ring_i, vert_i))
+        if self._fow_marquee_add:
+            self._fow_selected |= hits
+        else:
+            self._fow_selected = hits
+        self.fowLineDraftChanged.emit()
+
+    def _fow_paint_marquee(self, painter: QtGui.QPainter) -> None:
+        if (
+            not self._fow_marquee_active
+            or self._fow_marquee_origin is None
+            or self._fow_marquee_current is None
+        ):
+            return
+        rect = QtCore.QRectF(
+            self._fow_marquee_origin, self._fow_marquee_current
+        ).normalized()
+        painter.save()
+        pen = QtGui.QPen(QtGui.QColor(255, 220, 96, 220))
+        pen.setWidthF(1.2)
+        pen.setCosmetic(True)
+        pen.setStyle(QtCore.Qt.PenStyle.DashLine)
+        painter.setPen(pen)
+        painter.setBrush(QtGui.QColor(255, 220, 96, 36))
+        painter.drawRect(rect)
+        painter.restore()
+
     def recenter(self) -> None:
         was_panned = self.view_center_world is not None or bool(self._follow_target_key)
         self.clear_follow()
@@ -716,6 +1159,127 @@ class RadarWidget(QtWidgets.QWidget):
             return "large"
         return ""
 
+    def _ensure_prepared_pois(self) -> None:
+        """Parse the static POI file into flat tuples once per POI/filter change.
+
+        Only the parsing and the kind filters are cached here. Anything driven
+        by telemetry — live-feed suppression, collected orbs, the view cull —
+        stays in the paint loop.
+        """
+        filters = (
+            tuple(sorted(self.poi_kind_visibility.items())),
+            tuple(sorted(self.loot_kind_visibility.items())),
+            tuple(sorted(self.loot_kind_icon_mode.items())),
+            round(float(self.devicePixelRatioF() or 1.0), 3),
+        )
+        if self._prepared_source is self.pois and self._prepared_filters == filters:
+            return
+        self._prepared_source = self.pois
+        self._prepared_filters = filters
+        self._marker_sprite_cache.clear()
+
+        enabled_poi_kinds = {
+            kind for kind, enabled in self.poi_kind_visibility.items() if enabled
+        }
+        enabled_loot_kinds = {
+            kind for kind, enabled in self.loot_kind_visibility.items() if enabled
+        }
+        all_poi_kinds_enabled = bool(self.poi_kind_visibility) and all(
+            self.poi_kind_visibility.values()
+        )
+        gatherable_visible = bool(enabled_loot_kinds & {"plant", "ore"})
+
+        prepared: list[tuple[Any, ...]] = []
+        for poi in self.pois:
+            if not isinstance(poi, dict):
+                continue
+            kind = str(poi.get("kind", "")).strip().lower()
+            is_collectible = kind in _COLLECTIBLE_KINDS
+            if is_collectible:
+                visible = (
+                    gatherable_visible
+                    if kind == "gatherable"
+                    else kind in enabled_loot_kinds
+                )
+                if not visible:
+                    continue
+            elif kind in self.poi_kind_visibility:
+                if kind not in enabled_poi_kinds:
+                    continue
+            elif not all_poi_kinds_enabled:
+                continue
+            # Matches the legacy helpers: position falls back to the origin so a
+            # malformed record still renders where it always did, while the fog
+            # test is skipped when the coordinates are not finite.
+            raw_x = safe_float(poi.get("x"), math.nan)
+            raw_y = safe_float(poi.get("y"), math.nan)
+            has_position = math.isfinite(raw_x) and math.isfinite(raw_y)
+            x = raw_x if has_position else 0.0
+            y = raw_y if has_position else 0.0
+            subkind = str(poi.get("subkind", "")).strip()
+            size = self._node_size_label(poi) if is_collectible else ""
+            prepared.append(
+                (
+                    x,
+                    y,
+                    safe_float(poi.get("z"), math.nan),
+                    kind,
+                    size,
+                    is_collectible,
+                    has_position,
+                    str(poi.get("id") or ""),
+                    self._marker_sprite(kind, subkind, size),
+                    poi,
+                )
+            )
+        self._prepared_pois = prepared
+
+        grid: dict[tuple[int, int], list[int]] = {}
+        if prepared:
+            origin_x = min(entry[0] for entry in prepared)
+            origin_y = min(entry[1] for entry in prepared)
+            for index, entry in enumerate(prepared):
+                cell = (
+                    int((entry[0] - origin_x) // _POI_GRID_CELL_M),
+                    int((entry[1] - origin_y) // _POI_GRID_CELL_M),
+                )
+                grid.setdefault(cell, []).append(index)
+            self._poi_grid_origin = (origin_x, origin_y)
+        self._poi_grid = grid
+
+    def _prepared_poi_candidates(
+        self, center_x: float, center_y: float, half_w: float, half_h: float
+    ) -> Any:
+        """Indices into the prepared list worth testing against the view box."""
+        prepared = self._prepared_pois
+        grid = self._poi_grid
+        if not prepared or not grid:
+            return range(len(prepared))
+        if not (
+            math.isfinite(center_x)
+            and math.isfinite(center_y)
+            and math.isfinite(half_w)
+            and math.isfinite(half_h)
+        ):
+            return range(len(prepared))
+        origin_x, origin_y = self._poi_grid_origin
+        first_col = int((center_x - half_w - origin_x) // _POI_GRID_CELL_M)
+        last_col = int((center_x + half_w - origin_x) // _POI_GRID_CELL_M)
+        first_row = int((center_y - half_h - origin_y) // _POI_GRID_CELL_M)
+        last_row = int((center_y + half_h - origin_y) // _POI_GRID_CELL_M)
+        spanned = (last_col - first_col + 1) * (last_row - first_row + 1)
+        # Zoomed far out the view touches everything, so walking buckets would
+        # cost more than a straight scan.
+        if spanned >= len(grid):
+            return range(len(prepared))
+        candidates: list[int] = []
+        for col in range(first_col, last_col + 1):
+            for row in range(first_row, last_row + 1):
+                bucket = grid.get((col, row))
+                if bucket is not None:
+                    candidates.extend(bucket)
+        return candidates
+
     @classmethod
     def _interactible_display_name(cls, item: dict[str, Any]) -> str:
         name = str(item.get("name") or "").strip()
@@ -731,20 +1295,35 @@ class RadarWidget(QtWidgets.QWidget):
             pretty = f"{pretty} ({size.title()})"
         return pretty
 
+    def _view_half_extents(
+        self,
+        viewport: QtCore.QRectF,
+        margin_pixels: float = 12.0,
+    ) -> tuple[float, float]:
+        pixels_per_metre = max(1e-9, self._pixels_per_metre())
+        margin_m = margin_pixels / pixels_per_metre
+        return (
+            viewport.width() / (2.0 * pixels_per_metre) + margin_m,
+            viewport.height() / (2.0 * pixels_per_metre) + margin_m,
+        )
+
     def _world_in_view(
         self,
         obj: dict[str, Any],
         view_center: dict[str, Any],
         viewport: QtCore.QRectF,
         margin_pixels: float = 12.0,
+        *,
+        half_width_m: float | None = None,
+        half_height_m: float | None = None,
     ) -> bool:
-        pixels_per_metre = max(1e-9, self._pixels_per_metre())
-        half_width_m = viewport.width() / (2.0 * pixels_per_metre)
-        half_height_m = viewport.height() / (2.0 * pixels_per_metre)
-        margin_m = margin_pixels / pixels_per_metre
+        if half_width_m is None or half_height_m is None:
+            half_width_m, half_height_m = self._view_half_extents(
+                viewport, margin_pixels
+            )
         dx = abs(safe_float(obj.get("x")) - safe_float(view_center.get("x")))
         dy = abs(safe_float(obj.get("y")) - safe_float(view_center.get("y")))
-        return dx <= half_width_m + margin_m and dy <= half_height_m + margin_m
+        return dx <= half_width_m and dy <= half_height_m
 
     def _cancel_cursor_release_ease(self) -> None:
         self._cursor_release_generation += 1
@@ -826,6 +1405,18 @@ class RadarWidget(QtWidgets.QWidget):
         if self._event_is_over_child_ui(event.globalPos()):
             event.accept()
             return
+        if self._fow_line_tool:
+            point = QtCore.QPointF(event.pos())
+            if self._fow_line_draft:
+                self.fow_line_undo()
+            elif self._fow_selected:
+                self._fow_delete_vertices(set(self._fow_selected))
+            else:
+                hit = self._fow_hit_test(point)
+                if hit is not None and hit[0] == "vertex":
+                    self._fow_delete_vertex(hit[1], hit[2])
+            event.accept()
+            return
         point = QtCore.QPointF(event.pos())
         player = self.player_at(point)
         if player is not None and not player.get("is_self"):
@@ -844,21 +1435,92 @@ class RadarWidget(QtWidgets.QWidget):
         if self._event_is_over_child_ui(event.globalPosition().toPoint()):
             event.accept()
             return
+        if event.button() == QtCore.Qt.MouseButton.MiddleButton:
+            center = self._view_center()
+            center_x = safe_float(center.get("x"), math.nan)
+            center_y = safe_float(center.get("y"), math.nan)
+            if math.isfinite(center_x) and math.isfinite(center_y):
+                self._drag_started_panned = self.is_panned()
+                self._drag_last = event.position()
+                self._drag_active = True
+                self._drag_moved = False
+                self._cancel_cursor_release_ease()
+                if self._follow_target_key:
+                    self.clear_follow()
+                self.view_center_world = (center_x, center_y)
+                self.setCursor(QtCore.Qt.CursorShape.ClosedHandCursor)
+                event.accept()
+                return
         if event.button() == QtCore.Qt.MouseButton.LeftButton:
             center = self._view_center()
             center_x = safe_float(center.get("x"), math.nan)
             center_y = safe_float(center.get("y"), math.nan)
             if math.isfinite(center_x) and math.isfinite(center_y):
                 self._drag_started_panned = self.is_panned()
-                # Manual pan cancels follow — free view takes over.
-                if self._follow_target_key:
-                    self.clear_follow()
-                self.view_center_world = (center_x, center_y)
                 self._drag_last = event.position()
-                self._drag_active = True
+                self._drag_active = False
                 self._drag_moved = False
                 self._cancel_cursor_release_ease()
-                self.setCursor(QtCore.Qt.CursorShape.ClosedHandCursor)
+                if self._z4_drag_mode and self.fog.layer_enabled(self._fow_edit_layer):
+                    world = self.world_at_screen(event.position())
+                    if world is not None:
+                        self._z4_dragging = True
+                        self._z4_drag_last_world = (
+                            float(world["x"]),
+                            float(world["y"]),
+                        )
+                        self.setCursor(QtCore.Qt.CursorShape.SizeAllCursor)
+                        event.accept()
+                        return
+                if self._fow_line_tool:
+                    # Edit existing rings when not drawing a new draft.
+                    if not self._fow_line_draft:
+                        hit = self._fow_hit_test(event.position())
+                        if hit is not None:
+                            kind, ring_i, index = hit
+                            mods = event.modifiers()
+                            multi = bool(
+                                mods
+                                & (
+                                    QtCore.Qt.KeyboardModifier.ShiftModifier
+                                    | QtCore.Qt.KeyboardModifier.ControlModifier
+                                )
+                            )
+                            if kind == "vertex":
+                                key = (ring_i, index)
+                                if multi:
+                                    if key in self._fow_selected:
+                                        self._fow_selected.discard(key)
+                                    else:
+                                        self._fow_selected.add(key)
+                                    self.fowLineDraftChanged.emit()
+                                    self.update()
+                                else:
+                                    if key not in self._fow_selected:
+                                        self._fow_selected = {key}
+                                    self._fow_begin_vertex_edit(ring_i, index)
+                                event.accept()
+                                return
+                            # Edge insert (no multi-toggle).
+                            self._fow_insert_vertex_on_edge(
+                                ring_i, index, event.position()
+                            )
+                            event.accept()
+                            return
+                    # Empty map: click places a draft vertex; drag = marquee.
+                    self._drag_active = True
+                    self._fow_marquee_origin = QtCore.QPointF(event.position())
+                    self._fow_marquee_current = QtCore.QPointF(event.position())
+                    self._fow_marquee_active = False
+                    self._fow_marquee_add = bool(
+                        event.modifiers()
+                        & (
+                            QtCore.Qt.KeyboardModifier.ShiftModifier
+                            | QtCore.Qt.KeyboardModifier.ControlModifier
+                        )
+                    )
+                    event.accept()
+                    return
                 event.accept()
                 return
         super().mousePressEvent(event)
@@ -867,18 +1529,69 @@ class RadarWidget(QtWidgets.QWidget):
         if self._event_is_over_child_ui(event.globalPosition().toPoint()):
             event.accept()
             return
+        if self._fow_edit_dragging:
+            if abs(
+                (event.position() - (self._drag_last or event.position())).manhattanLength()
+            ) > 0.5 or self._drag_moved:
+                self._drag_moved = True
+            self._drag_last = event.position()
+            self._fow_move_edit_vertex(event.position())
+            event.accept()
+            return
+        if self._z4_dragging and self._z4_drag_last_world is not None:
+            world = self.world_at_screen(event.position())
+            if world is not None:
+                dx = float(world["x"]) - self._z4_drag_last_world[0]
+                dy = float(world["y"]) - self._z4_drag_last_world[1]
+                if abs(dx) + abs(dy) > 1e-6:
+                    self.fog.nudge_layer(
+                        self._fow_edit_layer, dx, dy, persist=False
+                    )
+                    self._z4_drag_last_world = (
+                        float(world["x"]),
+                        float(world["y"]),
+                    )
+                    self.update()
+            self.setCursor(QtCore.Qt.CursorShape.SizeAllCursor)
+            event.accept()
+            return
         if (
             self._drag_active
             and self._drag_last is not None
-            and self.view_center_world is not None
         ):
-            self.setCursor(QtCore.Qt.CursorShape.ClosedHandCursor)
             delta = event.position() - self._drag_last
             self._drag_last = event.position()
             if abs(delta.x()) + abs(delta.y()) > 0.5:
                 self._drag_moved = True
+            if self._fow_line_tool and self._fow_marquee_origin is not None:
+                self._fow_marquee_current = QtCore.QPointF(event.position())
+                if not self._fow_marquee_active:
+                    dist = math.hypot(
+                        self._fow_marquee_current.x() - self._fow_marquee_origin.x(),
+                        self._fow_marquee_current.y() - self._fow_marquee_origin.y(),
+                    )
+                    if dist >= self._fow_marquee_threshold_px:
+                        self._fow_marquee_active = True
+                        self._drag_moved = True
+                if self._fow_marquee_active:
+                    self.setCursor(QtCore.Qt.CursorShape.CrossCursor)
+                    self.update()
+                event.accept()
+                return
             pixels_per_metre = self._pixels_per_metre()
             if self._drag_moved and pixels_per_metre > 1e-9:
+                if self.view_center_world is None:
+                    center = self._view_center()
+                    center_x = safe_float(center.get("x"), math.nan)
+                    center_y = safe_float(center.get("y"), math.nan)
+                    if not (math.isfinite(center_x) and math.isfinite(center_y)):
+                        event.accept()
+                        return
+                    if self._follow_target_key:
+                        self.clear_follow()
+                    self.view_center_world = (center_x, center_y)
+                if not self._fow_line_tool:
+                    self.setCursor(QtCore.Qt.CursorShape.ClosedHandCursor)
                 center_x, center_y = self.view_center_world
                 next_center = (
                     center_x - delta.x() / pixels_per_metre,
@@ -889,6 +1602,32 @@ class RadarWidget(QtWidgets.QWidget):
                 self.view_center_world = next_center
                 self.panStateChanged.emit(True)
                 self.update()
+            event.accept()
+            return
+        if self._fow_line_tool:
+            world = self.world_at_screen(event.position())
+            self._fow_line_cursor = (
+                (float(world["x"]), float(world["y"])) if world is not None else None
+            )
+            self._fow_hover_ring = None
+            self._fow_hover_vertex = None
+            self._fow_hover_edge = None
+            if not self._fow_line_draft:
+                hit = self._fow_hit_test(event.position())
+                if hit is not None:
+                    kind, ring_i, index = hit
+                    self._fow_hover_ring = ring_i
+                    if kind == "vertex":
+                        self._fow_hover_vertex = index
+                        self.setCursor(QtCore.Qt.CursorShape.SizeAllCursor)
+                    else:
+                        self._fow_hover_edge = index
+                        self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+                else:
+                    self.setCursor(QtCore.Qt.CursorShape.CrossCursor)
+            else:
+                self.setCursor(QtCore.Qt.CursorShape.CrossCursor)
+            self.update()
             event.accept()
             return
         self._cancel_cursor_release_ease()
@@ -968,34 +1707,116 @@ class RadarWidget(QtWidgets.QWidget):
         self._hovered_custom_waypoint_id = None
         self._hovered_enemy_id = None
         self._hovered_interactible_id = None
+        self._fow_line_cursor = None
+        self._fow_hover_ring = None
+        self._fow_hover_vertex = None
+        self._fow_hover_edge = None
+        self._fow_clear_marquee()
         QtWidgets.QToolTip.hideText()
-        if not self._drag_active:
-            self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        if not self._drag_active and not self._fow_edit_dragging and not self._z4_dragging:
+            if self._z4_drag_mode:
+                self.setCursor(QtCore.Qt.CursorShape.SizeAllCursor)
+            elif self._fow_line_tool:
+                self.setCursor(QtCore.Qt.CursorShape.CrossCursor)
+            else:
+                self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
         super().leaveEvent(event)
 
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:  # noqa: N802
         if self._event_is_over_child_ui(event.globalPosition().toPoint()):
             # A drag may begin on the map and end over an overlay. End the map
             # gesture cleanly without letting the release activate map UI.
-            if event.button() == QtCore.Qt.MouseButton.LeftButton and self._drag_active:
+            if event.button() == QtCore.Qt.MouseButton.MiddleButton and self._drag_active:
                 self._drag_active = False
                 self._drag_last = None
                 self._drag_moved = False
                 self._drag_started_panned = False
-                self._ease_cursor_from_drag(event.position())
+                if self._z4_drag_mode:
+                    self.setCursor(QtCore.Qt.CursorShape.SizeAllCursor)
+                elif self._fow_line_tool:
+                    self.setCursor(QtCore.Qt.CursorShape.CrossCursor)
+                else:
+                    self._ease_cursor_from_drag(event.position())
+                self.panStateChanged.emit(self.is_panned())
+            elif event.button() == QtCore.Qt.MouseButton.LeftButton and (
+                self._drag_active or self._fow_edit_dragging or self._z4_dragging
+            ):
+                if self._fow_edit_dragging:
+                    self._fow_finish_vertex_edit()
+                if self._z4_dragging:
+                    self.fog.set_layer_transform(
+                        self._fow_edit_layer,
+                        self.fog.layer_transform(self._fow_edit_layer),
+                        persist=True,
+                    )
+                    self._z4_dragging = False
+                    self._z4_drag_last_world = None
+                if self._fow_marquee_active:
+                    self._fow_select_marquee()
+                self._fow_clear_marquee()
+                self._drag_active = False
+                self._drag_last = None
+                self._drag_moved = False
+                self._drag_started_panned = False
+                if self._z4_drag_mode:
+                    self.setCursor(QtCore.Qt.CursorShape.SizeAllCursor)
+                elif self._fow_line_tool:
+                    self.setCursor(QtCore.Qt.CursorShape.CrossCursor)
+                else:
+                    self._ease_cursor_from_drag(event.position())
                 self.panStateChanged.emit(self.is_panned())
             event.accept()
             return
-        if event.button() == QtCore.Qt.MouseButton.LeftButton and self._drag_active:
-            if not self._drag_moved and not self._drag_started_panned:
-                self.clear_follow()
-                self.view_center_world = None
+        if event.button() == QtCore.Qt.MouseButton.MiddleButton and self._drag_active:
             self._drag_active = False
             self._drag_last = None
             self._drag_moved = False
             self._drag_started_panned = False
-            self._ease_cursor_from_drag(event.position())
+            if self._z4_drag_mode:
+                self.setCursor(QtCore.Qt.CursorShape.SizeAllCursor)
+            elif self._fow_line_tool:
+                self.setCursor(QtCore.Qt.CursorShape.CrossCursor)
+            else:
+                self._ease_cursor_from_drag(event.position())
             self.panStateChanged.emit(self.is_panned())
+            event.accept()
+            return
+        if event.button() == QtCore.Qt.MouseButton.LeftButton and (
+            self._drag_active or self._fow_edit_dragging or self._z4_dragging
+        ):
+            placed_vertex = False
+            if self._z4_dragging:
+                self.fog.set_layer_transform(
+                    self._fow_edit_layer,
+                    self.fog.layer_transform(self._fow_edit_layer),
+                    persist=True,
+                )
+                self._z4_dragging = False
+                self._z4_drag_last_world = None
+            elif self._fow_edit_dragging:
+                self._fow_finish_vertex_edit()
+            elif self._fow_line_tool and self._fow_marquee_active:
+                self._fow_select_marquee()
+                self._fow_clear_marquee()
+            elif self._fow_line_tool and not self._drag_moved:
+                placed_vertex = self._fow_line_add_vertex_at(event.position())
+                self._fow_clear_marquee()
+            else:
+                self._fow_clear_marquee()
+            self._drag_active = False
+            self._drag_last = None
+            self._drag_moved = False
+            self._drag_started_panned = False
+            if self._z4_drag_mode:
+                self.setCursor(QtCore.Qt.CursorShape.SizeAllCursor)
+            elif self._fow_line_tool:
+                self.setCursor(QtCore.Qt.CursorShape.CrossCursor)
+            else:
+                self._ease_cursor_from_drag(event.position())
+            self.panStateChanged.emit(self.is_panned())
+            if placed_vertex:
+                event.accept()
+                return
             event.accept()
             return
         super().mouseReleaseEvent(event)
@@ -1005,10 +1826,53 @@ class RadarWidget(QtWidgets.QWidget):
             event.accept()
             return
         if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            if self._fow_line_tool:
+                # Drop the extra click from the double-click pair, then close.
+                if self._fow_line_draft:
+                    self._fow_line_draft.pop()
+                self.fow_line_close()
+                event.accept()
+                return
             self.recenter()
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
+
+    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:  # noqa: N802
+        if self._fow_line_tool:
+            key = event.key()
+            if key == QtCore.Qt.Key.Key_Escape:
+                if self._fow_selected:
+                    self._fow_selected.clear()
+                    self.fowLineDraftChanged.emit()
+                    self.update()
+                elif self._fow_line_draft:
+                    self._fow_line_draft.clear()
+                    self._fow_line_cursor = None
+                    self.fowLineDraftChanged.emit()
+                    self.update()
+                else:
+                    self.set_fow_line_tool(False)
+                event.accept()
+                return
+            if key in (QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter):
+                self.fow_line_close()
+                event.accept()
+                return
+            if key in (QtCore.Qt.Key.Key_Delete, QtCore.Qt.Key.Key_Backspace):
+                if self._fow_selected and not self._fow_line_draft:
+                    self._fow_delete_vertices(set(self._fow_selected))
+                    event.accept()
+                    return
+                if key == QtCore.Qt.Key.Key_Backspace:
+                    self.fow_line_undo()
+                    event.accept()
+                    return
+            if key == QtCore.Qt.Key.Key_Z and event.modifiers() & QtCore.Qt.KeyboardModifier.ControlModifier:
+                self.fow_line_undo()
+                event.accept()
+                return
+        super().keyPressEvent(event)
 
     @classmethod
     def _poi_icon_index(cls, kind: str, subkind: str) -> int | None:
@@ -1113,6 +1977,105 @@ class RadarWidget(QtWidgets.QWidget):
         icon_index = self._poi_icon_index(normalized_kind, "")
         return icon_index is not None and self._waypoint_icon(icon_index) is not None
 
+    def _marker_sprite(
+        self, kind: str, subkind: str, size: str
+    ) -> tuple[QtGui.QPixmap, float, float]:
+        """Pre-rendered marker pixmap plus its centre offset in logical pixels."""
+        dpr = float(self.devicePixelRatioF() or 1.0)
+        key = (kind, subkind, size, round(dpr, 3))
+        cached = self._marker_sprite_cache.get(key)
+        if cached is not None:
+            return cached
+        entry = self._build_marker_sprite(kind, subkind, size, dpr)
+        self._marker_sprite_cache[key] = entry
+        return entry
+
+    def _build_marker_sprite(
+        self, kind: str, subkind: str, size: str, dpr: float
+    ) -> tuple[QtGui.QPixmap, float, float]:
+        normalized_kind = kind.strip().lower()
+        size_key = size.strip().lower()
+        if size_key == "small":
+            scale = 0.72
+            dot_radius = 2.5
+        elif size_key == "large":
+            scale = 1.28
+            dot_radius = 5.0
+        else:
+            scale = 1.0
+            dot_radius = 3.5
+
+        icon: QtGui.QImage | None = None
+        if self.loot_kind_icon_mode.get(normalized_kind, True):
+            icon = self._loose_kind_icon(normalized_kind)
+            if icon is None:
+                icon_index = self._poi_icon_index(normalized_kind, subkind)
+                icon = self._waypoint_icon(icon_index) if icon_index is not None else None
+
+        # One pixel of slack keeps antialiased edges and ring strokes inside.
+        margin = 1.0
+        if icon is not None:
+            width = icon.width() * scale
+            height = icon.height() * scale
+            half_w = width / 2.0
+            half_h = height / 2.0
+            if size_key == "large":
+                ring_radius = max(width, height) * 0.55 + 0.7
+                half_w = max(half_w, ring_radius)
+                half_h = max(half_h, ring_radius)
+        else:
+            half_w = half_h = dot_radius + 0.5
+            if size_key == "large":
+                half_w = half_h = dot_radius + 2.2 + 0.65
+        # Round the centre offset to whole device pixels so the snapped blit
+        # below lands the marker centre exactly where the painter asked for it.
+        half_w = math.ceil((half_w + margin) * dpr) / dpr
+        half_h = math.ceil((half_h + margin) * dpr) / dpr
+
+        pixmap = QtGui.QPixmap(
+            max(1, round(half_w * 2.0 * dpr)),
+            max(1, round(half_h * 2.0 * dpr)),
+        )
+        pixmap.setDevicePixelRatio(dpr)
+        pixmap.fill(QtCore.Qt.GlobalColor.transparent)
+        centre = QtCore.QPointF(half_w, half_h)
+        sprite_painter = QtGui.QPainter(pixmap)
+        sprite_painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        sprite_painter.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform)
+        if icon is not None:
+            sprite_painter.drawImage(
+                QtCore.QRectF(
+                    centre.x() - width / 2.0,
+                    centre.y() - height / 2.0,
+                    width,
+                    height,
+                ),
+                icon,
+            )
+            if size_key == "large":
+                # Soft ring so large nodes read clearly next to small ones.
+                ring = QtGui.QColor(self._poi_color(normalized_kind))
+                ring.setAlpha(160)
+                sprite_painter.setPen(QtGui.QPen(ring, 1.4))
+                sprite_painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+                sprite_painter.drawEllipse(
+                    centre, max(width, height) * 0.55, max(width, height) * 0.55
+                )
+        else:
+            sprite_painter.setPen(QtGui.QPen(QtGui.QColor("#101318"), 1.0))
+            sprite_painter.setBrush(self._poi_color(kind))
+            sprite_painter.drawEllipse(centre, dot_radius, dot_radius)
+            if size_key == "large":
+                ring = QtGui.QColor(self._poi_color(normalized_kind))
+                ring.setAlpha(170)
+                sprite_painter.setPen(QtGui.QPen(ring, 1.3))
+                sprite_painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+                sprite_painter.drawEllipse(
+                    centre, dot_radius + 2.2, dot_radius + 2.2
+                )
+        sprite_painter.end()
+        return (pixmap, half_w, half_h)
+
     def _draw_poi_marker(
         self,
         painter: QtGui.QPainter,
@@ -1122,69 +2085,26 @@ class RadarWidget(QtWidgets.QWidget):
         *,
         size: str = "",
     ) -> None:
-        normalized_kind = kind.strip().lower()
-        size_key = size.strip().lower()
-        if size_key == "small":
-            scale = 0.72
-            dot_radius = 2.5
-        elif size_key == "large":
-            scale = 1.28
-            dot_radius = 5.0
-        elif size_key == "medium":
-            scale = 1.0
-            dot_radius = 3.5
-        else:
-            scale = 1.0
-            dot_radius = 3.5
-        use_icon = self.loot_kind_icon_mode.get(normalized_kind, True)
-        if use_icon:
-            icon = self._loose_kind_icon(normalized_kind)
-            if icon is None:
-                icon_index = self._poi_icon_index(normalized_kind, subkind)
-                icon = self._waypoint_icon(icon_index) if icon_index is not None else None
-            if icon is not None:
-                width = icon.width() * scale
-                height = icon.height() * scale
-                target = QtCore.QRectF(
-                    point.x() - width / 2.0,
-                    point.y() - height / 2.0,
-                    width,
-                    height,
-                )
-                painter.drawImage(target, icon)
-                if size_key == "large":
-                    # Soft ring so large nodes read clearly next to small ones.
-                    ring = QtGui.QColor(self._poi_color(normalized_kind))
-                    ring.setAlpha(160)
-                    painter.setPen(QtGui.QPen(ring, 1.4))
-                    painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
-                    painter.drawEllipse(point, max(width, height) * 0.55, max(width, height) * 0.55)
-                return
+        pixmap, half_w, half_h = self._marker_sprite(kind, subkind, size)
+        self._blit_marker_sprite(painter, point, pixmap, half_w, half_h)
 
-        painter.setPen(QtGui.QPen(QtGui.QColor("#101318"), 1.0))
-        painter.setBrush(self._poi_color(kind))
-        painter.drawEllipse(point, dot_radius, dot_radius)
-        if size_key == "large":
-            ring = QtGui.QColor(self._poi_color(normalized_kind))
-            ring.setAlpha(170)
-            painter.setPen(QtGui.QPen(ring, 1.3))
-            painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
-            painter.drawEllipse(point, dot_radius + 2.2, dot_radius + 2.2)
+    @staticmethod
+    def _blit_marker_sprite(
+        painter: QtGui.QPainter,
+        point: QtCore.QPointF,
+        pixmap: QtGui.QPixmap,
+        half_w: float,
+        half_h: float,
+    ) -> None:
+        # drawPixmap lands on whole device pixels, and the sprite's centre offset
+        # is a whole number of them, so the marker centre snaps to round(point).
+        painter.drawPixmap(
+            QtCore.QPointF(point.x() - half_w, point.y() - half_h), pixmap
+        )
 
     @staticmethod
     def _poi_color(kind: str) -> QtGui.QColor:
-        colors = {
-            "chest": QtGui.QColor("#e4b84a"),
-            "red_orb": QtGui.QColor("#e35b62"),
-            "plant": QtGui.QColor("#63c174"),
-            "ore": QtGui.QColor("#aeb6c2"),
-            "merchant": QtGui.QColor("#b785e5"),
-            "dungeon": QtGui.QColor("#f28c54"),
-            "activity": QtGui.QColor("#5ba6e6"),
-            "respawn": QtGui.QColor("#f0f0f0"),
-            "obelisk": QtGui.QColor("#7ce4df"),
-        }
-        return colors.get(kind, QtGui.QColor("#9ba7b4"))
+        return _POI_COLORS.get(kind, _POI_COLOR_FALLBACK)
 
     def _draw_z_indicator(
         self,
@@ -1294,6 +2214,40 @@ class RadarWidget(QtWidgets.QWidget):
                     ]
                 )
             )
+        elif icon == "crosshair":
+            # Exact world-point marker for fog / map alignment.
+            arm = 9.0
+            gap = 2.0
+            painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+            for width, pen_color in ((3.0, outline), (1.25, color)):
+                painter.setPen(
+                    QtGui.QPen(
+                        pen_color,
+                        width,
+                        QtCore.Qt.PenStyle.SolidLine,
+                        QtCore.Qt.PenCapStyle.FlatCap,
+                    )
+                )
+                painter.drawLine(
+                    point + QtCore.QPointF(-arm, 0), point + QtCore.QPointF(-gap, 0)
+                )
+                painter.drawLine(
+                    point + QtCore.QPointF(gap, 0), point + QtCore.QPointF(arm, 0)
+                )
+                painter.drawLine(
+                    point + QtCore.QPointF(0, -arm), point + QtCore.QPointF(0, -gap)
+                )
+                painter.drawLine(
+                    point + QtCore.QPointF(0, gap), point + QtCore.QPointF(0, arm)
+                )
+            painter.setPen(QtGui.QPen(outline, 1.0))
+            painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(point, 4.0, 4.0)
+            painter.setPen(QtCore.Qt.PenStyle.NoPen)
+            painter.setBrush(color)
+            painter.drawRect(
+                QtCore.QRectF(point.x() - 0.75, point.y() - 0.75, 1.5, 1.5)
+            )
         elif icon == "cross":
             painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
             painter.setPen(
@@ -1316,21 +2270,27 @@ class RadarWidget(QtWidgets.QWidget):
             )
             painter.drawLine(point + QtCore.QPointF(-6, -6), point + QtCore.QPointF(6, 6))
             painter.drawLine(point + QtCore.QPointF(6, -6), point + QtCore.QPointF(-6, 6))
-        else:  # pin
-            pin_center = point + QtCore.QPointF(0, -3)
-            painter.drawEllipse(pin_center, 6.0, 6.0)
+            painter.setPen(QtCore.Qt.PenStyle.NoPen)
+            painter.setBrush(outline)
+            painter.drawRect(QtCore.QRectF(point.x() - 1.0, point.y() - 1.0, 2.0, 2.0))
+        else:  # pin — tip sits on the exact world coordinate
+            tip = point
+            head = tip + QtCore.QPointF(0, -10)
+            painter.drawEllipse(head, 6.0, 6.0)
             painter.drawPolygon(
                 QtGui.QPolygonF(
                     [
-                        point + QtCore.QPointF(-4.5, 0),
-                        point + QtCore.QPointF(4.5, 0),
-                        point + QtCore.QPointF(0, 9),
+                        tip + QtCore.QPointF(-4.5, -7),
+                        tip + QtCore.QPointF(4.5, -7),
+                        tip,
                     ]
                 )
             )
             painter.setPen(QtCore.Qt.PenStyle.NoPen)
             painter.setBrush(outline)
-            painter.drawEllipse(pin_center, 2.0, 2.0)
+            painter.drawEllipse(head, 2.0, 2.0)
+            painter.setBrush(color.lighter(140))
+            painter.drawRect(QtCore.QRectF(tip.x() - 0.75, tip.y() - 0.75, 1.5, 1.5))
 
         self._custom_waypoint_hits.append(
             (QtCore.QRectF(point.x() - 13.0, point.y() - 13.0, 26.0, 26.0), dict(waypoint))
@@ -1447,28 +2407,26 @@ class RadarWidget(QtWidgets.QWidget):
             self.show_texture and self.map_texture is not None and not local_instance
         )
         if draw_texture:
-            map_view = self.map_texture.render_view(
-                view_center,
-                pixels_per_metre,
-                max(2, round(viewport.width())),
-                max(2, round(viewport.height())),
-            )
             painter.save()
-            if map_view is not None:
-                if self.heading_up:
-                    painter.translate(center)
-                    painter.rotate(-map_heading_degrees(player.get("heading")))
-                    painter.translate(-center)
-                painter.setOpacity(0.92)
-                painter.drawImage(viewport, map_view)
-                map_drawn = True
-            elif not self.map_texture.image.isNull():
+            if self.heading_up:
+                painter.translate(center)
+                painter.rotate(-map_heading_degrees(player.get("heading")))
+                painter.translate(-center)
+            painter.setOpacity(0.92)
+            map_drawn = bool(
+                self.map_texture.draw_view(
+                    painter,
+                    target_rect=viewport,
+                    view_center=view_center,
+                    pixels_per_metre=pixels_per_metre,
+                )
+            )
+            if not map_drawn and not self.map_texture.image.isNull():
                 # Never present a featureless black square when telemetry and the
                 # calibration disagree. A dim full-zone texture makes the failure
                 # explicit while the projection self-check waits for POIs.
-                fallback = self.map_texture.image
                 painter.setOpacity(0.38)
-                painter.drawImage(viewport, fallback)
+                painter.drawImage(viewport, self.map_texture.image)
             painter.restore()
             painter.fillPath(clip_shape, QtGui.QColor(0, 0, 0, 24))
             if map_drawn:
@@ -1479,7 +2437,24 @@ class RadarWidget(QtWidgets.QWidget):
                     pixels_per_metre=pixels_per_metre,
                     view_center=view_center,
                     world_to_screen=self._world_to_screen,
+                    draft_ring=self._fow_line_draft if self._fow_line_tool else None,
+                    draft_cursor=self._fow_line_cursor if self._fow_line_tool else None,
+                    show_custom_handles=bool(
+                        self._fow_line_tool and not self._fow_line_draft
+                    ),
+                    handle_layer=self._fow_edit_layer,
+                    selected_vertices=self._fow_selected if self._fow_line_tool else None,
+                    hover_ring=self._fow_hover_ring,
+                    hover_vertex=self._fow_hover_vertex,
+                    hover_edge=self._fow_hover_edge,
+                    active_ring=self._fow_edit_ring if self._fow_edit_dragging else None,
+                    active_vertex=(
+                        self._fow_edit_vertex if self._fow_edit_dragging else None
+                    ),
+                    map_texture=self.map_texture,
                 )
+                if self._fow_line_tool:
+                    self._fow_paint_marquee(painter)
         elif local_instance:
             painter.fillPath(clip_shape, QtGui.QColor("#0a0f08"))
             instance = self._instance_state()
@@ -1500,17 +2475,18 @@ class RadarWidget(QtWidgets.QWidget):
         player_x = safe_float(player.get("x"), math.nan)
         player_y = safe_float(player.get("y"), math.nan)
         player_z = safe_float(player.get("z"), math.nan)
+        view_half_w, view_half_h = self._view_half_extents(viewport, 12.0)
+        view_half_w_wp, view_half_h_wp = self._view_half_extents(viewport, 24.0)
+        view_half_w_party, view_half_h_party = self._view_half_extents(viewport, 28.0)
+        view_half_w_names, view_half_h_names = self._view_half_extents(viewport, 28.0)
+        view_half_w_players, view_half_h_players = self._view_half_extents(viewport, 14.0)
 
-        collectible_kinds = {"chest", "red_orb", "plant", "ore", "gatherable"}
         enabled_poi_kinds = {
             kind for kind, enabled in self.poi_kind_visibility.items() if enabled
         }
         enabled_loot_kinds = {
             kind for kind, enabled in self.loot_kind_visibility.items() if enabled
         }
-        all_poi_kinds_enabled = bool(self.poi_kind_visibility) and all(
-            self.poi_kind_visibility.values()
-        )
         completed_elements = self.state.get("completed_elements", [])
         completed_element_ids = {
             str(value) for value in completed_elements
@@ -1521,19 +2497,16 @@ class RadarWidget(QtWidgets.QWidget):
                 return bool(enabled_loot_kinds & {"plant", "ore"})
             return kind in enabled_loot_kinds
 
-        def _in_loot_live_range(poi: dict[str, Any]) -> bool:
+        def _in_loot_live_range(px: float, py: float, pz: float) -> bool:
             if not (
                 math.isfinite(player_x)
                 and math.isfinite(player_y)
             ):
                 return False
-            px = safe_float(poi.get("x"), math.nan)
-            py = safe_float(poi.get("y"), math.nan)
             if not (math.isfinite(px) and math.isfinite(py)):
                 return False
             if math.hypot(px - player_x, py - player_y) > self.LOOT_LIVE_RANGE_M:
                 return False
-            pz = safe_float(poi.get("z"), math.nan)
             if math.isfinite(pz) and math.isfinite(player_z):
                 if abs(pz - player_z) > self.LOOT_LIVE_Z_CULL_M:
                     return False
@@ -1550,14 +2523,20 @@ class RadarWidget(QtWidgets.QWidget):
                 if not isinstance(poi, dict):
                     continue
                 kind = str(poi.get("kind", "")).strip().lower()
-                if kind not in collectible_kinds or not _loot_kind_visible(kind):
+                if kind not in _COLLECTIBLE_KINDS or not _loot_kind_visible(kind):
+                    continue
+                if not self._world_in_view(
+                    poi,
+                    view_center,
+                    viewport,
+                    half_width_m=view_half_w,
+                    half_height_m=view_half_h,
+                ):
                     continue
                 if self._fog_hides_point(
                     safe_float(poi.get("x"), math.nan),
                     safe_float(poi.get("y"), math.nan),
                 ):
-                    continue
-                if not self._world_in_view(poi, view_center, viewport):
                     continue
                 point = self._world_to_screen(poi, center, pixels_per_metre, view_center)
                 draw_kind = "ore" if kind == "gatherable" else kind
@@ -1592,59 +2571,71 @@ class RadarWidget(QtWidgets.QWidget):
         # markers so a failed sweep does not blank the map).
         if (enabled_poi_kinds or enabled_loot_kinds) and not local_instance:
             live_feed_active = bool(live_nodes)
-            for poi in self.pois:
-                if not isinstance(poi, dict):
-                    continue
-                kind = str(poi.get("kind", "")).strip().lower()
-                is_collectible = kind in collectible_kinds
-                if is_collectible:
-                    if not _loot_kind_visible(kind):
-                        continue
-                    # Red orbs have no live bridge feed — always use the file.
-                    if (
-                        kind != "red_orb"
-                        and live_feed_active
-                        and _in_loot_live_range(poi)
-                    ):
-                        continue
-                elif kind in self.poi_kind_visibility:
-                    if kind not in enabled_poi_kinds:
-                        continue
-                elif not all_poi_kinds_enabled:
-                    # Preserve forward compatibility for unknown non-loot marker
-                    # kinds without adding a premature UI category. Unknown kinds
-                    # are shown only when the complete POI group is enabled.
-                    continue
-                if self._fog_hides_point(
-                    safe_float(poi.get("x"), math.nan),
-                    safe_float(poi.get("y"), math.nan),
+            # Kind filtering and field parsing are cached; everything below is
+            # position- or telemetry-dependent and has to run every frame.
+            self._ensure_prepared_pois()
+            prepared = self._prepared_pois
+            cull_x = safe_float(view_center.get("x"))
+            cull_y = safe_float(view_center.get("y"))
+            origin_x = center.x()
+            origin_y = center.y()
+            hit_base = self._interactible_hit_radius
+            for index in self._prepared_poi_candidates(
+                cull_x, cull_y, view_half_w, view_half_h
+            ):
+                (
+                    world_x,
+                    world_y,
+                    world_z,
+                    kind,
+                    size,
+                    is_collectible,
+                    has_position,
+                    poi_id,
+                    sprite,
+                    poi,
+                ) = prepared[index]
+                if (
+                    abs(world_x - cull_x) > view_half_w
+                    or abs(world_y - cull_y) > view_half_h
                 ):
                     continue
-                if not self._world_in_view(poi, view_center, viewport):
+                # Red orbs have no live bridge feed — always use the file.
+                if (
+                    is_collectible
+                    and kind != "red_orb"
+                    and live_feed_active
+                    and has_position
+                    and _in_loot_live_range(world_x, world_y, world_z)
+                ):
                     continue
-                point = self._world_to_screen(poi, center, pixels_per_metre, view_center)
-                subkind = str(poi.get("subkind", "")).strip()
-                size = self._node_size_label(poi) if is_collectible else ""
-                collected = (
-                    kind == "red_orb"
-                    and str(poi.get("id") or "") in completed_element_ids
+                if has_position and self._fog_hides_point(world_x, world_y):
+                    continue
+                point = QtCore.QPointF(
+                    origin_x + (world_x - cull_x) * pixels_per_metre,
+                    origin_y + (world_y - cull_y) * pixels_per_metre,
                 )
-                if collected:
+                pixmap, sprite_half_w, sprite_half_h = sprite
+                if kind == "red_orb" and poi_id in completed_element_ids:
                     painter.save()
                     painter.setOpacity(0.32)
-                self._draw_poi_marker(painter, point, kind, subkind, size=size)
-                if collected:
+                    self._blit_marker_sprite(
+                        painter, point, pixmap, sprite_half_w, sprite_half_h
+                    )
                     painter.restore()
                 else:
+                    self._blit_marker_sprite(
+                        painter, point, pixmap, sprite_half_w, sprite_half_h
+                    )
                     self._draw_z_indicator(
                         painter,
                         point,
-                        safe_float(poi.get("z"), math.nan),
+                        world_z,
                         player_z,
                         gap=6.0 if size == "large" else 5.0,
                     )
                 if is_collectible and kind != "red_orb":
-                    hit = self._interactible_hit_radius
+                    hit = hit_base
                     if size == "large":
                         hit += 3.0
                     elif size == "small":
@@ -1652,10 +2643,7 @@ class RadarWidget(QtWidgets.QWidget):
                     marker = dict(poi)
                     marker["size"] = size
                     if not marker.get("id"):
-                        marker["id"] = (
-                            f"static:{kind}:{safe_float(poi.get('x')):.1f}:"
-                            f"{safe_float(poi.get('y')):.1f}"
-                        )
+                        marker["id"] = f"static:{kind}:{world_x:.1f}:{world_y:.1f}"
                     self._interactible_hits.append(
                         (
                             QtCore.QRectF(
@@ -1740,12 +2728,18 @@ class RadarWidget(QtWidgets.QWidget):
             for waypoint in self.custom_waypoints:
                 if not isinstance(waypoint, dict):
                     continue
+                if not self._world_in_view(
+                    waypoint,
+                    view_center,
+                    viewport,
+                    half_width_m=view_half_w_wp,
+                    half_height_m=view_half_h_wp,
+                ):
+                    continue
                 if self._fog_hides_point(
                     safe_float(waypoint.get("x"), math.nan),
                     safe_float(waypoint.get("y"), math.nan),
                 ):
-                    continue
-                if not self._world_in_view(waypoint, view_center, viewport, 24.0):
                     continue
                 point = self._world_to_screen(
                     waypoint, center, pixels_per_metre, view_center
@@ -1767,9 +2761,15 @@ class RadarWidget(QtWidgets.QWidget):
                 enemy_y = safe_float(enemy.get("y"), math.nan)
                 if not (math.isfinite(enemy_x) and math.isfinite(enemy_y)):
                     continue
-                if self._fog_hides_point(enemy_x, enemy_y):
+                if not self._world_in_view(
+                    enemy,
+                    view_center,
+                    viewport,
+                    half_width_m=view_half_w,
+                    half_height_m=view_half_h,
+                ):
                     continue
-                if not self._world_in_view(enemy, view_center, viewport, 10.0):
+                if self._fog_hides_point(enemy_x, enemy_y):
                     continue
                 point = self._world_to_screen(
                     enemy, center, pixels_per_metre, view_center
@@ -1810,10 +2810,19 @@ class RadarWidget(QtWidgets.QWidget):
                 other_y = safe_float(other.get("y"), math.nan)
                 if not (math.isfinite(other_x) and math.isfinite(other_y)):
                     continue
-                if self._fog_hides_point(other_x, other_y):
+                if self.show_player_names:
+                    half_w, half_h = view_half_w_names, view_half_h_names
+                else:
+                    half_w, half_h = view_half_w_players, view_half_h_players
+                if not self._world_in_view(
+                    other,
+                    view_center,
+                    viewport,
+                    half_width_m=half_w,
+                    half_height_m=half_h,
+                ):
                     continue
-                edge_pad = 28.0 if self.show_player_names else 14.0
-                if not self._world_in_view(other, view_center, viewport, edge_pad):
+                if self._fog_hides_point(other_x, other_y):
                     continue
                 point = self._world_to_screen(
                     other, center, pixels_per_metre, view_center
@@ -1886,12 +2895,18 @@ class RadarWidget(QtWidgets.QWidget):
             member_y = safe_float(member.get("y"), math.nan)
             if not (math.isfinite(member_x) and math.isfinite(member_y)):
                 continue
-            if self._fog_hides_point(member_x, member_y):
-                continue
             member_uid = str(member.get("uid") or "")
             if player_uid and member_uid == player_uid:
                 continue
-            if not self._world_in_view(member, view_center, viewport, 28.0):
+            if not self._world_in_view(
+                member,
+                view_center,
+                viewport,
+                half_width_m=view_half_w_party,
+                half_height_m=view_half_h_party,
+            ):
+                continue
+            if self._fog_hides_point(member_x, member_y):
                 continue
 
             point = self._world_to_screen(member, center, pixels_per_metre, view_center)

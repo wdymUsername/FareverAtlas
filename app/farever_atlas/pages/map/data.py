@@ -298,6 +298,90 @@ class MapTexture:
         pixel_width: int,
         pixel_height: int,
     ) -> QtGui.QImage | None:
+        """Allocate a cropped view image (prefer draw_view for paint hot paths)."""
+        geometry = self._view_geometry(
+            view_center, pixels_per_metre, pixel_width, pixel_height
+        )
+        if geometry is None:
+            return None
+        source_preview, visible_source, target = geometry
+        view = QtGui.QImage(
+            pixel_width,
+            pixel_height,
+            QtGui.QImage.Format.Format_ARGB32_Premultiplied,
+        )
+        view.fill(QtGui.QColor("#10151b"))
+        painter = QtGui.QPainter(view)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform)
+        painter.drawImage(target, self.image, visible_source)
+        painter.end()
+        return view
+
+    def draw_view(
+        self,
+        painter: QtGui.QPainter,
+        *,
+        target_rect: QtCore.QRectF,
+        view_center: dict[str, Any],
+        pixels_per_metre: float,
+    ) -> bool:
+        """Blit the calibrated map crop directly into painter (no temp image)."""
+        return self.draw_aligned_image(
+            painter,
+            self.image,
+            target_rect=target_rect,
+            view_center=view_center,
+            pixels_per_metre=pixels_per_metre,
+            fill_background=QtGui.QColor("#10151b"),
+        )
+
+    def draw_aligned_image(
+        self,
+        painter: QtGui.QPainter,
+        image: QtGui.QImage,
+        *,
+        target_rect: QtCore.QRectF,
+        view_center: dict[str, Any],
+        pixels_per_metre: float,
+        fill_background: QtGui.QColor | None = None,
+    ) -> bool:
+        """Blit a map-aligned overlay/image using the same crop as the base map."""
+        if image.isNull():
+            return False
+        pixel_width = max(2, int(round(target_rect.width())))
+        pixel_height = max(2, int(round(target_rect.height())))
+        geometry = self._view_geometry(
+            view_center, pixels_per_metre, pixel_width, pixel_height
+        )
+        if geometry is None:
+            return False
+        _source_preview, visible_source, local_target = geometry
+        scale_x = float(image.width()) / float(max(1, self.image.width()))
+        scale_y = float(image.height()) / float(max(1, self.image.height()))
+        overlay_source = QtCore.QRectF(
+            visible_source.left() * scale_x,
+            visible_source.top() * scale_y,
+            visible_source.width() * scale_x,
+            visible_source.height() * scale_y,
+        )
+        mapped = QtCore.QRectF(
+            target_rect.left() + local_target.left(),
+            target_rect.top() + local_target.top(),
+            local_target.width(),
+            local_target.height(),
+        )
+        if fill_background is not None:
+            painter.fillRect(target_rect, fill_background)
+        painter.drawImage(mapped, image, overlay_source)
+        return True
+
+    def _view_geometry(
+        self,
+        view_center: dict[str, Any],
+        pixels_per_metre: float,
+        pixel_width: int,
+        pixel_height: int,
+    ) -> tuple[QtCore.QRectF, QtCore.QRectF, QtCore.QRectF] | None:
         calibration = self.calibration
         if (
             calibration is None
@@ -355,24 +439,13 @@ class MapTexture:
         if visible_source.isEmpty():
             return None
 
-        view = QtGui.QImage(
-            pixel_width,
-            pixel_height,
-            QtGui.QImage.Format.Format_ARGB32_Premultiplied,
-        )
-        view.fill(QtGui.QColor("#10151b"))
-
         target = QtCore.QRectF(
             (visible_source.left() - source_preview.left()) / source_preview.width() * pixel_width,
             (visible_source.top() - source_preview.top()) / source_preview.height() * pixel_height,
             visible_source.width() / source_preview.width() * pixel_width,
             visible_source.height() / source_preview.height() * pixel_height,
         )
-        painter = QtGui.QPainter(view)
-        painter.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform)
-        painter.drawImage(target, self.image, visible_source)
-        painter.end()
-        return view
+        return source_preview, visible_source, target
 
     def diagnostic(self, player: dict[str, Any]) -> str:
         if self.calibration is None or self.image.isNull():
