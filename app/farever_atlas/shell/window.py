@@ -23,7 +23,12 @@ from ..controls import (
     SlideSwitch,
 )
 from ..pages.map.data import MapTexture, Snapshot
-from ..pages.map.fog import FOW_TIER_LABELS, FOW_TIER_ORDER
+from ..pages.map.fog import FOW_TIER_ORDER
+from ..pages.map.fow_layers import (
+    FOW_LAYER_LABELS,
+    FOW_LAYER_ORDER,
+    FOW_LAYER_SHORT_LABELS,
+)
 from ..pages.codex.page import CodexPage, CodexPageMixin
 from ..pages.map.page import MapPage, MapPageMixin
 from ..pages.map.radar import RadarWidget
@@ -60,6 +65,8 @@ class AtlasWindow(
     # (visible radius in metres, displayed zoom multiplier).
     # 200 m is the baseline 1x view; smaller radii zoom in.
     ZOOM_LEVELS = (
+        (25, "8x"),
+        (50, "4x"),
         (100, "2x"),
         (200, "1x"),
         (300, "0.7x"),
@@ -371,19 +378,6 @@ class AtlasWindow(
         self.recenter_animation.setDuration(160)
         self.recenter_animation.valueChanged.connect(self._overlay_animation_step)
 
-        self.fog_cycle = QtWidgets.QToolButton()
-        self.fog_cycle.setObjectName("centerButton")
-        self.fog_cycle.setFixedHeight(26)
-        self.fog_cycle.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding,
-            QtWidgets.QSizePolicy.Policy.Fixed,
-        )
-        self.fog_cycle.setToolTip(
-            "Cycle fog accessible tiers (prototype).\n"
-            "Right-click toggles region outlines."
-        )
-        map_controls_layout.addWidget(self.fog_cycle)
-
         zoom_row = QtWidgets.QHBoxLayout()
         zoom_row.setContentsMargins(0, 0, 0, 0)
         zoom_row.setSpacing(2)
@@ -394,6 +388,9 @@ class AtlasWindow(
         self.map_controls_overlay.setFixedWidth(self.map_control_inner_width + 10)
         self.map_controls_overlay.adjustSize()
         self.map_controls_overlay.raise_()
+
+        if self.dev_mode:
+            self._init_map_fow_edit_overlay()
 
         # Compact map-help control. The old canvas-wide tooltip was intrusive and
         # obscured the map, so controls are now shown explicitly on demand.
@@ -433,13 +430,22 @@ class AtlasWindow(
         help_title.setObjectName("mapHelpTitle")
         help_layout.addWidget(help_title, 0, 0, 1, 2)
 
-        controls = (
-            ("Drag", "Pan map"),
+        controls: tuple[tuple[str, str], ...] = (
+            ("Middle-drag", "Pan map"),
             ("Right-click", "Add or manage custom waypoints"),
             ("Double-click", "Recenter on player"),
             ("Mouse wheel", "Zoom"),
-            ("Fog button", "Cycle accessible regions (prototype)"),
         )
+        if self.dev_mode:
+            controls = controls + (
+                ("Points", "Edit Align-layer vertices"),
+                ("Points", "Shift/Ctrl-click multi-select"),
+                ("Points", "Drag empty map: marquee select"),
+                ("Points", "Drag selection: group move"),
+                ("Points", "Delete selection · Esc clears"),
+                ("Layer drag", "Move edit layer by dragging the map"),
+                ("Layer arrows", "Nudge layer; X±/Y± stretch by step"),
+            )
         for row, (gesture, action) in enumerate(controls, start=1):
             gesture_label = QtWidgets.QLabel(gesture)
             gesture_label.setObjectName("mapHelpKey")
@@ -533,7 +539,9 @@ class AtlasWindow(
         self._wire_gather_nav_panel()
         self._position_waypoint_overlays()
 
-        self.main_navigation_overlay = MainNavigationOverlay(self, self._settings)
+        self.main_navigation_overlay = MainNavigationOverlay(
+            self, self._settings, dev_mode=self.dev_mode
+        )
         self.main_navigation_overlay.closeRequested.connect(
             lambda: self._set_main_navigation_visible(False)
         )
@@ -584,11 +592,37 @@ class AtlasWindow(
         self.zoom_out.clicked.connect(lambda: self._step_zoom(1))
         self.zoom_in.clicked.connect(lambda: self._step_zoom(-1))
         self.recenter.clicked.connect(self._recenter_map)
-        self.fog_cycle.clicked.connect(self._cycle_fog_tier)
-        self.fog_cycle.setContextMenuPolicy(
-            QtCore.Qt.ContextMenuPolicy.CustomContextMenu
-        )
-        self.fog_cycle.customContextMenuRequested.connect(self._toggle_fog_outlines)
+        if self.dev_mode and hasattr(self, "fog_toggle_button"):
+            self.fog_toggle_button.toggled.connect(self._toggle_fog_enabled)
+            for tier, btn in self.fog_layer_buttons.items():
+                btn.toggled.connect(
+                    lambda checked, t=tier: self._toggle_fog_layer(t, checked)
+                )
+            self.fow_edit_layer_combo.currentIndexChanged.connect(
+                self._on_fow_edit_layer_changed
+            )
+            self.z4_drag_button.toggled.connect(self._toggle_z4_drag_mode)
+            self.z4_invert_button.toggled.connect(self._toggle_z4_invert)
+            self.z4_move_left.clicked.connect(lambda: self._nudge_z4(-1.0, 0.0))
+            self.z4_move_right.clicked.connect(lambda: self._nudge_z4(1.0, 0.0))
+            self.z4_move_up.clicked.connect(lambda: self._nudge_z4(0.0, -1.0))
+            self.z4_move_down.clicked.connect(lambda: self._nudge_z4(0.0, 1.0))
+            self.z4_stretch_x_out.clicked.connect(lambda: self._stretch_z4(sx=1.0))
+            self.z4_stretch_x_in.clicked.connect(lambda: self._stretch_z4(sx=-1.0))
+            self.z4_stretch_y_out.clicked.connect(lambda: self._stretch_z4(sy=1.0))
+            self.z4_stretch_y_in.clicked.connect(lambda: self._stretch_z4(sy=-1.0))
+            self.z4_reset_button.clicked.connect(self._reset_z4_transform)
+            self.fog_feather_button.toggled.connect(self._toggle_fog_feather)
+            self.fow_line_button.toggled.connect(self._toggle_fow_line_tool)
+            self.fow_bake_button.clicked.connect(self._bake_fow_edit_layer)
+            self.fow_reset_geo_button.clicked.connect(self._reset_fow_edit_geometry)
+            self.fow_bake_all_button.clicked.connect(self._bake_all_fow_to_z0)
+            self.fow_line_undo_button.clicked.connect(self.radar.fow_line_undo)
+            self.fow_line_close_button.clicked.connect(self._close_custom_fow_line)
+            self.fow_line_clear_button.clicked.connect(self._clear_custom_fow)
+            self.radar.fowLineToolChanged.connect(self._on_fow_line_tool_changed)
+            self.radar.fowLineDraftChanged.connect(self._update_fow_line_buttons)
+            self.radar.fowLayerDirtyChanged.connect(self._update_fow_line_buttons)
         self.map_help_button.toggled.connect(self._set_map_help_visible)
         self.radar.zoomRequested.connect(self._zoom_requested)
         self.radar.panStateChanged.connect(self._pan_state_changed)
@@ -858,6 +892,275 @@ class AtlasWindow(
             manager._pending_import_path = None
         self._set_waypoint_confirm_visible(False)
 
+    def _init_map_fow_edit_overlay(self) -> None:
+        """Dev-only FOW / zone edit controls (separate from zoom overlay)."""
+        self.map_fow_edit_overlay = QtWidgets.QWidget(self.radar)
+        self.map_fow_edit_overlay.setObjectName("mapFowEditOverlay")
+        self.map_fow_edit_overlay.setAttribute(
+            QtCore.Qt.WidgetAttribute.WA_NoMousePropagation, True
+        )
+        layout = QtWidgets.QVBoxLayout(self.map_fow_edit_overlay)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+
+        def section(title: str) -> QtWidgets.QLabel:
+            label = QtWidgets.QLabel(title)
+            label.setObjectName("fowEditSection")
+            return label
+
+        def tool_button(
+            text: str,
+            *,
+            checkable: bool = False,
+            tip: str = "",
+        ) -> QtWidgets.QToolButton:
+            btn = QtWidgets.QToolButton()
+            btn.setObjectName("fowEditButton")
+            btn.setFixedHeight(26)
+            btn.setText(text)
+            btn.setCheckable(checkable)
+            if tip:
+                btn.setToolTip(tip)
+            btn.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Expanding,
+                QtWidgets.QSizePolicy.Policy.Fixed,
+            )
+            return btn
+
+        top_row = QtWidgets.QHBoxLayout()
+        top_row.setContentsMargins(0, 0, 0, 0)
+        top_row.setSpacing(4)
+        self.fog_toggle_button = tool_button(
+            "FOW",
+            checkable=True,
+            tip="Show or hide fog of war on the map.",
+        )
+        self.fog_feather_button = tool_button(
+            "Feather",
+            checkable=True,
+            tip="Soft fog edge (~20 m feather).",
+        )
+        top_row.addWidget(self.fog_toggle_button)
+        top_row.addWidget(self.fog_feather_button)
+        layout.addLayout(top_row)
+
+        layout.addWidget(section("ZONES"))
+        self.fog_layer_buttons: dict[str, QtWidgets.QToolButton] = {}
+        zone_groups = (
+            ("Ship", [layer for layer in FOW_LAYER_ORDER if layer == "Baked"]),
+            ("Z0", [layer for layer in FOW_LAYER_ORDER if layer == "Z0"]),
+            (
+                "Z1a",
+                [
+                    layer
+                    for layer in FOW_LAYER_ORDER
+                    if layer
+                    in (
+                        "Z1_Primevalley",
+                        "Z1_Honeywoods",
+                        "Z1_Meridion",
+                    )
+                ],
+            ),
+            (
+                "Z1b",
+                [
+                    layer
+                    for layer in FOW_LAYER_ORDER
+                    if layer
+                    in (
+                        "Z1_Enripit",
+                        "Z1_Bel_Etir",
+                        "Z1_Slime",
+                    )
+                ],
+            ),
+            ("Z2", [layer for layer in FOW_LAYER_ORDER if layer.startswith("Z2_")]),
+            ("Z3+", [layer for layer in FOW_LAYER_ORDER if layer in ("Z3", "Z4")]),
+        )
+        for group_title, layers in zone_groups:
+            group_row = QtWidgets.QHBoxLayout()
+            group_row.setContentsMargins(0, 0, 0, 0)
+            group_row.setSpacing(4)
+            for tier in layers:
+                short = FOW_LAYER_SHORT_LABELS.get(tier, tier)
+                label = FOW_LAYER_LABELS.get(tier, tier)
+                tip = (
+                    f"Toggle {label} FOW layer. "
+                    "Custom FOW borders stay additive with zones."
+                )
+                if tier == "Baked":
+                    tip = (
+                        "Release FOW clear zone shipped in assets. "
+                        "Use Bake all → Baked to refresh it from enabled edit layers."
+                    )
+                btn = tool_button(
+                    short,
+                    checkable=True,
+                    tip=tip,
+                )
+                self.fog_layer_buttons[tier] = btn
+                group_row.addWidget(btn)
+            if group_title in {"Ship", "Z0", "Z3+"}:
+                group_row.addStretch(1)
+            layout.addLayout(group_row)
+
+        self.fow_bake_all_button = tool_button(
+            "Bake all → Baked",
+            tip=(
+                "Merge all enabled zones (current transforms / inverts / overrides) "
+                "into the shipping Baked asset, then disable the other zone layers."
+            ),
+        )
+        layout.addWidget(self.fow_bake_all_button)
+
+        self.z4_align_container = QtWidgets.QWidget()
+        z4_align_layout = QtWidgets.QVBoxLayout(self.z4_align_container)
+        z4_align_layout.setContentsMargins(0, 0, 0, 0)
+        z4_align_layout.setSpacing(6)
+
+        z4_align_layout.addWidget(section("ALIGN"))
+        edit_row = QtWidgets.QHBoxLayout()
+        edit_row.setContentsMargins(0, 0, 0, 0)
+        edit_row.setSpacing(4)
+        self.fow_edit_layer_combo = QtWidgets.QComboBox()
+        self.fow_edit_layer_combo.setObjectName("fowEditCombo")
+        self.fow_edit_layer_combo.setFixedHeight(26)
+        for tier in FOW_LAYER_ORDER:
+            self.fow_edit_layer_combo.addItem(
+                FOW_LAYER_LABELS.get(tier, tier), tier
+            )
+        self.fow_edit_layer_combo.setToolTip(
+            "Layer targeted by Points / drag / nudge / stretch / invert / Bake"
+        )
+        self.z4_step_combo = QtWidgets.QComboBox()
+        self.z4_step_combo.setObjectName("fowEditCombo")
+        self.z4_step_combo.setFixedHeight(26)
+        for label, metres in (
+            ("1 m", 1.0),
+            ("5 m", 5.0),
+            ("25 m", 25.0),
+            ("100 m", 100.0),
+        ):
+            self.z4_step_combo.addItem(label, metres)
+        self.z4_step_combo.setCurrentIndex(1)
+        self.z4_step_combo.setToolTip("Nudge / stretch step size")
+        edit_row.addWidget(self.fow_edit_layer_combo, 1)
+        edit_row.addWidget(self.z4_step_combo, 1)
+        z4_align_layout.addLayout(edit_row)
+
+        mode_row = QtWidgets.QHBoxLayout()
+        mode_row.setContentsMargins(0, 0, 0, 0)
+        mode_row.setSpacing(4)
+        self.z4_drag_button = tool_button(
+            "Drag",
+            checkable=True,
+            tip="Drag on the map to move the edit layer",
+        )
+        self.z4_invert_button = tool_button(
+            "Invert",
+            checkable=True,
+            tip="Invert edit layer: fog that shape (combine with other layers).",
+        )
+        self.z4_reset_button = tool_button(
+            "Reset",
+            tip="Reset edit layer move/stretch (transform only)",
+        )
+        mode_row.addWidget(self.z4_drag_button)
+        mode_row.addWidget(self.z4_invert_button)
+        mode_row.addWidget(self.z4_reset_button)
+        z4_align_layout.addLayout(mode_row)
+
+        points_row = QtWidgets.QHBoxLayout()
+        points_row.setContentsMargins(0, 0, 0, 0)
+        points_row.setSpacing(4)
+        self.fow_line_button = tool_button(
+            "Points",
+            checkable=True,
+            tip=(
+                "Edit layer vertices; Shift/marquee multi-select; "
+                "group-drag moves selection. Click empty map to draw a new ring."
+            ),
+        )
+        self.fow_bake_button = tool_button(
+            "Bake",
+            tip="Commit edited rings to stored geometry and clear transform",
+        )
+        self.fow_reset_geo_button = tool_button(
+            "Reset geo",
+            tip="Drop override and restore baked asset rings",
+        )
+        points_row.addWidget(self.fow_line_button)
+        points_row.addWidget(self.fow_bake_button)
+        points_row.addWidget(self.fow_reset_geo_button)
+        z4_align_layout.addLayout(points_row)
+
+        move_row = QtWidgets.QHBoxLayout()
+        move_row.setContentsMargins(0, 0, 0, 0)
+        move_row.setSpacing(4)
+        self.z4_move_left = tool_button("←", tip="Move edit layer west")
+        self.z4_move_up = tool_button("↑", tip="Move edit layer north (−Y)")
+        self.z4_move_down = tool_button("↓", tip="Move edit layer south (+Y)")
+        self.z4_move_right = tool_button("→", tip="Move edit layer east")
+        for btn in (
+            self.z4_move_left,
+            self.z4_move_up,
+            self.z4_move_down,
+            self.z4_move_right,
+        ):
+            move_row.addWidget(btn)
+        z4_align_layout.addLayout(move_row)
+
+        stretch_row = QtWidgets.QHBoxLayout()
+        stretch_row.setContentsMargins(0, 0, 0, 0)
+        stretch_row.setSpacing(4)
+        self.z4_stretch_x_out = tool_button("X+", tip="Stretch edit layer wider")
+        self.z4_stretch_x_in = tool_button("X−", tip="Stretch edit layer narrower")
+        self.z4_stretch_y_out = tool_button("Y+", tip="Stretch edit layer taller")
+        self.z4_stretch_y_in = tool_button("Y−", tip="Stretch edit layer shorter")
+        for btn in (
+            self.z4_stretch_x_out,
+            self.z4_stretch_x_in,
+            self.z4_stretch_y_out,
+            self.z4_stretch_y_in,
+        ):
+            stretch_row.addWidget(btn)
+        z4_align_layout.addLayout(stretch_row)
+
+        self.z4_status_label = QtWidgets.QLabel("")
+        self.z4_status_label.setObjectName("fowEditStatus")
+        self.z4_status_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.z4_status_label.setWordWrap(True)
+        z4_align_layout.addWidget(self.z4_status_label)
+
+        self.z4_align_container.hide()
+        layout.addWidget(self.z4_align_container)
+
+        layout.addWidget(section("CUSTOM"))
+        fow_line_row = QtWidgets.QHBoxLayout()
+        fow_line_row.setContentsMargins(0, 0, 0, 0)
+        fow_line_row.setSpacing(4)
+        self.fow_line_undo_button = tool_button(
+            "Undo", tip="Remove last draft vertex while drawing"
+        )
+        self.fow_line_close_button = tool_button(
+            "Close", tip="Close draft polyline into the edit layer"
+        )
+        self.fow_line_clear_button = tool_button(
+            "Clear", tip="Clear all rings on the edit layer"
+        )
+        for btn in (
+            self.fow_line_undo_button,
+            self.fow_line_close_button,
+            self.fow_line_clear_button,
+        ):
+            fow_line_row.addWidget(btn)
+        layout.addLayout(fow_line_row)
+
+        self.map_fow_edit_overlay.setFixedWidth(188)
+        self.map_fow_edit_overlay.adjustSize()
+        self.map_fow_edit_overlay.raise_()
+
     def _position_map_overlays(self) -> None:
         if not hasattr(self, "map_controls_overlay") or not hasattr(self, "sidebar"):
             return
@@ -893,6 +1196,21 @@ class AtlasWindow(
         self.map_controls_overlay.move(x, y)
         self.map_controls_overlay.raise_()
 
+        if hasattr(self, "map_fow_edit_overlay"):
+            self.map_fow_edit_overlay.adjustSize()
+            fow_x = max(
+                margin,
+                self.radar.width() - self.map_fow_edit_overlay.width() - margin,
+            )
+            fow_y = margin
+            # Keep clear of the zoom overlay if the canvas is short.
+            zoom_top = self.map_controls_overlay.y()
+            max_bottom = zoom_top - 8
+            if fow_y + self.map_fow_edit_overlay.height() > max_bottom:
+                fow_y = max(margin, max_bottom - self.map_fow_edit_overlay.height())
+            self.map_fow_edit_overlay.move(fow_x, max(margin, fow_y))
+            self.map_fow_edit_overlay.raise_()
+
         if hasattr(self, "map_help_button") and hasattr(self, "map_help_panel"):
             help_x = (
                 self.map_controls_overlay.x()
@@ -903,6 +1221,12 @@ class AtlasWindow(
                 margin,
                 self.map_controls_overlay.y() - self.map_help_button.height() - 4,
             )
+            if hasattr(self, "map_fow_edit_overlay"):
+                fow_bottom = (
+                    self.map_fow_edit_overlay.y()
+                    + self.map_fow_edit_overlay.height()
+                )
+                help_y = max(help_y, fow_bottom + 4)
             self.map_help_button.move(help_x, help_y)
             self.map_help_button.raise_()
             self.map_help_panel.adjustSize()
@@ -1051,39 +1375,389 @@ class AtlasWindow(
         if hasattr(self, "_refresh_players_roster"):
             self._refresh_players_roster(force=True)
 
-    def _update_fog_cycle_button(self) -> None:
-        if not hasattr(self, "fog_cycle"):
+    def _update_fog_toggle_button(self) -> None:
+        if not hasattr(self, "fog_toggle_button"):
             return
-        tier = self.radar.fog.max_tier
-        if not self.radar.fog.enabled:
-            self.fog_cycle.setText("Fog off")
-            self.fog_cycle.setToolTip(
-                "Fog of war is disabled in Settings.\n"
-                "Right-click toggles region outlines."
-            )
-            return
-        label = FOW_TIER_LABELS.get(tier, tier)
-        self.fog_cycle.setText(f"Fog {tier}")
-        self.fog_cycle.setToolTip(
-            f"Accessible: {label}\n"
-            "Click to cycle tiers (prototype).\n"
-            "Right-click toggles region outlines."
-        )
+        enabled = bool(self.radar.fog.enabled)
+        blocked = self.fog_toggle_button.blockSignals(True)
+        self.fog_toggle_button.setChecked(enabled)
+        self.fog_toggle_button.blockSignals(blocked)
+        self.fog_toggle_button.setText("FOW on" if enabled else "FOW off")
 
-    def _cycle_fog_tier(self) -> None:
-        result = self.radar.fog.cycle_max_tier()
+    def _toggle_fog_enabled(self, checked: bool) -> None:
+        self.radar.fog.enabled = bool(checked)
         self._settings.setValue("map/fog_enabled", self.radar.fog.enabled)
-        if self.radar.fog.enabled:
-            self._settings.setValue("map/fog_max_tier", self.radar.fog.max_tier)
-        self._update_fog_cycle_button()
-        del result
+        self._update_fog_toggle_button()
         self.radar.update()
 
-    def _toggle_fog_outlines(self, _pos: QtCore.QPoint = None) -> None:
-        del _pos
-        self.radar.fog.show_outlines = not self.radar.fog.show_outlines
-        self._settings.setValue("map/fog_show_outlines", self.radar.fog.show_outlines)
-        self._update_fog_cycle_button()
+    def _fow_edit_tier(self) -> str:
+        data = self.fow_edit_layer_combo.currentData()
+        tier = str(data or "Z4")
+        return tier if tier in FOW_LAYER_ORDER else "Z4"
+
+    def _set_fow_edit_tier(self, tier: str) -> None:
+        tier = str(tier)
+        idx = self.fow_edit_layer_combo.findData(tier)
+        if idx < 0:
+            # Case-insensitive fallback for mixed-case region ids.
+            for i in range(self.fow_edit_layer_combo.count()):
+                if str(self.fow_edit_layer_combo.itemData(i)).upper() == tier.upper():
+                    idx = i
+                    break
+        if idx < 0:
+            return
+        blocked = self.fow_edit_layer_combo.blockSignals(True)
+        self.fow_edit_layer_combo.setCurrentIndex(idx)
+        self.fow_edit_layer_combo.blockSignals(blocked)
+        self.radar.set_fow_edit_layer(str(self.fow_edit_layer_combo.itemData(idx)))
+
+    def _on_fow_edit_layer_changed(self, _index: int = 0) -> None:
+        tier = self._fow_edit_tier()
+        self.radar.set_fow_edit_layer(tier)
+        self._update_z4_align_controls()
+
+    def _update_fog_layer_buttons(self) -> None:
+        if not hasattr(self, "fog_layer_buttons"):
+            return
+        for tier, btn in self.fog_layer_buttons.items():
+            enabled = self.radar.fog.layer_enabled(tier)
+            inverted = self.radar.fog.layer_inverted(tier)
+            blocked = btn.blockSignals(True)
+            btn.setChecked(enabled)
+            btn.blockSignals(blocked)
+            btn.setText(FOW_LAYER_SHORT_LABELS.get(tier, tier))
+            btn.setProperty("inverted", inverted)
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+
+    def _toggle_fog_layer(self, tier: str, checked: bool) -> None:
+        tier = str(tier)
+        self.radar.fog.set_layer_enabled(tier, bool(checked))
+        key = next(
+            (k for k in FOW_LAYER_ORDER if k.upper() == tier.upper()),
+            tier,
+        )
+        self._settings.setValue(
+            f"map/fog_layer_{key}", self.radar.fog.layer_enabled(key)
+        )
+        if not self.radar.fog.any_layer_enabled():
+            self.radar.set_z4_drag_mode(False)
+        if checked:
+            self._set_fow_edit_tier(key)
+        self._update_fog_layer_buttons()
+        self._update_z4_align_controls()
+        self._update_fow_line_buttons()
+        self.radar.update()
+        if hasattr(self, "map_fow_edit_overlay"):
+            self.map_fow_edit_overlay.adjustSize()
+        self._position_map_overlays()
+
+    def _z4_step_metres(self) -> float:
+        value = self.z4_step_combo.currentData()
+        try:
+            return max(0.1, float(value))
+        except (TypeError, ValueError):
+            return 5.0
+
+    def _nudge_z4(self, dx_sign: float, dy_sign: float) -> None:
+        tier = self._fow_edit_tier()
+        if not self.radar.fog.layer_enabled(tier):
+            return
+        step = self._z4_step_metres()
+        self.radar.fog.nudge_layer(tier, dx_sign * step, dy_sign * step)
+        self._update_z4_status_label()
+        self.radar.update()
+
+    def _stretch_z4(self, *, sx: float = 0.0, sy: float = 0.0) -> None:
+        tier = self._fow_edit_tier()
+        if not self.radar.fog.layer_enabled(tier):
+            return
+        rings = self.radar.fog.transformed_layer_rings(tier)
+        xs = [x for ring in rings for x, _y in ring]
+        ys = [y for ring in rings for _x, y in ring]
+        if not xs or not ys:
+            return
+        span_x = max(xs) - min(xs)
+        span_y = max(ys) - min(ys)
+        step = self._z4_step_metres()
+        sx_factor = 1.0
+        sy_factor = 1.0
+        if sx != 0.0 and span_x > 1e-6:
+            sx_factor = max(1e-4, (span_x + sx * step) / span_x)
+        if sy != 0.0 and span_y > 1e-6:
+            sy_factor = max(1e-4, (span_y + sy * step) / span_y)
+        self.radar.fog.stretch_layer(tier, sx_factor=sx_factor, sy_factor=sy_factor)
+        self._update_z4_status_label()
+        self.radar.update()
+
+    def _reset_z4_transform(self) -> None:
+        tier = self._fow_edit_tier()
+        self.radar.fog.reset_layer_transform(tier)
+        self._update_z4_status_label()
+        self.radar.update()
+
+    def _toggle_z4_drag_mode(self, checked: bool) -> None:
+        if checked and not self.radar.fog.any_layer_enabled():
+            blocked = self.z4_drag_button.blockSignals(True)
+            self.z4_drag_button.setChecked(False)
+            self.z4_drag_button.blockSignals(blocked)
+            return
+        self.radar.set_fow_edit_layer(self._fow_edit_tier())
+        self.radar.set_z4_drag_mode(bool(checked))
+        self._update_z4_align_controls()
+
+    def _toggle_z4_invert(self, checked: bool) -> None:
+        tier = self._fow_edit_tier()
+        self.radar.fog.set_layer_inverted(tier, bool(checked))
+        self._settings.setValue(
+            f"map/fog_layer_{tier}_invert", self.radar.fog.layer_inverted(tier)
+        )
+        self._update_fog_layer_buttons()
+        self._update_z4_align_controls()
+        self.radar.update()
+
+    def _update_z4_align_controls(self) -> None:
+        if not hasattr(self, "z4_align_container"):
+            return
+        any_on = self.radar.fog.any_layer_enabled()
+        self.z4_align_container.setVisible(any_on)
+        tier = self._fow_edit_tier()
+        tier_on = self.radar.fog.layer_enabled(tier)
+        blocked = self.z4_drag_button.blockSignals(True)
+        self.z4_drag_button.setChecked(self.radar.z4_drag_mode_active and any_on)
+        self.z4_drag_button.blockSignals(blocked)
+        self.z4_drag_button.setEnabled(any_on and tier_on)
+        inv = self.radar.fog.layer_inverted(tier)
+        inv_blocked = self.z4_invert_button.blockSignals(True)
+        self.z4_invert_button.setChecked(inv)
+        self.z4_invert_button.blockSignals(inv_blocked)
+        self.z4_invert_button.setEnabled(any_on and tier_on)
+        self.z4_invert_button.setText("Invert" if not inv else "Inverted")
+        self.fow_edit_layer_combo.setEnabled(any_on)
+        points_on = self.radar.fow_line_tool_active
+        if hasattr(self, "fow_line_button"):
+            self.fow_line_button.setEnabled(any_on and tier_on)
+        if hasattr(self, "fow_bake_button"):
+            dirty = self.radar.fog.is_layer_dirty(tier)
+            self.fow_bake_button.setEnabled(any_on and tier_on and dirty)
+        if hasattr(self, "fow_reset_geo_button"):
+            self.fow_reset_geo_button.setEnabled(
+                any_on
+                and tier_on
+                and (
+                    self.radar.fog.has_layer_override(tier)
+                    or self.radar.fog.is_layer_dirty(tier)
+                )
+            )
+        for widget in (
+            self.z4_step_combo,
+            self.z4_move_left,
+            self.z4_move_right,
+            self.z4_move_up,
+            self.z4_move_down,
+            self.z4_stretch_x_out,
+            self.z4_stretch_x_in,
+            self.z4_stretch_y_out,
+            self.z4_stretch_y_in,
+            self.z4_reset_button,
+        ):
+            # Affine tools stay available unless Points is actively editing.
+            widget.setEnabled(any_on and tier_on and not points_on)
+        self._update_z4_status_label()
+        if hasattr(self, "map_fow_edit_overlay"):
+            self.map_fow_edit_overlay.adjustSize()
+            self._position_map_overlays()
+
+    def _update_z4_status_label(self) -> None:
+        if not hasattr(self, "z4_status_label"):
+            return
+        tier = self._fow_edit_tier()
+        label = FOW_LAYER_SHORT_LABELS.get(tier, tier)
+        xform = self.radar.fog.layer_transform(tier)
+        flags: list[str] = []
+        if self.radar.fog.is_layer_dirty(tier):
+            flags.append("edited")
+        elif self.radar.fog.has_layer_override(tier):
+            flags.append("override")
+        sel = self.radar.fow_selection_count
+        if sel:
+            flags.append(f"{sel} selected")
+        flag_txt = f" · {', '.join(flags)}" if flags else ""
+        self.z4_status_label.setText(
+            f"{label}  Δ{xform.tx:+.0f},{xform.ty:+.0f} m{flag_txt}\n"
+            f"× {xform.sx:.3f} · {xform.sy:.3f}"
+        )
+
+    def _update_fog_feather_button(self) -> None:
+        if not hasattr(self, "fog_feather_button"):
+            return
+        enabled = bool(self.radar.fog.feather_enabled)
+        blocked = self.fog_feather_button.blockSignals(True)
+        self.fog_feather_button.setChecked(enabled)
+        self.fog_feather_button.blockSignals(blocked)
+        self.fog_feather_button.setText("Feather" if enabled else "Feather")
+
+    def _toggle_fog_feather(self, checked: bool) -> None:
+        self.radar.fog.feather_enabled = bool(checked)
+        self._settings.setValue("map/fog_feather", self.radar.fog.feather_enabled)
+        self._update_fog_feather_button()
+        self.radar.update()
+
+    def _toggle_fow_line_tool(self, checked: bool) -> None:
+        self.radar.set_fow_edit_layer(self._fow_edit_tier())
+        self.radar.set_fow_line_tool(bool(checked))
+
+    def _on_fow_line_tool_changed(self, active: bool) -> None:
+        if not hasattr(self, "fow_line_button"):
+            return
+        blocked = self.fow_line_button.blockSignals(True)
+        self.fow_line_button.setChecked(bool(active))
+        self.fow_line_button.blockSignals(blocked)
+        self._update_fow_line_buttons()
+        self._update_z4_align_controls()
+
+    def _update_fow_line_buttons(self) -> None:
+        if not hasattr(self, "fow_line_undo_button"):
+            return
+        if not hasattr(self, "fow_line_button"):
+            return
+        draft = self.radar.fow_line_draft_count
+        active = self.radar.fow_line_tool_active
+        tier = self._fow_edit_tier()
+        has_rings = bool(self.radar.fog.source_rings(tier))
+        self.fow_line_button.setEnabled(
+            self.radar.fog.any_layer_enabled()
+            and self.radar.fog.layer_enabled(tier)
+        )
+        self.fow_line_undo_button.setEnabled(active and draft > 0)
+        self.fow_line_close_button.setEnabled(active and draft >= 3)
+        self.fow_line_clear_button.setEnabled(active and (has_rings or draft > 0))
+        if hasattr(self, "fow_bake_button"):
+            self.fow_bake_button.setEnabled(
+                self.radar.fog.layer_enabled(tier)
+                and self.radar.fog.is_layer_dirty(tier)
+            )
+        # Closing a new ring may auto-enable the edit layer; sync toggle.
+        layer_btn = getattr(self, "fog_layer_buttons", {}).get(tier)
+        if layer_btn is not None:
+            enabled = self.radar.fog.layer_enabled(tier)
+            if layer_btn.isChecked() != enabled:
+                blocked = layer_btn.blockSignals(True)
+                layer_btn.setChecked(enabled)
+                layer_btn.blockSignals(blocked)
+                self._settings.setValue(f"map/fog_layer_{tier}", enabled)
+                self._update_z4_align_controls()
+        self._update_z4_status_label()
+
+    def _close_custom_fow_line(self) -> None:
+        closed = self.radar.fow_line_close()
+        if not closed:
+            return
+        tier = self._fow_edit_tier()
+        self._settings.setValue(
+            f"map/fog_layer_{tier}", self.radar.fog.layer_enabled(tier)
+        )
+        self._update_fog_layer_buttons()
+        self._update_fow_line_buttons()
+        self._update_z4_align_controls()
+        self.radar.update()
+
+    def _clear_custom_fow(self) -> None:
+        tier = self._fow_edit_tier()
+        label = FOW_LAYER_LABELS.get(tier, tier)
+        if (
+            not self.radar.fog.source_rings(tier)
+            and self.radar.fow_line_draft_count == 0
+        ):
+            return
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Clear layer rings",
+            f"Remove all FOW rings on {label}?",
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No,
+        )
+        if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+        self.radar.fow_line_clear_custom()
+        self._update_fow_line_buttons()
+        self.radar.update()
+
+    def _bake_fow_edit_layer(self) -> None:
+        self.radar.set_fow_edit_layer(self._fow_edit_tier())
+        self.radar.bake_fow_edit_layer()
+        self._update_fow_line_buttons()
+        self._update_z4_align_controls()
+
+    def _bake_all_fow_to_z0(self) -> None:
+        enabled = [
+            FOW_LAYER_LABELS.get(tier, tier)
+            for tier in FOW_LAYER_ORDER
+            if self.radar.fog.layer_enabled(tier)
+        ]
+        if not enabled:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Bake all zones",
+                "Enable at least one FOW layer first.",
+            )
+            return
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Bake all zones → Baked",
+            "Merge currently enabled zones into the shipping Baked asset?\n\n"
+            "Uses each layer’s current transform, invert, and overrides.\n"
+            "Writes assets/map/w1_siagarta_fow.json and turns other zones off.\n\n"
+            f"Enabled: {', '.join(enabled)}",
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No,
+        )
+        if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+        if self.radar.fow_line_tool_active:
+            self.radar.set_fow_line_tool(False)
+        ok, message = self.radar.fog.bake_all_enabled_to_baked()
+        if not ok:
+            QtWidgets.QMessageBox.warning(self, "Bake all zones", message)
+            return
+        for tier in FOW_LAYER_ORDER:
+            self._settings.setValue(
+                f"map/fog_layer_{tier}", self.radar.fog.layer_enabled(tier)
+            )
+            self._settings.setValue(
+                f"map/fog_layer_{tier}_invert",
+                self.radar.fog.layer_inverted(tier),
+            )
+        self._set_fow_edit_tier("Baked")
+        self._update_fog_layer_buttons()
+        self._update_fow_line_buttons()
+        self._update_z4_align_controls()
+        self.radar.update()
+        if hasattr(self, "map_fow_edit_overlay"):
+            self.map_fow_edit_overlay.adjustSize()
+            self._position_map_overlays()
+        QtWidgets.QMessageBox.information(self, "Bake all zones", message)
+
+    def _reset_fow_edit_geometry(self) -> None:
+        tier = self._fow_edit_tier()
+        label = FOW_LAYER_LABELS.get(tier, tier)
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Reset layer geometry",
+            f"Restore baked asset rings for {label}?\n"
+            "Stored overrides and unsaved edits will be discarded.",
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No,
+        )
+        if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+        self.radar.set_fow_edit_layer(tier)
+        self.radar.reset_fow_edit_geometry()
+        self._update_fow_line_buttons()
+        self._update_z4_align_controls()
         self.radar.update()
 
     def _pan_state_changed(self, panned: bool) -> None:
@@ -1189,13 +1863,55 @@ class AtlasWindow(
         self.radar.heading_up = False
         self.radar.rounded = False
         self.radar.fog.enabled = self._setting_bool("map/fog_enabled", True)
-        self.radar.fog.show_outlines = self._setting_bool("map/fog_show_outlines", True)
+        self.radar.fog.show_outlines = False
+        # Zone / FOW ring borders are --dev edit chrome only.
+        self.radar.fog.show_layer_outlines = bool(self.dev_mode)
         self.radar.fog.hide_markers = self._setting_bool("map/fog_hide_markers", True)
-        fog_tier = str(self._settings.value("map/fog_max_tier", "Z2") or "Z2").upper()
+        self.radar.fog.feather_enabled = self._setting_bool("map/fog_feather", True)
+        fog_tier = str(self._settings.value("map/fog_max_tier", "Z3") or "Z3").upper()
         if fog_tier not in FOW_TIER_ORDER:
-            fog_tier = "Z2"
+            fog_tier = "Z3"
         self.radar.fog.set_max_tier(fog_tier)
-        self._update_fog_cycle_button()
+        for tier in FOW_LAYER_ORDER:
+            key = f"map/fog_layer_{tier}"
+            enabled = self._setting_bool(key, tier == "Baked")
+            if not self._settings.contains(key):
+                if tier == "Baked":
+                    enabled = True
+                elif tier == "Z0":
+                    enabled = False
+                elif tier.startswith("Z1_"):
+                    enabled = self._setting_bool("map/fog_layer_Z1", False)
+                elif tier.startswith("Z2_"):
+                    enabled = self._setting_bool("map/fog_layer_Z2", False)
+                elif tier == "Z4":
+                    enabled = self._setting_bool("map/fog_z4_layer", False)
+                else:
+                    enabled = False
+            # Release builds only ship the Baked clear zone.
+            if not self.dev_mode:
+                enabled = tier == "Baked"
+            self.radar.fog.set_layer_enabled(tier, enabled, persist=False)
+            inv_key = f"map/fog_layer_{tier}_invert"
+            inverted = self._setting_bool(inv_key, False)
+            if not self._settings.contains(inv_key):
+                if tier.startswith("Z1_"):
+                    inverted = self._setting_bool("map/fog_layer_Z1_invert", False)
+                elif tier.startswith("Z2_"):
+                    inverted = self._setting_bool("map/fog_layer_Z2_invert", False)
+                elif tier == "Z4":
+                    inverted = self._setting_bool("map/fog_z4_invert", False)
+            if not self.dev_mode:
+                inverted = False
+            self.radar.fog.set_layer_inverted(tier, inverted, persist=False)
+        # Don't clobber --dev layer toggles when running a release session.
+        if self.dev_mode:
+            self.radar.fog._persist_layers()
+        self._update_fog_toggle_button()
+        self._update_fog_layer_buttons()
+        self._update_z4_align_controls()
+        self._update_fog_feather_button()
+        self._update_fow_line_buttons()
         poi_visibility = {
             kind: button.isChecked() for kind, button in self.poi_filters.items()
         }
@@ -1249,9 +1965,18 @@ class AtlasWindow(
         self._settings.setValue("map/show_enemies", self.radar.show_enemies)
         self._settings.setValue("map/show_players", self.radar.show_players)
         self._settings.setValue("map/fog_enabled", self.radar.fog.enabled)
-        self._settings.setValue("map/fog_show_outlines", self.radar.fog.show_outlines)
+        self._settings.setValue("map/fog_show_outlines", False)
         self._settings.setValue("map/fog_hide_markers", self.radar.fog.hide_markers)
+        self._settings.setValue("map/fog_feather", self.radar.fog.feather_enabled)
         self._settings.setValue("map/fog_max_tier", self.radar.fog.max_tier)
+        for tier in FOW_LAYER_ORDER:
+            self._settings.setValue(
+                f"map/fog_layer_{tier}", self.radar.fog.layer_enabled(tier)
+            )
+            self._settings.setValue(
+                f"map/fog_layer_{tier}_invert",
+                self.radar.fog.layer_inverted(tier),
+            )
         # Retain the aggregate key only for downgrade compatibility.
         self._settings.setValue(
             "map/show_custom_waypoints", bool(visible_custom_waypoints)

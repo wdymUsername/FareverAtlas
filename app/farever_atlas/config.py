@@ -59,7 +59,7 @@ WAYPOINT_COLORS = {
     "magenta": "#bd6fd1",
     "white": "#d8e0e8",
 }
-WAYPOINT_ICONS = ("pin", "diamond", "circle", "star", "flag", "cross")
+WAYPOINT_ICONS = ("pin", "diamond", "circle", "star", "flag", "cross", "crosshair")
 
 GAME_DIR_ENV = "FAREVER_GAME_DIR"
 

@@ -35,9 +35,12 @@ class MainNavigationOverlay(QtWidgets.QFrame):
         self,
         parent: QtWidgets.QWidget,
         settings: QtCore.QSettings,
+        *,
+        dev_mode: bool = False,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("mainNavigationOverlay")
+        self.dev_mode = bool(dev_mode)
 
         root = QtWidgets.QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -60,7 +63,9 @@ class MainNavigationOverlay(QtWidgets.QFrame):
         self.buttons: list[QtWidgets.QPushButton] = []
         self.sections: list[QtWidgets.QWidget] = []
         self.current_section_index = 0
-        self.settings_panel = SettingsPanel(settings, self)
+        self.settings_panel = SettingsPanel(
+            settings, self, dev_mode=self.dev_mode
+        )
         self.settings_panel.changed.connect(self.settingsChanged.emit)
         self.settings_panel.resetWindowsRequested.connect(
             self.resetWindowsRequested.emit

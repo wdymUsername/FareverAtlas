@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Rebuild assets/map/w1_siagarta_fow.json from extracted mogshape zones.
+"""Rebuild assets/map/w1_siagarta_fow.json clear-hole layers from mogshapes.
 
-Mogshape coordinates are not world metres. This script fits a linear
-shape→world transform from zone shapes that share names with POIs, then
-writes world-space rings for the region polygons used by fog-of-war.
+Toggleable Z1–Z4 layers are edited in-app (move / stretch / invert). Custom FOW
+borders live under user_data/map/custom_fow_siagarta.json and are ignored while
+any tier layer is enabled.
 """
 
 from __future__ import annotations
@@ -20,18 +20,19 @@ OUT_JSON = ROOT / "assets/map/w1_siagarta_fow.json"
 PATTERN_SRC = ROOT / "extracted/res/UI/Map/Pattern_fog_of_war_512.png"
 PATTERN_DST = ROOT / "assets/map/pattern_fog_of_war_512.png"
 
-# Global world-space nudge (metres). Moves the fog edge that sat at custom
-# waypoint fow1 onto fow2 (delta fow2 − fow1).
-WORLD_NUDGE_M = (16.333, 56.667)
-
 REGIONS = (
-    ("Z1_Region", "Skover Island", "Z1"),
-    ("Bel_Etir_Region", "Bel Etir", "Z1"),
-    ("Z2_Region", "Valley of Eternal Autumn", "Z2"),
-    ("Z3_Region", "Ramburg", "Z3"),
+    ("Z1_Primevalley", "Primevalley", "Z1"),
+    ("Z1_Honeywoods", "Honeywoods", "Z1"),
+    ("Z1_Meridion", "Meridion", "Z1"),
+    ("Z1_Enripit", "Enripit", "Z1"),
+    ("Z1_Bel_Etir", "Bel Etir", "Z1"),
+    ("Z1_Slime", "Slime Island", "Z1"),
+    ("Z2_Azuram", "Azuram", "Z2"),
+    ("Z2_Krisomal", "Krisomal", "Z2"),
+    ("Z2_Nescent", "Nescent", "Z2"),
+    ("Z2_Eksod", "Eksod", "Z2"),
     ("CrimsonIsland_Region", "Crimson Island", "Z3"),
-    # Same polygon as Z3_Region in current extracts; kept for tier prototyping.
-    ("Z4_Ebral", "Ebral (stub)", "Z4"),
+    ("Z4_Ebral", "Ebral", "Z4"),
 )
 
 
@@ -113,11 +114,21 @@ def main() -> None:
     inv_sy = 1.0 / scale_y
 
     def to_world(x: float, y: float) -> tuple[float, float]:
-        wx = (x - offset_x) * inv_sx + WORLD_NUDGE_M[0]
-        wy = (y - offset_y) * inv_sy + WORLD_NUDGE_M[1]
-        return wx, wy
+        return (x - offset_x) * inv_sx, (y - offset_y) * inv_sy
 
     regions = []
+    # Preserve the release Baked clear zone across mogshape rebuilds.
+    if OUT_JSON.is_file():
+        try:
+            old_doc = json.loads(OUT_JSON.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            old_doc = {}
+        for entry in old_doc.get("regions") or []:
+            if isinstance(entry, dict) and str(entry.get("id") or "") == "Baked":
+                regions.append(entry)
+                print("kept Baked release region")
+                break
+
     for stem, label, tier in REGIONS:
         path = ZONE_DIR / f"{stem}.mogshape"
         if not path.is_file():
@@ -140,7 +151,7 @@ def main() -> None:
                 "rings": world_rings,
             }
         )
-        print(f"{stem}: {len(world_rings)} rings")
+        print(f"{stem}: {len(world_rings)} rings → {tier}")
 
     doc = {
         "world": "w1_siagarta",
@@ -152,12 +163,14 @@ def main() -> None:
             "scale_y": scale_y,
             "offset_y": offset_y,
         },
-        "world_nudge_m": [WORLD_NUDGE_M[0], WORLD_NUDGE_M[1]],
-        "world_nudge_note": "Shift so fog edge at fow1 moves to fow2",
+        "note": (
+            "Baked is the release FOW clear zone. Z1–Z4 are --dev edit layers; "
+            "Z0 is user custom FOW."
+        ),
         "defaults": {
             "enabled": True,
-            "accessible_tiers": ["Z1", "Z2"],
-            "show_outlines": True,
+            "accessible_tiers": ["Baked"],
+            "show_outlines": False,
         },
         "regions": regions,
     }

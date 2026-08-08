@@ -10,6 +10,8 @@ from typing import Any
 
 from PySide6 import QtCore, QtWidgets
 
+from .pages.map.fow_layers import FOW_LAYER_LABELS, FOW_LAYER_ORDER
+
 
 def _as_bool(value: Any, default: bool = False) -> bool:
     if isinstance(value, bool):
@@ -32,6 +34,8 @@ def _as_int(value: Any, default: int) -> int:
 
 
 ZOOM_CHOICES = (
+    ("8x", 25),
+    ("4x", 50),
     ("2x", 100),
     ("1x", 200),
     ("0.7x", 300),
@@ -72,9 +76,13 @@ def apply_settings_defaults(settings: QtCore.QSettings) -> None:
     settings.setValue("map/show_texture", True)
     settings.setValue("map/show_route_line", True)
     settings.setValue("map/fog_enabled", True)
-    settings.setValue("map/fog_show_outlines", True)
+    settings.setValue("map/fog_show_outlines", False)
     settings.setValue("map/fog_hide_markers", True)
-    settings.setValue("map/fog_max_tier", "Z2")
+    settings.setValue("map/fog_feather", True)
+    settings.setValue("map/fog_max_tier", "Z3")
+    for tier in FOW_LAYER_ORDER:
+        settings.setValue(f"map/fog_layer_{tier}", tier == "Baked")
+        settings.setValue(f"map/fog_layer_{tier}_invert", False)
     for kind, _label in POI_DEFAULT_KINDS:
         settings.setValue(f"map/show_poi_{kind}", True)
     for kind, _label in LOOT_DEFAULT_KINDS:
@@ -106,9 +114,12 @@ class SettingsPanel(QtCore.QObject):
         self,
         settings: QtCore.QSettings,
         parent: QtCore.QObject | None = None,
+        *,
+        dev_mode: bool = False,
     ) -> None:
         super().__init__(parent)
         self._settings = settings
+        self.dev_mode = bool(dev_mode)
         self._suppress = False
         self.tabs = QtWidgets.QTabWidget()
         self.tabs.addTab(self._general_tab(), "General")
@@ -148,14 +159,58 @@ class SettingsPanel(QtCore.QObject):
             self.fog_enabled.setChecked(
                 _as_bool(self._settings.value("map/fog_enabled"), True)
             )
-            self.fog_show_outlines.setChecked(
-                _as_bool(self._settings.value("map/fog_show_outlines"), True)
-            )
+            for tier, checkbox in self.fog_layer_checks.items():
+                default = tier == "Baked"
+                if not self._settings.contains(f"map/fog_layer_{tier}"):
+                    if tier == "Baked":
+                        default = True
+                    elif tier == "Z0":
+                        default = False
+                    elif tier.startswith("Z1_"):
+                        default = _as_bool(
+                            self._settings.value("map/fog_layer_Z1"), False
+                        )
+                    elif tier.startswith("Z2_"):
+                        default = _as_bool(
+                            self._settings.value("map/fog_layer_Z2"), False
+                        )
+                    elif tier == "Z4":
+                        default = _as_bool(
+                            self._settings.value("map/fog_z4_layer"), False
+                        )
+                    else:
+                        default = False
+                checkbox.setChecked(
+                    _as_bool(self._settings.value(f"map/fog_layer_{tier}"), default)
+                )
+            for tier, checkbox in self.fog_layer_invert_checks.items():
+                default = False
+                if not self._settings.contains(f"map/fog_layer_{tier}_invert"):
+                    if tier.startswith("Z1_"):
+                        default = _as_bool(
+                            self._settings.value("map/fog_layer_Z1_invert"), False
+                        )
+                    elif tier.startswith("Z2_"):
+                        default = _as_bool(
+                            self._settings.value("map/fog_layer_Z2_invert"), False
+                        )
+                    elif tier == "Z4":
+                        default = _as_bool(
+                            self._settings.value("map/fog_z4_invert"), False
+                        )
+                checkbox.setChecked(
+                    _as_bool(
+                        self._settings.value(f"map/fog_layer_{tier}_invert"), default
+                    )
+                )
             self.fog_hide_markers.setChecked(
                 _as_bool(self._settings.value("map/fog_hide_markers"), True)
             )
+            self.fog_feather.setChecked(
+                _as_bool(self._settings.value("map/fog_feather"), True)
+            )
             fog_tier = str(
-                self._settings.value("map/fog_max_tier", "Z2") or "Z2"
+                self._settings.value("map/fog_max_tier", "Z3") or "Z3"
             ).upper()
             fog_index = max(0, self.fog_max_tier.findData(fog_tier))
             self.fog_max_tier.setCurrentIndex(fog_index)
@@ -350,29 +405,46 @@ class SettingsPanel(QtCore.QObject):
         form.addRow("Waypoint route line", self.show_route)
         layout.addWidget(display)
 
-        fog, fog_form = self._group("Fog of war (prototype)")
+        fog, fog_form = self._group("Fog of war")
         self.fog_enabled = QtWidgets.QCheckBox()
         self._bind_bool(self.fog_enabled, "map/fog_enabled")
         fog_form.addRow("Enable fog", self.fog_enabled)
 
-        self.fog_max_tier = QtWidgets.QComboBox()
-        self.fog_max_tier.addItem("Z1 Skover only", "Z1")
-        self.fog_max_tier.addItem("Z1–Z2 (EA default)", "Z2")
-        self.fog_max_tier.addItem("Z1–Z3 + Crimson", "Z3")
-        self.fog_max_tier.addItem("All regions", "Z4")
-        saved_tier = str(self._settings.value("map/fog_max_tier", "Z2") or "Z2").upper()
-        tier_index = max(0, self.fog_max_tier.findData(saved_tier))
-        self.fog_max_tier.setCurrentIndex(tier_index)
-        self.fog_max_tier.currentIndexChanged.connect(self._on_fog_tier_changed)
-        fog_form.addRow("Accessible through", self.fog_max_tier)
-
-        self.fog_show_outlines = QtWidgets.QCheckBox()
-        self._bind_bool(self.fog_show_outlines, "map/fog_show_outlines")
-        fog_form.addRow("Region outlines", self.fog_show_outlines)
+        self.fog_feather = QtWidgets.QCheckBox()
+        self._bind_bool(self.fog_feather, "map/fog_feather")
+        fog_form.addRow("Soft fog edge (feather)", self.fog_feather)
 
         self.fog_hide_markers = QtWidgets.QCheckBox()
         self._bind_bool(self.fog_hide_markers, "map/fog_hide_markers")
         fog_form.addRow("Hide markers under fog", self.fog_hide_markers)
+
+        self.fog_layer_checks: dict[str, QtWidgets.QCheckBox] = {}
+        self.fog_layer_invert_checks: dict[str, QtWidgets.QCheckBox] = {}
+        for tier in FOW_LAYER_ORDER:
+            enabled = QtWidgets.QCheckBox()
+            inverted = QtWidgets.QCheckBox()
+            self.fog_layer_checks[tier] = enabled
+            self.fog_layer_invert_checks[tier] = inverted
+            self._bind_bool(enabled, f"map/fog_layer_{tier}")
+            self._bind_bool(inverted, f"map/fog_layer_{tier}_invert")
+            if self.dev_mode:
+                label = FOW_LAYER_LABELS.get(tier, tier)
+                fog_form.addRow(f"{label} layer", enabled)
+                fog_form.addRow(f"{label} invert", inverted)
+
+        self.fog_max_tier = QtWidgets.QComboBox()
+        self.fog_max_tier.addItem(
+            "Z1 Primevalley/Honeywoods/Meridion/Enripit/Bel Etir/Slime", "Z1"
+        )
+        self.fog_max_tier.addItem("Z2 Azuram/Krisomal/Nescent/Eksod", "Z2")
+        self.fog_max_tier.addItem("Z3 Crimson Island", "Z3")
+        saved_tier = str(self._settings.value("map/fog_max_tier", "Z3") or "Z3").upper()
+        tier_index = max(0, self.fog_max_tier.findData(saved_tier))
+        self.fog_max_tier.setCurrentIndex(tier_index)
+        self.fog_max_tier.currentIndexChanged.connect(self._on_fog_tier_changed)
+        if self.dev_mode:
+            fog_form.addRow("Legacy accessible through", self.fog_max_tier)
+
         layout.addWidget(fog)
 
         defaults, default_form = self._group("Default visibility")
