@@ -215,6 +215,8 @@ class SteamProfileCache(QtCore.QObject):
         self._inflight = False
         self._pending_ids: list[str] = []
         self._api_key = ""
+        # Pin the active QRunnable so its signals QObject is not GC'd mid-run.
+        self._worker: _SteamSummariesWorker | None = None
         self._load_all()
 
     def set_api_key(self, key: object) -> None:
@@ -294,10 +296,12 @@ class SteamProfileCache(QtCore.QObject):
         self._pending_ids = self._pending_ids[100:]
         self._inflight = True
         worker = _SteamSummariesWorker(self._api_key, batch, self.cache_dir)
+        self._worker = worker
         worker.signals.finished.connect(self._on_worker_finished)
         QtCore.QThreadPool.globalInstance().start(worker)
 
     def _on_worker_finished(self, summaries: object) -> None:
+        self._worker = None
         self._inflight = False
         changed = False
         if isinstance(summaries, dict):
@@ -443,6 +447,8 @@ class SteamFriendListCache(QtCore.QObject):
         self._inflight = False
         self._api_key = ""
         self._steamid64 = ""
+        # Pin the active QRunnable so its signals QObject is not GC'd mid-run.
+        self._worker: _SteamFriendListWorker | None = None
         self._load()
 
     def set_api_key(self, key: object) -> None:
@@ -479,10 +485,12 @@ class SteamFriendListCache(QtCore.QObject):
             return
         self._inflight = True
         worker = _SteamFriendListWorker(self._api_key, self._steamid64)
+        self._worker = worker
         worker.signals.finished.connect(self._on_worker_finished)
         QtCore.QThreadPool.globalInstance().start(worker)
 
     def _on_worker_finished(self, payload: object) -> None:
+        self._worker = None
         self._inflight = False
         if not isinstance(payload, dict):
             return
