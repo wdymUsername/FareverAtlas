@@ -1,7 +1,7 @@
 # Farever Atlas
 
 [![Windows portable exe](https://github.com/wdymUsername/FareverAtlas/actions/workflows/windows-portable.yml/badge.svg)](https://github.com/wdymUsername/FareverAtlas/actions/workflows/windows-portable.yml)
-[![VirusTotal](https://badges.cssnr.com/vt/wdymUsername/FareverAtlas/FareverAtlas.exe)](https://github.com/wdymUsername/FareverAtlas/releases/latest)
+[![VirusTotal](https://badges.cssnr.com/vt/wdymUsername/FareverAtlas/FareverAtlas.exe)](https://github.com/wdymUsername/FareverAtlas/releases/tag/Nightly)
 
 Farever Atlas is a standalone map and companion app for Farever. It runs in
 its own window and reads live player telemetry from a read-only native
@@ -172,11 +172,11 @@ Why this happens:
   `PROCESS_QUERY_LIMITED_INFORMATION` and `PROCESS_VM_READ` to sample live
   telemetry. Memory-reading helpers are often lumped with cheats or injectors
   even when they never write memory, inject code, or hook input.
-- **Low prevalence** — a freshly tagged release has little or no prior
-  reputation, so cloud AV may disagree until the hash is more widely seen.
+- **Low prevalence** — a fresh Nightly hash has little or no prior reputation,
+  so cloud AV may disagree until that build is more widely seen.
 
-Prefer downloading from
-[GitHub Releases](https://github.com/wdymUsername/FareverAtlas/releases/latest),
+Prefer downloading from the
+[Nightly release](https://github.com/wdymUsername/FareverAtlas/releases/tag/Nightly),
 check the attached `.sha256`, and compare the VirusTotal badge / release notes
 scan link for that exact asset. If your AV quarantines the file, add an
 exclusion for the Atlas folder or restore it from quarantine after verifying
@@ -255,8 +255,10 @@ packaging\windows\build.bat
 The portable build ships the app, assets, and bridge only — not `tools/`.
 
 GitHub Actions builds the same portable exe
-(`.github/workflows/windows-portable.yml`). Release tagging, VirusTotal
-submission, and distribution notes live in
+(`.github/workflows/windows-portable.yml`) and publishes a rolling
+[Nightly](https://github.com/wdymUsername/FareverAtlas/releases/tag/Nightly)
+release daily at 00:00 UTC (or on demand via Actions → Run workflow).
+VirusTotal submission and distribution notes live in
 [`DISTRIBUTION_README.txt`](DISTRIBUTION_README.txt).
 
 ## Layout

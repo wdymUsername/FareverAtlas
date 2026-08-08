@@ -29,14 +29,15 @@ Or on native Windows with Python 3.12+:
 GitHub Actions also builds dist/FareverAtlas.exe
 (.github/workflows/windows-portable.yml).
 
-Release (attaches FareverAtlas.exe + .sha256 to a GitHub Release):
+Nightly release (rolling; attaches FareverAtlas.exe + .sha256):
 
-  git tag v0.13.0
-  git push origin v0.13.0
+  - automatic: every day at 00:00 UTC
+  - manual: Actions → Windows portable exe → Run workflow
 
-Or Actions → Windows portable exe → Run workflow with a tag input.
+Download: https://github.com/wdymUsername/FareverAtlas/releases/tag/Nightly
 
-Non-release CI runs still upload the FareverAtlas-windows-portable artifact.
+Push/PR CI runs still upload the FareverAtlas-windows-portable artifact
+without updating Nightly.
 
 WINDOWS (SOURCE / VENV)
 -----------------------
