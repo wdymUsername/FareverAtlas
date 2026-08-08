@@ -28,7 +28,12 @@ from ..pages.map.fow_layers import (
 from ..pages.codex.page import CodexPage, CodexPageMixin
 from ..pages.map.page import MapPage, MapPageMixin
 from ..pages.map.radar import RadarWidget
-from ..pages.map.status import CharacterStatusWidget, PartyMemberStatusWidget, RiftStatusWidget
+from ..pages.map.status import (
+    CharacterStatusWidget,
+    GameTimeStatusWidget,
+    PartyMemberStatusWidget,
+    RiftStatusWidget,
+)
 from ..pages.planner.page import PlannerPage, PlannerPageMixin
 from ..pages.players.page import PlayersPage, PlayersPageMixin
 from ..theme import MAP_WINDOW_STYLESHEET
@@ -285,6 +290,13 @@ class AtlasWindow(
             | QtCore.Qt.AlignmentFlag.AlignVCenter,
         )
         toolbar_layout.addStretch(1)
+
+        self.game_time_status = GameTimeStatusWidget()
+        toolbar_layout.addWidget(
+            self.game_time_status,
+            0,
+            QtCore.Qt.AlignmentFlag.AlignVCenter,
+        )
 
         self.rift_status = RiftStatusWidget(rift_icon_path)
         toolbar_layout.addWidget(
@@ -634,6 +646,7 @@ class AtlasWindow(
             self.character_status.update_waiting()
         else:
             self.character_status.update_offline()
+        self.game_time_status.clear()
         self._update_players_page(
             {},
             online=self.online_mode,
@@ -2259,10 +2272,14 @@ class AtlasWindow(
             self.position.setToolTip(diagnostic)
         if self.online_mode and snapshot.connected:
             self.character_status.update_snapshot(snapshot)
+            state = snapshot.state if isinstance(snapshot.state, dict) else {}
+            self.game_time_status.update_from_state(state)
         elif self.online_mode:
             self.character_status.update_waiting()
+            self.game_time_status.clear()
         else:
             self.character_status.update_offline()
+            self.game_time_status.clear()
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # noqa: N802
         super().closeEvent(event)

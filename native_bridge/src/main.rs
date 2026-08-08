@@ -110,7 +110,15 @@ mod windows_bridge {
     const WORLD_TYPE_INDEX: usize = 787;
     // world.World inherits h3d.scene.Object (20 fields).
     const WORLD_LEVEL_FIELD_INDEX: usize = 23;
+    // world.World.timeOfDay — day-cycle controller (world.TimeOfDay).
+    const WORLD_TIME_OF_DAY_FIELD_INDEX: usize = 31;
     const WORLD_IS_WORLD_MAP_FIELD_INDEX: usize = 45;
+    const TIME_OF_DAY_TYPE_INDEX: usize = 881;
+    // world.TimeOfDay has no inherited fields; declared indexes match runtime.
+    const TIME_OF_DAY_SPEED_FIELD_INDEX: usize = 1;
+    const TIME_OF_DAY_PAUSED_FIELD_INDEX: usize = 2;
+    const TIME_OF_DAY_ELAPSED_FIELD_INDEX: usize = 3;
+    const TIME_OF_DAY_PREV_FACTOR_FIELD_INDEX: usize = 4;
     const ACTIVITY_TYPE_INDEX: usize = 1_590;
     // st.activity.DungeonBase (5094) / Dungeon (5095) — object_is_a walks supers.
     const ACTIVITY_DUNGEON_BASE_TYPE_INDEX: usize = 5_094;
@@ -434,7 +442,12 @@ mod windows_bridge {
         game_layer_entities_offset: usize,
         game_layer_units_offset: usize,
         world_level_offset: usize,
+        world_time_of_day_offset: usize,
         world_is_world_map_offset: usize,
+        time_of_day_speed_offset: usize,
+        time_of_day_paused_offset: usize,
+        time_of_day_elapsed_offset: usize,
+        time_of_day_prev_factor_offset: usize,
         activity_kind_offset: usize,
         state_removed_offset: usize,
         interactible_enabled_offset: usize,
@@ -1108,6 +1121,73 @@ mod windows_bridge {
             is_world_map,
             activity_kind,
         }
+    }
+
+    fn read_time_of_day(
+        process: &OwnedHandle,
+        code: &CodeAnchor,
+        hero: usize,
+    ) -> Option<TimeOfDaySample> {
+        let root = &code.player_root;
+        let layer = read_object_pointer_field(process, hero, root.layer_offset).ok()?;
+        let layer_bytes = read_process_bytes(process, layer, 8).ok()?;
+        let layer_type = read_u64_le(&layer_bytes, 0).ok()? as usize;
+        if layer == 0 || layer_type != code.types_address + GAME_LAYER_TYPE_INDEX * 32 {
+            return None;
+        }
+        let world = read_object_pointer_field(process, layer, root.game_layer_world_offset).ok()?;
+        if world == 0
+            || !object_is_a(
+                process,
+                world,
+                code.types_address + WORLD_TYPE_INDEX * 32,
+            )
+        {
+            return None;
+        }
+        let tod =
+            read_object_pointer_field(process, world, root.world_time_of_day_offset).ok()?;
+        if tod == 0
+            || !object_is_a(
+                process,
+                tod,
+                code.types_address + TIME_OF_DAY_TYPE_INDEX * 32,
+            )
+        {
+            return None;
+        }
+        let speed = read_f64_le(
+            &read_process_bytes(process, tod + root.time_of_day_speed_offset, 8).ok()?,
+            0,
+        )
+        .ok()?;
+        let paused = read_process_bytes(process, tod + root.time_of_day_paused_offset, 1)
+            .ok()
+            .map(|bytes| bytes[0] != 0)
+            .unwrap_or(false);
+        let elapsed = read_f64_le(
+            &read_process_bytes(process, tod + root.time_of_day_elapsed_offset, 8).ok()?,
+            0,
+        )
+        .ok()?;
+        let prev_factor = read_f64_le(
+            &read_process_bytes(process, tod + root.time_of_day_prev_factor_offset, 8).ok()?,
+            0,
+        )
+        .ok()?;
+        if ![speed, elapsed, prev_factor]
+            .iter()
+            .all(|value| value.is_finite())
+        {
+            return None;
+        }
+        let factor = prev_factor.rem_euclid(1.0);
+        Some(TimeOfDaySample {
+            factor,
+            elapsed,
+            speed,
+            paused,
+        })
     }
 
     fn read_nearby_enemies(
@@ -1799,10 +1879,36 @@ mod windows_bridge {
         let world_type_address = types_address + WORLD_TYPE_INDEX * 32;
         let world_level_offset =
             object_field_offset(process, world_type_address, WORLD_LEVEL_FIELD_INDEX)?;
+        let world_time_of_day_offset = object_field_offset(
+            process,
+            world_type_address,
+            WORLD_TIME_OF_DAY_FIELD_INDEX,
+        )?;
         let world_is_world_map_offset = object_field_offset(
             process,
             world_type_address,
             WORLD_IS_WORLD_MAP_FIELD_INDEX,
+        )?;
+        let time_of_day_type_address = types_address + TIME_OF_DAY_TYPE_INDEX * 32;
+        let time_of_day_speed_offset = object_field_offset(
+            process,
+            time_of_day_type_address,
+            TIME_OF_DAY_SPEED_FIELD_INDEX,
+        )?;
+        let time_of_day_paused_offset = object_field_offset(
+            process,
+            time_of_day_type_address,
+            TIME_OF_DAY_PAUSED_FIELD_INDEX,
+        )?;
+        let time_of_day_elapsed_offset = object_field_offset(
+            process,
+            time_of_day_type_address,
+            TIME_OF_DAY_ELAPSED_FIELD_INDEX,
+        )?;
+        let time_of_day_prev_factor_offset = object_field_offset(
+            process,
+            time_of_day_type_address,
+            TIME_OF_DAY_PREV_FACTOR_FIELD_INDEX,
         )?;
         let activity_kind_offset = object_field_offset(
             process,
@@ -2098,7 +2204,12 @@ mod windows_bridge {
             game_layer_entities_offset,
             game_layer_units_offset,
             world_level_offset,
+            world_time_of_day_offset,
             world_is_world_map_offset,
+            time_of_day_speed_offset,
+            time_of_day_paused_offset,
+            time_of_day_elapsed_offset,
+            time_of_day_prev_factor_offset,
             activity_kind_offset,
             state_removed_offset,
             interactible_enabled_offset,
@@ -2266,6 +2377,14 @@ mod windows_bridge {
         activity_kind: String,
     }
 
+    struct TimeOfDaySample {
+        /// Lighting/day-cycle factor in [0, 1) from world.TimeOfDay.prevFactor.
+        factor: f64,
+        elapsed: f64,
+        speed: f64,
+        paused: bool,
+    }
+
     struct TelemetrySample {
         game_app: usize,
         player: usize,
@@ -2297,6 +2416,7 @@ mod windows_bridge {
         /// Hero object addresses for party members (excludes self).
         party_heroes: Vec<usize>,
         instance: InstanceSample,
+        time_of_day: Option<TimeOfDaySample>,
         completed_elements: Vec<String>,
     }
 
@@ -3191,7 +3311,7 @@ mod windows_bridge {
 
     fn waiting_report(sequence: u64, timestamp_ms: u128, message: &str) -> String {
         format!(
-            "{{\"schema\":1,\"bridge_version\":\"0.21.9\",\"state\":\"waiting\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"message\":{}}}\n",
+            "{{\"schema\":1,\"bridge_version\":\"0.22.0\",\"state\":\"waiting\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"message\":{}}}\n",
             json_string(message)
         )
     }
@@ -3627,6 +3747,7 @@ mod windows_bridge {
             *completed_elements_cache = read_completed_elements(process, code, root, player)?;
         }
         let instance = read_instance_context(process, code, hero);
+        let time_of_day = read_time_of_day(process, code, hero);
         let camera_yaw = read_camera_yaw(process, code, game_app, x, y);
         Ok(TelemetrySample {
             game_app,
@@ -3657,6 +3778,7 @@ mod windows_bridge {
             party,
             party_heroes: active_party_heroes,
             instance,
+            time_of_day,
             completed_elements: completed_elements_cache.clone(),
         })
     }
@@ -3874,6 +3996,13 @@ mod windows_bridge {
                             sample.instance.is_world_map,
                             json_string(&sample.instance.activity_kind),
                         );
+                        let time_of_day_json = match &sample.time_of_day {
+                            Some(tod) => format!(
+                                "{{\"factor\":{},\"elapsed\":{},\"speed\":{},\"paused\":{}}}",
+                                tod.factor, tod.elapsed, tod.speed, tod.paused,
+                            ),
+                            None => "null".to_owned(),
+                        };
                         let camera_yaw_json = if sample.camera_yaw.is_finite() {
                             format!("{}", sample.camera_yaw)
                         } else {
@@ -3881,7 +4010,7 @@ mod windows_bridge {
                         };
                         (
                             format!(
-                                "{{\"schema\":1,\"bridge_version\":\"0.21.9\",\"state\":\"connected\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"game_app_address\":\"0x{:x}\",\"player_address\":\"0x{:x}\",\"hero_address\":\"0x{:x}\",\"player\":{{\"name\":{},\"uid\":{},\"class\":{},\"level\":{},\"in_combat\":{},\"vitality\":{},\"health\":{},\"max_health\":{},\"health_regen\":{},\"shield\":{},\"shield_ratio\":{},\"shield_capacity\":{},\"shield_gauge_visible\":{},\"raw_shield\":{},\"shield_gauge_available\":{},\"special_energy\":{},\"special_energy_regen\":{}}},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}},\"rotation_z\":{},\"camera_yaw\":{camera_yaw_json},\"party\":[{}],\"enemies\":[{}],\"players\":[{}],\"interactibles\":[{}],\"instance\":{instance_json},\"completed_elements\":[{}],\"dps\":{{\"mode\":\"observed_nearby\",\"fight_id\":{},\"current\":{},\"total\":{},\"elapsed\":{},\"in_combat\":{},\"damage_skills\":[{{\"skill\":\"Observed nearby damage\",\"total\":{},\"hits\":0,\"crits\":0,\"max\":0}}],\"healing_skills\":[]}}}}\n",
+                                "{{\"schema\":1,\"bridge_version\":\"0.22.0\",\"state\":\"connected\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"game_app_address\":\"0x{:x}\",\"player_address\":\"0x{:x}\",\"hero_address\":\"0x{:x}\",\"player\":{{\"name\":{},\"uid\":{},\"class\":{},\"level\":{},\"in_combat\":{},\"vitality\":{},\"health\":{},\"max_health\":{},\"health_regen\":{},\"shield\":{},\"shield_ratio\":{},\"shield_capacity\":{},\"shield_gauge_visible\":{},\"raw_shield\":{},\"shield_gauge_available\":{},\"special_energy\":{},\"special_energy_regen\":{}}},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}},\"rotation_z\":{},\"camera_yaw\":{camera_yaw_json},\"party\":[{}],\"enemies\":[{}],\"players\":[{}],\"interactibles\":[{}],\"instance\":{instance_json},\"time_of_day\":{time_of_day_json},\"completed_elements\":[{}],\"dps\":{{\"mode\":\"observed_nearby\",\"fight_id\":{},\"current\":{},\"total\":{},\"elapsed\":{},\"in_combat\":{},\"damage_skills\":[{{\"skill\":\"Observed nearby damage\",\"total\":{},\"hits\":0,\"crits\":0,\"max\":0}}],\"healing_skills\":[]}}}}\n",
                                 sample.game_app,
                                 sample.player,
                                 sample.hero,

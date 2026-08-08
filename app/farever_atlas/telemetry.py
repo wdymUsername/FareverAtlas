@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 from pathlib import Path
 from typing import Any
 
 from PySide6 import QtCore
 
-from .config import ASSET_ROOT, PROJECT_ROOT
+from .config import ASSET_ROOT, PROJECT_ROOT, safe_float
 from .pages.map.data import Snapshot
 
 
@@ -299,6 +300,23 @@ class DataHub(QtCore.QObject):
             instance["is_rift"] = bool(native_instance.get("is_rift"))
             instance["is_dungeon"] = bool(native_instance.get("is_dungeon"))
             instance["is_world_map"] = bool(native_instance.get("is_world_map"))
+        time_of_day: dict[str, Any] | None = None
+        native_tod = payload.get("time_of_day")
+        if isinstance(native_tod, dict):
+            factor = safe_float(native_tod.get("factor"), float("nan"))
+            elapsed = safe_float(native_tod.get("elapsed"), float("nan"))
+            speed = safe_float(native_tod.get("speed"), float("nan"))
+            if (
+                math.isfinite(factor)
+                and math.isfinite(elapsed)
+                and math.isfinite(speed)
+            ):
+                time_of_day = {
+                    "factor": factor % 1.0,
+                    "elapsed": elapsed,
+                    "speed": speed,
+                    "paused": bool(native_tod.get("paused")),
+                }
         return {
             "schema": 1,
             "bridge_version": payload.get("bridge_version"),
@@ -310,6 +328,7 @@ class DataHub(QtCore.QObject):
             "players": players,
             "interactibles": interactibles,
             "instance": instance,
+            "time_of_day": time_of_day,
             "completed_elements": payload.get("completed_elements", []),
             "player": {
                 "name": player_name,
