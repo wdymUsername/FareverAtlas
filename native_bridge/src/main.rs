@@ -123,8 +123,8 @@ mod windows_bridge {
     // ent.Element.kind (String) — flattened index on Gatherable / Chest.
     const ELEMENT_KIND_FIELD_INDEX: usize = 86;
     const INTERACTIBLE_ENABLED_FIELD_INDEX: usize = 83;
-    const INTERACTIBLE_SWEEP_RADIUS: f64 = 600.0;
-    const INTERACTIBLE_SWEEP_Z_CULL: f64 = 80.0;
+    const INTERACTIBLE_SWEEP_RADIUS: f64 = 500.0;
+    const INTERACTIBLE_SWEEP_Z_CULL: f64 = 160.0;
     const INTERACTIBLE_SWEEP_MAX: usize = 200;
     const STATE_TYPE_INDEX: usize = 781;
     const STATE_REMOVED_FIELD_INDEX: usize = 0;
@@ -132,9 +132,9 @@ mod windows_bridge {
     // almost always non-zero and incorrectly filters every live foe as a summon.
     const FOE_SUMMON_OWNER_FIELD_INDEX: usize = 167;
     // Nearby-enemy map sweep (GameLayer.units / ent.Foe). Independent of DPS.
-    // Radius/z caps mirror the measured FareverMeter world-sweep bounds.
-    const ENEMY_SWEEP_RADIUS: f64 = 600.0;
-    const ENEMY_SWEEP_Z_CULL: f64 = 60.0;
+    // Radius/z caps tuned from FareverMeter world-sweep bounds (500 m / 2× Z).
+    const ENEMY_SWEEP_RADIUS: f64 = 500.0;
+    const ENEMY_SWEEP_Z_CULL: f64 = 120.0;
     const ENEMY_SWEEP_MAX: usize = 150;
     // Layer roster of non-party players (GameLayer.units + entities / ent.Hero).
     // No range cull — distance is display-only — matching FareverMeter's

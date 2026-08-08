@@ -50,7 +50,7 @@ Discovery, fingerprinting, and HashLink metadata traversal happen once per attac
 | `position`, `rotation_z` | local hero transform |
 | `camera_yaw` | world camera yaw when readable, else `null` |
 | `party` | up to 3 other group members (name, class, vitals, position, distance) |
-| `enemies` | nearby non-summon `ent.Foe` markers (id, kind, position; ~600 m / 60 z cull) |
+| `enemies` | nearby non-summon `ent.Foe` markers (id, kind, position; ~500 m / 120 z cull) |
 | `players` | other layer heroes outside the party (uncapped distance; display/sort only) |
 | `interactibles` | nearby gatherables / chests (`kind`: ore, plant, chest, gatherable) |
 | `instance` | coarse map bucket (`world` / `rift` / `dungeon` / `instance` / `unknown`) plus `map_id` and flags |

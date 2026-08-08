@@ -70,8 +70,8 @@ class RadarWidget(QtWidgets.QWidget):
     # Static loot outside this bubble is drawn from the POI file; inside the
     # bubble, a static marker is suppressed only when a live interactible
     # covers it (failed/empty live sweeps must not blank the map).
-    LOOT_LIVE_RANGE_M = 600.0
-    LOOT_LIVE_Z_CULL_M = 80.0
+    LOOT_LIVE_RANGE_M = 500.0
+    LOOT_LIVE_Z_CULL_M = 160.0
     LOOT_LIVE_MATCH_M = 12.0
 
     # User-confirmed activities.png mapping. Numbers are one-based, left to

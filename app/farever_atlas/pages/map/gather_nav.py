@@ -245,8 +245,8 @@ class GatherNavPanel(QtWidgets.QWidget):
 class GatherNavMixin:
     """Nearest-resource gather routing driven by live interactibles + static POIs."""
 
-    LIVE_RANGE_M = 600.0
-    LIVE_Z_CULL_M = 80.0
+    LIVE_RANGE_M = 500.0
+    LIVE_Z_CULL_M = 160.0
     LIVE_MATCH_M = 12.0
     DEPLETED_GRACE_S = 0.75
 
