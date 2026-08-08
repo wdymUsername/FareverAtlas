@@ -78,12 +78,13 @@ Start Farever and log in to a character before launching Atlas.
 
 ```bash
 ./farever setup
-./native_bridge/build.sh
 ./farever start
 ```
 
-Start Farever through Steam first so the Proton prefix exists. The launcher
-starts the Windows bridge under Proton, then opens Atlas.
+`./farever setup` creates the Python venv and builds the Windows bridge
+(requires Rust + the `x86_64-pc-windows-gnu` target). Start Farever through
+Steam first so the Proton prefix exists. The launcher starts the bridge under
+Proton, then opens Atlas.
 
 Stop or restart later:
 
@@ -129,7 +130,7 @@ farever.bat restart
 
 | Command | Effect |
 | --- | --- |
-| `setup` | Creates `.venv` and installs Python dependencies |
+| `setup` | Creates `.venv`, installs Python deps, and builds the bridge (Linux) |
 | `start` | Starts the native bridge, then Farever Atlas |
 | `stop` | Stops Atlas and the bridge |
 | `restart` | `stop`, then `start` |
@@ -191,7 +192,6 @@ you’re touching (map, FoW, bridge, Players, packaging, docs).
 
 ```bash
 ./farever setup
-./native_bridge/build.sh
 ./farever start --dev
 ```
 
