@@ -1,4 +1,4 @@
-"""Top-bar status widgets for character vitals and the Nightling Rift."""
+"""Top-bar status widgets for character vitals, game time, and Nightling Rift."""
 
 from __future__ import annotations
 
@@ -483,6 +483,78 @@ class PartyMemberStatusWidget(QtWidgets.QWidget):
         tooltip = "\n".join(tooltip_lines)
         for widget in (self, self.class_icon, self.title, self.hp_bar):
             widget.setToolTip(tooltip)
+
+
+class GameTimeStatusWidget(QtWidgets.QWidget):
+    """Single-line in-game day cycle: icon · HH:MM · Period."""
+
+    _PERIODS: tuple[tuple[float, str, str], ...] = (
+        (0.20, "Night", "☾"),
+        (0.30, "Dawn", "◔"),
+        (0.70, "Day", "☀"),
+        (0.80, "Dusk", "◑"),
+        (1.01, "Night", "☾"),
+    )
+
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("gameTimeStatus")
+        self.setFixedHeight(30)
+        self._signature: tuple[object, ...] | None = None
+
+        root_layout = QtWidgets.QHBoxLayout(self)
+        root_layout.setContentsMargins(3, 0, 3, 0)
+        root_layout.setSpacing(5)
+
+        self.label = QtWidgets.QLabel("· --:-- · —")
+        self.label.setObjectName("gameTimeLabel")
+        self.label.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignLeft
+            | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        root_layout.addWidget(self.label)
+        self.setToolTip("In-game time of day")
+        self.label.setToolTip("In-game time of day")
+
+    @classmethod
+    def _period_for_factor(cls, factor: float) -> tuple[str, str]:
+        wrapped = factor % 1.0
+        for upper, name, icon in cls._PERIODS:
+            if wrapped < upper:
+                return name, icon
+        return "Night", "☾"
+
+    def update_from_state(self, state: dict | None) -> None:
+        tod = state.get("time_of_day") if isinstance(state, dict) else None
+        if not isinstance(tod, dict):
+            signature = ("missing",)
+            if signature != self._signature:
+                self._signature = signature
+                self.label.setText("· --:-- · —")
+            return
+        factor = safe_float(tod.get("factor"), math.nan)
+        if not math.isfinite(factor):
+            signature = ("invalid",)
+            if signature != self._signature:
+                self._signature = signature
+                self.label.setText("· --:-- · —")
+            return
+        factor = factor % 1.0
+        total_minutes = int(factor * 24 * 60) % (24 * 60)
+        hours, minutes = divmod(total_minutes, 60)
+        period, icon = self._period_for_factor(factor)
+        paused = bool(tod.get("paused"))
+        signature = (hours, minutes, period, paused)
+        if signature == self._signature:
+            return
+        self._signature = signature
+        text = f"{icon} · {hours:02d}:{minutes:02d} · {period}"
+        if paused:
+            text = f"{text} · paused"
+        self.label.setText(text)
+
+    def clear(self) -> None:
+        self.update_from_state(None)
 
 
 class RiftStatusWidget(QtWidgets.QWidget):

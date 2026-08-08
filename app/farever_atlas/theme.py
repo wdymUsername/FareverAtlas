@@ -946,6 +946,15 @@ QLabel#riftCountdown {
     font-weight: 500;
     letter-spacing: 0.2px;
 }
+QWidget#gameTimeStatus {
+    background: transparent;
+}
+QLabel#gameTimeLabel {
+    color: #eef3f7;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+}
 QWidget#minimapSidebar {
     background: rgba(16, 23, 31, 218);
     border: 1px solid #3a4856;

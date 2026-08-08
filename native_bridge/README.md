@@ -54,6 +54,7 @@ Discovery, fingerprinting, and HashLink metadata traversal happen once per attac
 | `players` | other layer heroes outside the party (uncapped distance; display/sort only) |
 | `interactibles` | nearby gatherables / chests (`kind`: ore, plant, chest, gatherable) |
 | `instance` | coarse map bucket (`world` / `rift` / `dungeon` / `instance` / `unknown`) plus `map_id` and flags |
+| `time_of_day` | day cycle from `world.World.timeOfDay` (`factor` 0–1, `elapsed`, `speed`, `paused`), or `null` |
 | `completed_elements` | completion keys from player progress (refreshed periodically) |
 | `dps` | observed nearby foe-health delta (`mode: observed_nearby`), not skill-parsed combat log |
 
