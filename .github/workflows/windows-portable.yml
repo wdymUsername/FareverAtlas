@@ -1,20 +1,10 @@
 name: Windows portable exe
 
 on:
+  schedule:
+    - cron: "0 0 * * *" # every day at 00:00 UTC
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "Release tag to create/update (e.g. v0.13.0). Leave empty to only upload a workflow artifact."
-        required: false
-        type: string
-      prerelease:
-        description: "Mark the release as a pre-release"
-        required: false
-        type: boolean
-        default: false
   push:
-    tags:
-      - "v*"
     branches: [main]
     paths:
       - "app/**"
@@ -31,8 +21,6 @@ on:
       - "packaging/windows/**"
       - "requirements.txt"
       - ".github/workflows/windows-portable.yml"
-  release:
-    types: [published]
 
 permissions:
   contents: write
@@ -101,7 +89,7 @@ jobs:
             dist/FareverAtlas.exe.sha256
           if-no-files-found: error
 
-      - name: Resolve release tag
+      - name: Resolve Nightly release
         id: release_meta
         shell: bash
         env:
@@ -109,39 +97,40 @@ jobs:
         run: |
           set -euo pipefail
           tag=""
-          prerelease="false"
-          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref_type }}" == "tag" ]]; then
-            tag="${{ github.ref_name }}"
-          elif [[ "${{ github.event_name }}" == "release" ]]; then
-            tag="${{ github.event.release.tag_name }}"
-            prerelease="${{ github.event.release.prerelease }}"
-          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            tag="${{ inputs.tag }}"
-            prerelease="${{ inputs.prerelease }}"
+          if [[ "${{ github.event_name }}" == "schedule" || "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            tag="Nightly"
           fi
           exists="false"
           if [[ -n "${tag}" ]] && gh release view "${tag}" >/dev/null 2>&1; then
             exists="true"
           fi
-          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
-          echo "exists=${exists}" >> "$GITHUB_OUTPUT"
+          sha="$(git rev-parse --short HEAD)"
+          stamp="$(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+          body="Nightly portable Windows build from ${sha} (${stamp})."
+          {
+            echo "tag=${tag}"
+            echo "exists=${exists}"
+            echo "body<<EOF"
+            printf '%s\n' "${body}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
           if [[ -n "${tag}" ]]; then
-            echo "Publishing release assets for tag ${tag} (exists=${exists})"
+            echo "Publishing Nightly release (exists=${exists}, sha=${sha})"
           else
-            echo "No release tag; skipping GitHub Release upload"
+            echo "No Nightly publish for event ${{ github.event_name }}; artifact only"
           fi
 
-      - name: Attach exe to GitHub Release
+      - name: Attach exe to Nightly release
         id: release
         if: steps.release_meta.outputs.tag != ''
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.release_meta.outputs.tag }}
-          name: ${{ steps.release_meta.outputs.tag }}
-          prerelease: ${{ steps.release_meta.outputs.prerelease == 'true' }}
-          # Only auto-generate notes on first create; re-runs must not append again.
-          generate_release_notes: ${{ steps.release_meta.outputs.exists != 'true' }}
+          tag_name: Nightly
+          name: Nightly
+          prerelease: false
+          make_latest: true
+          generate_release_notes: false
+          body: ${{ steps.release_meta.outputs.body }}
           files: |
             dist/FareverAtlas.exe
             dist/FareverAtlas.exe.sha256
@@ -162,25 +151,13 @@ jobs:
           fi
           echo "::add-mask::${key}"
           echo "VT_API_KEY length=${#key}"
-          # Diagnose paste problems without printing the secret.
-          python - <<'PY'
-          import os, re, sys
-          key = os.environ["RAW_VT_API_KEY"]
-          key = key.replace("\r", "").replace("\n", "").strip().strip("\"'")
-          print(f"trimmed_length={len(key)}")
-          print(f"has_whitespace={any(ch.isspace() for ch in key)}")
-          print(f"is_hex64={bool(re.fullmatch(r'[0-9a-fA-F]{64}', key))}")
-          print(f"is_alnum_dash={bool(re.fullmatch(r'[A-Za-z0-9_-]{16,}', key))}")
-          print(f"unique_non_alnum={sorted({ch for ch in key if not ch.isalnum()})}")
-          PY
-          # Sanity-check credentials before uploading the large exe.
           code="$(curl -sS -o /tmp/vt-me.json -w '%{http_code}' \
             -H "x-apikey: ${key}" \
             -H "Accept: application/json" \
             https://www.virustotal.com/api/v3/users/me)"
           echo "VirusTotal /users/me HTTP ${code}"
           if [[ "$code" != "200" ]]; then
-            echo "::error::VirusTotal rejected VT_API_KEY (HTTP ${code}). Re-copy the key from https://www.virustotal.com/gui/my-apikey (API key, not the password or a file hash)."
+            echo "::error::VirusTotal rejected VT_API_KEY (HTTP ${code}). Re-copy the key from https://www.virustotal.com/gui/my-apikey"
             head -c 400 /tmp/vt-me.json || true
             echo
             exit 1
@@ -196,15 +173,14 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.release_meta.outputs.tag }}
+          TAG: Nightly
+          BODY: ${{ steps.release_meta.outputs.body }}
         run: |
           set -euo pipefail
-          body="$(gh release view "${TAG}" --json body --jq -r .body)"
-          # Drop any previously appended VirusTotal section so re-runs replace it.
-          cleaned="$(printf '%s\n' "${body}" | awk 'BEGIN{p=1} /^(\*\*)?VirusTotal(\*\*)?[[:space:]]*$/{p=0} p')"
-          cleaned="$(printf '%s\n' "${cleaned}" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')"
+          # softprops already wrote the fresh Nightly body; ensure no stale VT
+          # section remains before the scan step appends a new one.
           notes_file="$(mktemp)"
-          printf '%s\n' "${cleaned}" > "${notes_file}"
+          printf '%s\n' "${BODY}" > "${notes_file}"
           gh release edit "${TAG}" --notes-file "${notes_file}"
           rm -f "${notes_file}"
 
