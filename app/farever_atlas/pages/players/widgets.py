@@ -17,6 +17,7 @@ class PlayerListRow(QtWidgets.QFrame):
     selected = QtCore.Signal(object)
     activated = QtCore.Signal(object)
     profileRequested = QtCore.Signal(object)
+    chatRequested = QtCore.Signal(object)
     focusRequested = QtCore.Signal(object)
     friendToggleRequested = QtCore.Signal(object)
 
@@ -65,6 +66,11 @@ class PlayerListRow(QtWidgets.QFrame):
         self.badge_presence.setObjectName("playersRowBadgePresence")
         self.badge_presence.setVisible(False)
 
+        self.badge_steam_friend = QtWidgets.QLabel("STEAM")
+        self.badge_steam_friend.setObjectName("playersRowBadgeSteamFriend")
+        self.badge_steam_friend.setToolTip("Steam friend")
+        self.badge_steam_friend.setVisible(False)
+
         self.badge_steam = QtWidgets.QLabel("")
         self.badge_steam.setObjectName("playersRowBadgeSteam")
         self.badge_steam.setVisible(False)
@@ -73,6 +79,7 @@ class PlayerListRow(QtWidgets.QFrame):
         title_row.addWidget(self.badge_you, 0)
         title_row.addWidget(self.badge_party, 0)
         title_row.addWidget(self.badge_presence, 0)
+        title_row.addWidget(self.badge_steam_friend, 0)
         title_row.addWidget(self.badge_steam, 0)
         title_row.addStretch(1)
 
@@ -134,6 +141,15 @@ class PlayerListRow(QtWidgets.QFrame):
         self.profile_button.setToolTip("Open Steam profile")
         self.profile_button.clicked.connect(self._emit_profile)
 
+        self.chat_button = QtWidgets.QToolButton()
+        self.chat_button.setObjectName("playersRowChatButton")
+        self.chat_button.setText("Chat")
+        self.chat_button.setFixedSize(42, 26)
+        self.chat_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.chat_button.setToolTip("Open Steam chat")
+        self.chat_button.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        self.chat_button.clicked.connect(self._emit_chat)
+
         self.focus_button = QtWidgets.QToolButton()
         self.focus_button.setObjectName("playersRowFocusButton")
         self.focus_button.setText("Focus")
@@ -144,6 +160,7 @@ class PlayerListRow(QtWidgets.QFrame):
 
         actions.addWidget(self.friend_button, 0)
         actions.addWidget(self.profile_button, 0)
+        actions.addWidget(self.chat_button, 0)
         actions.addWidget(self.focus_button, 0)
 
         root.addWidget(self.class_icon, 0)
@@ -183,6 +200,7 @@ class PlayerListRow(QtWidgets.QFrame):
             and not bool(entry.get("is_self"))
             and not is_friend_list
         )
+        self.badge_steam_friend.setVisible(bool(entry.get("is_steam_friend")))
 
         presence = str(entry.get("presence") or "").strip().lower()
         if is_friend_list and presence in {"here", "away"}:
@@ -269,6 +287,11 @@ class PlayerListRow(QtWidgets.QFrame):
             self.profile_button.setToolTip(
                 f"Open Steam profile ({steamid64})"
             )
+        self.chat_button.setEnabled(steamid64 is not None)
+        if steamid64 is None:
+            self.chat_button.setToolTip("No Steam chat for this player")
+        else:
+            self.chat_button.setToolTip(f"Open Steam chat ({steamid64})")
 
         is_friend = bool(entry.get("is_friend"))
         # Allow add when we have a Steam uid, or at least a stable name key.
@@ -297,6 +320,8 @@ class PlayerListRow(QtWidgets.QFrame):
             tooltip_bits.append("You")
         elif entry.get("in_party"):
             tooltip_bits.append("Party")
+        if entry.get("is_steam_friend"):
+            tooltip_bits.append("Steam friend")
         if presence:
             tooltip_bits.append(presence.title())
         if steam_tip:
@@ -314,6 +339,10 @@ class PlayerListRow(QtWidgets.QFrame):
     def _emit_profile(self) -> None:
         self.selected.emit(self._entry)
         self.profileRequested.emit(self._entry)
+
+    def _emit_chat(self) -> None:
+        self.selected.emit(self._entry)
+        self.chatRequested.emit(self._entry)
 
     def _emit_focus(self) -> None:
         self.selected.emit(self._entry)
@@ -360,7 +389,12 @@ class PlayerListRow(QtWidgets.QFrame):
     def _is_action_child(self, child: QtWidgets.QWidget | None) -> bool:
         if child is None:
             return False
-        for button in (self.profile_button, self.focus_button, self.friend_button):
+        for button in (
+            self.profile_button,
+            self.chat_button,
+            self.focus_button,
+            self.friend_button,
+        ):
             if child is button or button.isAncestorOf(child):
                 return True
         return False

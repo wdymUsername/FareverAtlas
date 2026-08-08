@@ -143,6 +143,9 @@ class SettingsPanel(QtCore.QObject):
             self.steam_web_api_key.setText(
                 str(self._settings.value("steam/web_api_key", "") or "")
             )
+            self.steam_steamid64.setText(
+                str(self._settings.value("steam/steamid64", "") or "")
+            )
 
             radius = _as_int(self._settings.value("map/zoom_radius"), 200)
             zoom_index = min(
@@ -370,14 +373,29 @@ class SettingsPanel(QtCore.QObject):
         self.steam_web_api_key.setPlaceholderText("Web API key (optional)")
         self.steam_web_api_key.setClearButtonEnabled(True)
         self.steam_web_api_key.setToolTip(
-            "Used to cache friend Steam avatars and online status.\n"
+            "Used to cache friend Steam avatars and online status,\n"
+            "and to detect Steam friends for the STEAM badge.\n"
             "Get a key at https://steamcommunity.com/dev/apikey\n"
             "Private profiles may still show Offline — Atlas labels those Private."
         )
         self.steam_web_api_key.editingFinished.connect(self._on_steam_api_key_changed)
         steam_form.addRow("Web API key", self.steam_web_api_key)
+
+        self.steam_steamid64 = QtWidgets.QLineEdit()
+        self.steam_steamid64.setPlaceholderText("Your SteamID64 (digits only)")
+        self.steam_steamid64.setClearButtonEnabled(True)
+        self.steam_steamid64.setToolTip(
+            "Your 64-bit Steam ID (profile URL ends with /profiles/<this>).\n"
+            "Needed with the Web API key for the Steam-friend badge.\n"
+            "Friend list must be public (or GetFriendList returns 401)."
+        )
+        self.steam_steamid64.editingFinished.connect(self._on_steam_steamid64_changed)
+        steam_form.addRow("Your SteamID64", self.steam_steamid64)
+
         steam_note = QtWidgets.QLabel(
             "Optional. Friends still work with Here/Away from the game layer. "
+            "Steam-friend badge needs API key + SteamID64 and a readable friend list. "
+            "Chat opens Steam’s client regardless. "
             "Private Steam profiles often look Offline — Atlas shows Private instead."
         )
         steam_note.setWordWrap(True)
@@ -626,6 +644,21 @@ class SettingsPanel(QtCore.QObject):
             "steam/web_api_key",
             self.steam_web_api_key.text().strip(),
         )
+        self._emit_changed()
+
+    def _on_steam_steamid64_changed(self) -> None:
+        if self._suppress:
+            return
+        from .pages.players.steam import normalize_steamid64
+
+        raw = self.steam_steamid64.text().strip()
+        normalized = normalize_steamid64(raw) or ""
+        if raw and not normalized:
+            # Keep typed text visible but don't persist invalid ids.
+            return
+        if normalized and normalized != raw:
+            self.steam_steamid64.setText(normalized)
+        self._settings.setValue("steam/steamid64", normalized)
         self._emit_changed()
 
     def _on_zoom_changed(self, index: int) -> None:
