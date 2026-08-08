@@ -14,7 +14,6 @@ from .steam import (
     SteamProfileCache,
     farever_uid_to_steamid64,
     normalize_steamid64,
-    open_steam_chat,
     open_steam_profile,
     steam_persona_label,
 )
@@ -633,7 +632,6 @@ class PlayersPageMixin:
                 row.selected.connect(self._players_row_selected)
                 row.activated.connect(self._players_row_activated)
                 row.profileRequested.connect(self._players_open_steam_profile)
-                row.chatRequested.connect(self._players_open_steam_chat)
                 row.focusRequested.connect(self._players_focus_entry)
                 row.friendToggleRequested.connect(self._players_toggle_friend)
             row.set_entry(entry)
@@ -1001,17 +999,6 @@ class PlayersPageMixin:
             )
         )
 
-        chat_action = menu.addAction("Open Steam Chat")
-        chat_action.setEnabled(
-            farever_uid_to_steamid64(uid) is not None
-            or normalize_steamid64(entry.get("steamid64")) is not None
-        )
-        chat_action.triggered.connect(
-            lambda _checked=False, payload=dict(entry): (
-                self._players_open_steam_chat(payload)
-            )
-        )
-
         friend_key = str(entry.get("friend_key") or uid).strip()
         is_friend = bool(
             hasattr(self, "_friend_store")
@@ -1138,20 +1125,6 @@ class PlayersPageMixin:
             toast = getattr(self, "_toast_host", None)
             if toast is not None:
                 toast.show_message("Could not open Steam profile", kind="error")
-
-    def _players_open_steam_chat(self, entry: object) -> None:
-        if isinstance(entry, dict):
-            self._players_row_selected(entry)
-        else:
-            entry = self._players_selected_entry
-        if not isinstance(entry, dict):
-            return
-        uid = entry.get("uid")
-        steamid64 = entry.get("steamid64")
-        if not open_steam_chat(uid, steamid64=steamid64):
-            toast = getattr(self, "_toast_host", None)
-            if toast is not None:
-                toast.show_message("Could not open Steam chat", kind="error")
 
     def _players_focus_entry(self, entry: object) -> None:
         if isinstance(entry, dict):

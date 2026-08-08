@@ -395,7 +395,6 @@ class SettingsPanel(QtCore.QObject):
         steam_note = QtWidgets.QLabel(
             "Optional. Friends still work with Here/Away from the game layer. "
             "Steam-friend badge needs API key + SteamID64 and a readable friend list. "
-            "Chat opens Steam’s client regardless. "
             "Private Steam profiles often look Offline — Atlas shows Private instead."
         )
         steam_note.setWordWrap(True)
