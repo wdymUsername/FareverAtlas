@@ -1,83 +1,78 @@
 # Farever Atlas native bridge
 
-This is the experimental, read-only Windows telemetry helper for Farever Atlas.
+Read-only Windows telemetry helper for Farever Atlas (`farever-atlas-bridge`).
 
-Version 0.10.0 performs deliberately bounded live-memory reads. It
-reads at most 4096 bytes per call and currently uses that ability only to
-verify the DOS and PE signatures of the already-enumerated `Farever.exe` and
-`libhl.dll` modules and validate the supported build's HashLink main-context
-anchor. The anchor reads the 40-byte `main_context`, verifies its `hlboot.dat`
-file pointer, and cross-checks that `hl_module->code` matches its `hl_code`
-pointer. It then validates the live `hl_code` counts against offline bytecode
-metadata and resolves the `st.Player`, `ent.Hero`, and `st.Group` type
-metadata. For each known object global, it derives the value slot from the
-module's global index table and cross-checks it against the type metadata's
-`global_value` pointer. It also verifies that the populated values are the
-expected generated static holders: `st.$Player`, `ent.$Hero`, and `st.$Group`.
-It does not mistake those holders for character instances. Offline bytecode
-tracing then establishes `global[955] -> $App.inst -> GameApp`, whose live
-`me` and `hero` pointers are type-checked. The helper currently reads the
-Hero's `posx`, `posy`, `posz`, `rotationZ`, level, attributes pointer, and raw
-health-resource fields. The current Player name is also sampled with a bounded
-string read, but consumers reject it until its HashLink representation is
-fully decoded. Watch mode validates
-and attaches once, then refreshes the live root pointers and those four values
-at a controlled interval. Atlas reads this snapshot from
-`farever-telemetry.json` while it is fresh.
-It is intended to run inside the same Proton prefix as `Farever.exe`.
-Release builds are a headless Windows PE (no console window); launchers start
-it in the background and Atlas consumes `farever-telemetry.json`.
+It discovers `Farever.exe` inside the same Proton / Windows process space, fingerprints the supported build, attaches with query + VM-read rights only, and writes a live snapshot to `farever-telemetry.json`. Atlas polls that file while it is fresh.
 
-The first milestone only discovers the Farever process and reports its main
-module metadata as JSON. It does not inspect game structures.
-
-Before any future structure reader is allowed to run, the helper validates the
-on-disk executable against a complete known-build profile:
-
-- PE machine type
-- PE timestamp
-- loaded image size
-- file size
-- CRC32
-
-An unknown or partially matching build is rejected instead of being handled
-with guessed offsets.
-
-The discovery report also enumerates all modules loaded by Farever. Files loaded
-from the Farever installation directory receive the same on-disk fingerprint;
-Windows and Proton system modules are listed without being hashed. This remains
-metadata-only discovery and does not call `ReadProcessMemory`.
-
-`hlboot.dat` is also gated by its HashLink bytecode version, file size, and
-CRC32. See `HLBOOT_FINDINGS.md` for the offline type metadata extracted with
-`tools/hlboot_inspect.py`.
+Current report version: **0.21.9** (`bridge_version` in the JSON). Release builds are a headless Windows PE (no console window).
 
 ## Safety boundary
 
-The helper opens Farever with exactly these Windows process permissions:
+The helper opens Farever with exactly these process permissions:
 
 - `PROCESS_QUERY_LIMITED_INFORMATION`
 - `PROCESS_VM_READ`
 
-It does not request or contain process-memory write, remote-thread, injection,
-input-simulation, or networking functionality.
+It does not request or contain process-memory write, remote-thread, injection, input-simulation, or networking functionality.
 
-If the process or module cannot be identified safely, it exits with an error
-instead of guessing.
+Each `ReadProcessMemory` call is capped at **4096** bytes. Unknown or partially matching Farever / `hlboot.dat` builds are rejected instead of guessed.
+
+## Supported build
+
+Live telemetry is gated on a complete known-build profile (`farever-2026-07-20`):
+
+| Check | Source |
+| --- | --- |
+| PE machine, timestamp, image size, file size, CRC32 | on-disk `Farever.exe` |
+| Loaded image size vs PE | process module list |
+| DOS / PE signatures | live PE header reads for `Farever.exe` and `libhl.dll` |
+| HashLink bytecode version, file size, CRC32 | on-disk `hlboot.dat` |
+| Live `hl_code` header counts / entrypoint | runtime main-context anchor |
+
+Field offsets are derived from HashLink type metadata for that bytecode, never hard-coded absolute game addresses. Offline findings live in [`HLBOOT_FINDINGS.md`](HLBOOT_FINDINGS.md); inspect bytecode with `tools/hlboot_inspect.py`.
+
+## Watch telemetry
+
+`--output PATH --watch-ms N` validates and attaches once, then refreshes the snapshot at interval `N` (50–5000 ms; default launcher uses **100** ms / 10 Hz).
+
+States:
+
+- `waiting` — Farever not running, unsupported build, or player / world roots not ready yet (`message` explains why)
+- `connected` — live sample written
+
+Discovery, fingerprinting, and HashLink metadata traversal happen once per attach. Soft sample failures (loading, teleport, GC) keep the attach and emit `waiting` until roots recover; hard attach failures (or a long soft-failure streak) detach and wait again.
+
+### Connected snapshot fields
+
+| Field | Contents |
+| --- | --- |
+| `player` | name, uid, class, level, combat flag, vitality / health / shield / special energy (HUD gauges used when available) |
+| `position`, `rotation_z` | local hero transform |
+| `camera_yaw` | world camera yaw when readable, else `null` |
+| `party` | up to 3 other group members (name, class, vitals, position, distance) |
+| `enemies` | nearby non-summon `ent.Foe` markers (id, kind, position; ~600 m / 60 z cull) |
+| `players` | other layer heroes outside the party (uncapped distance; display/sort only) |
+| `interactibles` | nearby gatherables / chests (`kind`: ore, plant, chest, gatherable) |
+| `instance` | coarse map bucket (`world` / `rift` / `dungeon` / `instance` / `unknown`) plus `map_id` and flags |
+| `completed_elements` | completion keys from player progress (refreshed periodically) |
+| `dps` | observed nearby foe-health delta (`mode: observed_nearby`), not skill-parsed combat log |
 
 ## Build
 
-From this directory:
+From this directory (Linux cross-compile to Windows):
 
 ```bash
 ./build.sh
 ```
 
-The Windows binary is written to:
+Writes:
 
 ```text
+farever-atlas-bridge.exe
 target/x86_64-pc-windows-gnu/release/farever-atlas-bridge.exe
 ```
+
+Requires a `x86_64-pc-windows-gnu` Rust toolchain (and MinGW linker as usual for that target).
 
 ## Run under Proton
 
@@ -87,24 +82,40 @@ Prefer the repo launcher, which starts the bridge and Atlas together:
 ../farever start
 ```
 
-For bridge-only continuous telemetry:
+Bridge-only continuous telemetry:
 
 ```bash
 ./watch-proton.sh
 ```
 
-It writes `farever-telemetry.json` at 10 Hz by default. Override the interval
-(minimum 50 ms) with `FAREVER_TELEMETRY_INTERVAL_MS`. Watch mode stays running
-even when Farever is closed or the player is not in a world: it emits
-`state: waiting` until attach succeeds, then samples live data. If the game
-process exits, it detaches and waits again. Discovery, build fingerprinting,
-and HashLink metadata traversal happen once per attach; the watch loop
-revalidates root pointers and reads transform fields while connected.
-
-Steam / Proton discovery can be overridden without editing the script:
+Override Steam / Proton / output / interval without editing the script:
 
 ```bash
 FAREVER_STEAM_ROOT=/path/to/steam \
 FAREVER_PROTON="/path/to/proton" \
+FAREVER_TELEMETRY_REPORT=/path/to/farever-telemetry.json \
+FAREVER_TELEMETRY_INTERVAL_MS=100 \
 ./watch-proton.sh
+```
+
+Steam app id / compatdata used by the script: `3672400`.
+
+## CLI
+
+```text
+farever-atlas-bridge.exe [--output PATH] [--watch-ms MS]
+```
+
+- No `--watch-ms`: one-shot discovery / attach report on stdout (and optionally to `--output`)
+- `--watch-ms` requires `--output`: continuous telemetry loop described above
+
+## Layout
+
+```text
+src/main.rs              bridge implementation
+build.sh                 release cross-build + copy next to this README
+watch-proton.sh          Proton wrapper for watch mode
+tools/hlboot_inspect.py  offline HashLink bytecode inspector
+HLBOOT_FINDINGS.md       offline type / anchor notes
+farever-telemetry.json   live snapshot (local; do not commit)
 ```
