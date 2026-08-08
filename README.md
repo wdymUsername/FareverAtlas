@@ -1,7 +1,10 @@
 # Farever Atlas
 
-[![FareverAtlas.exe](https://github.com/wdymUsername/FareverAtlas/actions/workflows/windows-portable.yml/badge.svg)](https://github.com/wdymUsername/FareverAtlas/actions/workflows/windows-portable.yml)
+[![FareverAtlas.exe](https://github.com/wdymUsername/FareverAtlas/actions/workflows/windows-portable.yml/badge.svg)](https://github.com/wdymUsername/FareverAtlas/actions/workflows/windows-portable.yml) [![Downloads](https://img.shields.io/github/downloads/wdymUsername/FareverAtlas/total)](https://github.com/wdymUsername/FareverAtlas/releases/tag/Nightly)
+
 [![VirusTotal](https://badges.cssnr.com/vt/wdymUsername/FareverAtlas/FareverAtlas.exe)](https://github.com/wdymUsername/FareverAtlas/releases/tag/Nightly)
+
+
 
 Farever Atlas is a standalone map and companion app for Farever. It runs in
 its own window and reads live player telemetry from a read-only native
