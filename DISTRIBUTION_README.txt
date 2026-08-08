@@ -13,7 +13,10 @@ WINDOWS (PORTABLE EXE)
 On first launch Atlas creates next to the exe:
 
   native_bridge/   bridge + farever-telemetry.json
-  user_data/       settings.ini, waypoints/, builds/
+  user_data/       settings.ini, waypoints/, builds/, friends/, map/
+
+Source and portable builds both keep all local state under user_data/ — not
+in a shared ~/.config or AppData org store.
 
 No Python install is required for the portable build.
 
@@ -54,15 +57,16 @@ LINUX / PROTON
 --------------
 1. Install Python 3, its venv module, and Wine/Proton prerequisites.
 2. Run: ./farever setup
-3. Build the bridge once: ./native_bridge/build.sh
-4. Start Farever through Steam and log in.
-5. Run: ./farever start
+3. Start Farever through Steam and log in.
+4. Run: ./farever start
 
 Stop or restart later with:
 
   ./farever stop
   ./farever restart
 
+`./farever setup` creates the Python venv and builds the Windows bridge
+(requires Rust + the x86_64-pc-windows-gnu target).
 The Linux launcher searches the common Steam locations automatically. For a
 custom Steam library or Proton build:
 
