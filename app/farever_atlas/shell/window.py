@@ -17,11 +17,7 @@ from ..config import (
     safe_float,
     safe_int,
 )
-from ..controls import (
-    LootFilterButton,
-    SidebarHeaderButton,
-    SlideSwitch,
-)
+from ..controls import FilterChipButton
 from ..pages.map.data import MapTexture, Snapshot
 from ..pages.map.fog import FOW_TIER_ORDER
 from ..pages.map.fow_layers import (
@@ -174,52 +170,36 @@ class AtlasWindow(
         layout.setSpacing(7)
 
         legacy_show_pois = self._setting_bool("map/show_pois", True)
+        # Leading chip dots only where the map uses a matching color marker.
+        loot_chip_colors = {
+            "chest": "#e4b84a",
+            "red_orb": "#e35b62",
+            "plant": "#63c174",
+            "ore": "#aeb6c2",
+        }
 
-        self.enemies_filter = QtWidgets.QPushButton("Enemies")
-        self.enemies_filter.setCheckable(True)
-        self.enemies_filter.setChecked(
-            self._setting_bool("map/show_enemies", True)
+        self.enemies_filter = FilterChipButton(
+            "Enemies", color="#FF5348", marker="diamond"
         )
+        self.enemies_filter.setChecked(self._setting_bool("map/show_enemies", True))
         self.enemies_filter.setToolTip("Show or hide nearby enemies on the map")
 
-        self.players_filter = QtWidgets.QPushButton("Players")
-        self.players_filter.setCheckable(True)
-        self.players_filter.setChecked(
-            self._setting_bool("map/show_players", True)
+        self.players_filter = FilterChipButton(
+            "Players", color="#E8B84A", marker="diamond"
         )
-        self.players_filter.setToolTip(
-            "Show or hide other players on the map"
-        )
+        self.players_filter.setChecked(self._setting_bool("map/show_players", True))
+        self.players_filter.setToolTip("Show or hide other players on the map")
 
-        self.poi_section_toggle = SidebarHeaderButton("POI", "sidebarSectionButton")
-        self.poi_section_toggle.setToolTip("Hide POI filters")
-        self.poi_section_toggle.setFixedHeight(27)
-        self.poi_section_toggle.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding,
-            QtWidgets.QSizePolicy.Policy.Fixed,
-        )
-
-        self.loot_section_toggle = SidebarHeaderButton("LOOT", "sidebarSectionButton")
-        self.loot_section_toggle.setToolTip("Hide loot filters")
-        self.loot_section_toggle.setFixedHeight(27)
-        self.loot_section_toggle.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding,
-            QtWidgets.QSizePolicy.Policy.Fixed,
-        )
-
-        self.custom_section_toggle = SidebarHeaderButton("CUSTOM", "sidebarSectionButton")
-        self.custom_section_toggle.setToolTip("Hide custom waypoint filters")
-        self.custom_section_toggle.setFixedHeight(27)
-        self.custom_section_toggle.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding,
-            QtWidgets.QSizePolicy.Policy.Fixed,
-        )
-
-        self.poi_filters: dict[str, QtWidgets.QPushButton] = {}
+        self.poi_filters: dict[str, FilterChipButton] = {}
+        poi_chip_colors = {
+            "obelisk": "#9b6fd4",
+            "respawn": "#8ec8f5",
+            "dungeon": "#5a3480",
+            "merchant": "#a67c52",
+            "activity": "#5ba6e6",
+        }
         for _index, (kind, label) in enumerate(self.POI_FILTERS):
-            button = QtWidgets.QPushButton()
-            button.setText(label)
-            button.setCheckable(True)
+            button = FilterChipButton(label, color=poi_chip_colors.get(kind))
             button.setChecked(
                 self._setting_bool(f"map/show_poi_{kind}", legacy_show_pois)
             )
@@ -233,43 +213,40 @@ class AtlasWindow(
             "plant": True,
             "ore": True,
         }
-        self.loot_filters: dict[str, LootFilterButton] = {}
-        self.loot_icon_modes: dict[str, SlideSwitch] = {}
+        self.loot_filters: dict[str, FilterChipButton] = {}
+        self.loot_icon_modes: dict[str, bool] = {}
         for _index, (kind, label) in enumerate(self.LOOT_FILTERS):
-            button = LootFilterButton()
-            button.setText(label)
-            button.setCheckable(True)
+            button = FilterChipButton(label, color=loot_chip_colors.get(kind))
             button.setChecked(
                 self._setting_bool(f"map/show_loot_{kind}", legacy_show_collectibles)
             )
             button.setToolTip(f"Show or hide {label.lower()}")
-            self.loot_filters[kind] = button
-
-            mode_button = button.mode_switch
-            mode_button.setChecked(
-                self._setting_bool(
-                    f"map/loot_use_icon_{kind}",
-                    default_loot_icon_mode[kind],
+            button.setContextMenuPolicy(
+                QtCore.Qt.ContextMenuPolicy.CustomContextMenu
+            )
+            button.customContextMenuRequested.connect(
+                lambda pos, loot_kind=kind: self._toggle_loot_icon_mode(
+                    loot_kind, pos
                 )
             )
-            mode_button.sync_position()
-            mode_button.setAccessibleDescription(
-                f"Switch {label.lower()} between colored-dot and atlas-icon rendering"
+            self.loot_filters[kind] = button
+            self.loot_icon_modes[kind] = self._setting_bool(
+                f"map/loot_use_icon_{kind}",
+                default_loot_icon_mode[kind],
             )
-            self.loot_icon_modes[kind] = mode_button
 
         # CUSTOM contains one live row per custom waypoint. Each row is a
         # visibility toggle; right-clicking it exposes waypoint actions.
         self.custom_waypoint_buttons: dict[int, QtWidgets.QPushButton] = {}
 
         self.custom_add_current = QtWidgets.QPushButton()
-        self.custom_add_current.setText("Add Current Position")
+        self.custom_add_current.setText("Add")
         self.custom_add_current.setToolTip(
             "Create a custom waypoint at the player's current position"
         )
 
         self.custom_manage = QtWidgets.QPushButton()
-        self.custom_manage.setText("Manage Waypoints")
+        self.custom_manage.setText("Manage")
         self.custom_manage.setToolTip(
             f"Open the waypoint manager\n{self.waypoint_store.file_path}"
         )
@@ -569,16 +546,7 @@ class AtlasWindow(
             button.toggled.connect(self._poi_filter_changed)
         for button in self.loot_filters.values():
             button.toggled.connect(self._controls_changed)
-        for kind, button in self.loot_icon_modes.items():
-            button.toggled.connect(
-                lambda checked, loot_kind=kind: self._loot_icon_mode_changed(
-                    loot_kind, checked
-                )
-            )
         self.sidebar_toggle.clicked.connect(self._toggle_sidebar)
-        self.poi_section_toggle.clicked.connect(self._toggle_poi_section)
-        self.loot_section_toggle.clicked.connect(self._toggle_loot_section)
-        self.custom_section_toggle.clicked.connect(self._toggle_custom_section)
         self.custom_add_current.clicked.connect(self._add_current_custom_waypoint)
         self.custom_manage.clicked.connect(self._open_waypoint_manager)
         self.dps_overlay_open.clicked.connect(self.combatMeterRequested)
@@ -633,23 +601,17 @@ class AtlasWindow(
         self.waypoint_store.changed.connect(self._custom_waypoints_changed)
         initial_radius, _initial_label = self.ZOOM_LEVELS[self.zoom_index]
         self.radar.set_zoom_radius(float(initial_radius), immediate=True)
-        self._set_poi_collapsed(
-            self._setting_bool("map/poi_collapsed", False),
+        self._set_sidebar_filter_segment(
+            str(self._settings.value("map/sidebar_filter_segment", "loot") or "loot"),
             persist=False,
-            animate=False,
-        )
-        self._set_loot_collapsed(
-            self._setting_bool("map/loot_collapsed", False),
-            persist=False,
-            animate=False,
-        )
-        self._set_custom_collapsed(
-            self._setting_bool("map/custom_collapsed", False),
-            persist=False,
-            animate=False,
         )
         self._set_sidebar_collapsed(
             self._setting_bool("map/sidebar_collapsed", False),
+            persist=False,
+            animate=False,
+        )
+        self._set_gather_sidebar_collapsed(
+            self._setting_bool("map/gather_sidebar_collapsed", True),
             persist=False,
             animate=False,
         )
@@ -1189,6 +1151,55 @@ class AtlasWindow(
         self.sidebar.resize(self.sidebar_width, max(0, sidebar_height))
         self.sidebar.move(sidebar_margin, sidebar_margin)
         self.sidebar.raise_()
+
+        if hasattr(self, "gather_sidebar"):
+            gather_target = self._gather_sidebar_target_body_height(sidebar_margin)
+            if (
+                self.gather_sidebar_animation.state()
+                != QtCore.QAbstractAnimation.State.Running
+            ):
+                self._set_gather_sidebar_body_height(gather_target)
+            elif self._gather_sidebar_body_height > self._gather_sidebar_body_limit(
+                sidebar_margin
+            ):
+                self._set_gather_sidebar_body_height(
+                    self._gather_sidebar_body_limit(sidebar_margin)
+                )
+            gather_height = (
+                self._gather_sidebar_chrome_height(self._gather_sidebar_body_height)
+                + self._gather_sidebar_body_height
+            )
+            # Keep gather below waypoints with a gap when the window is short.
+            max_gather_bottom = self.radar.height() - sidebar_margin
+            min_gather_top = sidebar_margin + sidebar_height + sidebar_margin
+            if min_gather_top + gather_height > max_gather_bottom:
+                # Prefer shrinking gather body; header stays visible.
+                allowed_body = max(
+                    0,
+                    max_gather_bottom
+                    - min_gather_top
+                    - self._gather_sidebar_chrome_height(1),
+                )
+                if (
+                    self.gather_sidebar_animation.state()
+                    != QtCore.QAbstractAnimation.State.Running
+                ):
+                    self._set_gather_sidebar_body_height(
+                        min(self._gather_sidebar_body_height, allowed_body)
+                    )
+                gather_height = (
+                    self._gather_sidebar_chrome_height(self._gather_sidebar_body_height)
+                    + self._gather_sidebar_body_height
+                )
+            gather_y = max(
+                min_gather_top,
+                max_gather_bottom - gather_height,
+            )
+            self.gather_sidebar.resize(
+                self.gather_sidebar_width, max(0, gather_height)
+            )
+            self.gather_sidebar.move(sidebar_margin, gather_y)
+            self.gather_sidebar.raise_()
 
         self.map_controls_overlay.adjustSize()
         x = max(margin, self.radar.width() - self.map_controls_overlay.width() - margin)
@@ -1919,7 +1930,7 @@ class AtlasWindow(
             kind: button.isChecked() for kind, button in self.loot_filters.items()
         }
         loot_icon_mode = {
-            kind: button.isChecked() for kind, button in self.loot_icon_modes.items()
+            kind: bool(enabled) for kind, enabled in self.loot_icon_modes.items()
         }
         self.radar.poi_kind_visibility = poi_visibility
         self.radar.loot_kind_visibility = loot_visibility

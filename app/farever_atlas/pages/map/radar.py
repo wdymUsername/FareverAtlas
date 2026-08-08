@@ -24,13 +24,23 @@ _POI_COLORS: dict[str, QtGui.QColor] = {
     "red_orb": QtGui.QColor("#e35b62"),
     "plant": QtGui.QColor("#63c174"),
     "ore": QtGui.QColor("#aeb6c2"),
-    "merchant": QtGui.QColor("#b785e5"),
-    "dungeon": QtGui.QColor("#f28c54"),
+    "merchant": QtGui.QColor("#a67c52"),
+    "dungeon": QtGui.QColor("#5a3480"),
     "activity": QtGui.QColor("#5ba6e6"),
-    "respawn": QtGui.QColor("#f0f0f0"),
-    "obelisk": QtGui.QColor("#7ce4df"),
+    "respawn": QtGui.QColor("#8ec8f5"),
+    "obelisk": QtGui.QColor("#9b6fd4"),
 }
 _POI_COLOR_FALLBACK = QtGui.QColor("#9ba7b4")
+# Activity markers keep distinct hues by subkind (icons still win when present).
+_ACTIVITY_COLORS: dict[str, QtGui.QColor] = {
+    "worldelite": QtGui.QColor("#e4b84a"),
+    "chestorb": QtGui.QColor("#e35b62"),
+    "worldcamp": QtGui.QColor("#63c174"),
+    "timercollectrun": QtGui.QColor("#7ce4df"),
+    "ascension": QtGui.QColor("#b785e5"),
+    "fightstone": QtGui.QColor("#f28c54"),
+    "mountrush": QtGui.QColor("#5ba6e6"),
+}
 
 _COLLECTIBLE_KINDS = frozenset({"chest", "red_orb", "plant", "ore", "gatherable"})
 # Coarse enough that most views touch few buckets, fine enough that a bucket
@@ -2054,7 +2064,7 @@ class RadarWidget(QtWidgets.QWidget):
             )
             if size_key == "large":
                 # Soft ring so large nodes read clearly next to small ones.
-                ring = QtGui.QColor(self._poi_color(normalized_kind))
+                ring = QtGui.QColor(self._poi_color(normalized_kind, subkind))
                 ring.setAlpha(160)
                 sprite_painter.setPen(QtGui.QPen(ring, 1.4))
                 sprite_painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
@@ -2063,10 +2073,10 @@ class RadarWidget(QtWidgets.QWidget):
                 )
         else:
             sprite_painter.setPen(QtGui.QPen(QtGui.QColor("#101318"), 1.0))
-            sprite_painter.setBrush(self._poi_color(kind))
+            sprite_painter.setBrush(self._poi_color(normalized_kind, subkind))
             sprite_painter.drawEllipse(centre, dot_radius, dot_radius)
             if size_key == "large":
-                ring = QtGui.QColor(self._poi_color(normalized_kind))
+                ring = QtGui.QColor(self._poi_color(normalized_kind, subkind))
                 ring.setAlpha(170)
                 sprite_painter.setPen(QtGui.QPen(ring, 1.3))
                 sprite_painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
@@ -2103,8 +2113,14 @@ class RadarWidget(QtWidgets.QWidget):
         )
 
     @staticmethod
-    def _poi_color(kind: str) -> QtGui.QColor:
-        return _POI_COLORS.get(kind, _POI_COLOR_FALLBACK)
+    def _poi_color(kind: str, subkind: str = "") -> QtGui.QColor:
+        normalized = str(kind or "").strip().lower()
+        if normalized == "activity":
+            activity_key = str(subkind or "").strip().lower()
+            activity_color = _ACTIVITY_COLORS.get(activity_key)
+            if activity_color is not None:
+                return QtGui.QColor(activity_color)
+        return _POI_COLORS.get(normalized, _POI_COLOR_FALLBACK)
 
     def _draw_z_indicator(
         self,
@@ -2781,9 +2797,18 @@ class RadarWidget(QtWidgets.QWidget):
                 fill = QtGui.QColor("#FF5348")
                 if far:
                     fill.setAlpha(110)
+                size = 3.6
+                diamond = QtGui.QPolygonF(
+                    [
+                        point + QtCore.QPointF(0, -size),
+                        point + QtCore.QPointF(size, 0),
+                        point + QtCore.QPointF(0, size),
+                        point + QtCore.QPointF(-size, 0),
+                    ]
+                )
                 painter.setPen(QtGui.QPen(QtGui.QColor("#190d0d"), 1.0))
                 painter.setBrush(fill)
-                painter.drawEllipse(point, 2.8, 2.8)
+                painter.drawPolygon(diamond)
                 self._draw_z_indicator(
                     painter, point, enemy_z, player_z, gap=4.8, color=fill
                 )
@@ -2829,7 +2854,7 @@ class RadarWidget(QtWidgets.QWidget):
                     and math.isfinite(player_z)
                     and abs(other_z - player_z) > self.player_z_fade
                 )
-                # Amber diamond: distinct from red enemy dots and class-colored
+                # Amber diamond: distinct from red enemy diamonds and class-colored
                 # party arrows.
                 fill = QtGui.QColor("#E8B84A")
                 if far:

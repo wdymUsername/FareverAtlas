@@ -951,37 +951,39 @@ QWidget#minimapSidebar {
     border: 1px solid #3a4856;
     border-radius: 7px;
 }
-QTabWidget#sidebarTabs {
-    background: transparent;
-    border: none;
-}
-QTabWidget#sidebarTabs::pane {
-    background: transparent;
-    border: none;
-    top: 0;
-}
-QTabWidget#sidebarTabs QTabBar {
+QWidget#sidebarSegmentBar {
     background: transparent;
     border: none;
     border-bottom: 1px solid #2e3e4b;
 }
-QTabWidget#sidebarTabs QTabBar::tab {
+QWidget#minimapSidebar QPushButton#sidebarSegmentButton {
+    min-width: 0;
     min-height: 22px;
     max-height: 22px;
+    padding: 0 4px;
     color: #7f929f;
     background: transparent;
     border: none;
-    padding: 0 8px;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
     font-size: 9px;
     font-weight: 700;
-    letter-spacing: 0.6px;
+    letter-spacing: 0.4px;
 }
-QTabWidget#sidebarTabs QTabBar::tab:hover {
+QWidget#minimapSidebar QPushButton#sidebarSegmentButton:hover {
     color: #d8e3e9;
 }
-QTabWidget#sidebarTabs QTabBar::tab:selected {
+QWidget#minimapSidebar QPushButton#sidebarSegmentButton:checked {
     color: #eef4f8;
     border-bottom: 2px solid #6f8fa3;
+}
+QLabel#sidebarFilterHint {
+    color: #667682;
+    background: transparent;
+    border: none;
+    font-size: 8px;
+    font-weight: 500;
+    letter-spacing: 0.2px;
 }
 QLabel#gatherNavFieldLabel {
     color: #7f91a0;
@@ -1069,6 +1071,47 @@ QWidget#minimapSidebar QPushButton#sidebarHeaderButton QLabel#sidebarHeaderTitle
     color: #8493a2;
     font-weight: 600;
 }
+QWidget#minimapSidebar QPushButton#sidebarFilterChip {
+    min-width: 0;
+    min-height: 24px;
+    max-height: 24px;
+    padding: 0 8px;
+    text-align: left;
+    border: 1px solid #3a4b5a;
+    border-radius: 5px;
+    color: #9aabb8;
+    background: transparent;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0px;
+}
+QWidget#minimapSidebar QPushButton#sidebarFilterChip[hasDot="true"] {
+    padding-left: 18px;
+}
+QWidget#minimapSidebar QPushButton#sidebarFilterChip[multiDot="true"] {
+    padding-left: 32px;
+}
+QWidget#minimapSidebar QPushButton#sidebarFilterChip:hover {
+    color: #e4ebf1;
+    background: #22303b;
+    border-color: #3d5061;
+}
+QWidget#minimapSidebar QPushButton#sidebarFilterChip:checked {
+    color: #ffffff;
+    background: #285f8b;
+    border-color: #3979a9;
+    font-weight: 600;
+}
+QWidget#minimapSidebar QPushButton#sidebarFilterChip:disabled {
+    color: #65727e;
+    background: transparent;
+    border-color: #2a3641;
+}
+QFrame#sidebarFilterSeparator {
+    background: #2e3e4b;
+    border: none;
+    max-height: 1px;
+}
 QWidget#minimapSidebar QPushButton#sidebarSubItem {
     min-width: 0;
     min-height: 22px;
@@ -1082,9 +1125,6 @@ QWidget#minimapSidebar QPushButton#sidebarSubItem {
     font-size: 10px;
     font-weight: 500;
     letter-spacing: 0px;
-}
-QWidget#minimapSidebar QPushButton#sidebarSubItem[lootModeRow="true"] {
-    padding-right: 43px;
 }
 QWidget#minimapSidebar QPushButton#sidebarSubItem:hover {
     color: #e4ebf1;
