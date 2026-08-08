@@ -17,7 +17,6 @@ class PlayerListRow(QtWidgets.QFrame):
     selected = QtCore.Signal(object)
     activated = QtCore.Signal(object)
     profileRequested = QtCore.Signal(object)
-    chatRequested = QtCore.Signal(object)
     focusRequested = QtCore.Signal(object)
     friendToggleRequested = QtCore.Signal(object)
 
@@ -141,15 +140,6 @@ class PlayerListRow(QtWidgets.QFrame):
         self.profile_button.setToolTip("Open Steam profile")
         self.profile_button.clicked.connect(self._emit_profile)
 
-        self.chat_button = QtWidgets.QToolButton()
-        self.chat_button.setObjectName("playersRowChatButton")
-        self.chat_button.setText("Chat")
-        self.chat_button.setFixedSize(42, 26)
-        self.chat_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        self.chat_button.setToolTip("Open Steam chat")
-        self.chat_button.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
-        self.chat_button.clicked.connect(self._emit_chat)
-
         self.focus_button = QtWidgets.QToolButton()
         self.focus_button.setObjectName("playersRowFocusButton")
         self.focus_button.setText("Focus")
@@ -160,7 +150,6 @@ class PlayerListRow(QtWidgets.QFrame):
 
         actions.addWidget(self.friend_button, 0)
         actions.addWidget(self.profile_button, 0)
-        actions.addWidget(self.chat_button, 0)
         actions.addWidget(self.focus_button, 0)
 
         root.addWidget(self.class_icon, 0)
@@ -287,11 +276,6 @@ class PlayerListRow(QtWidgets.QFrame):
             self.profile_button.setToolTip(
                 f"Open Steam profile ({steamid64})"
             )
-        self.chat_button.setEnabled(steamid64 is not None)
-        if steamid64 is None:
-            self.chat_button.setToolTip("No Steam chat for this player")
-        else:
-            self.chat_button.setToolTip(f"Open Steam chat ({steamid64})")
 
         is_friend = bool(entry.get("is_friend"))
         # Allow add when we have a Steam uid, or at least a stable name key.
@@ -340,10 +324,6 @@ class PlayerListRow(QtWidgets.QFrame):
         self.selected.emit(self._entry)
         self.profileRequested.emit(self._entry)
 
-    def _emit_chat(self) -> None:
-        self.selected.emit(self._entry)
-        self.chatRequested.emit(self._entry)
-
     def _emit_focus(self) -> None:
         self.selected.emit(self._entry)
         self.focusRequested.emit(self._entry)
@@ -391,7 +371,6 @@ class PlayerListRow(QtWidgets.QFrame):
             return False
         for button in (
             self.profile_button,
-            self.chat_button,
             self.focus_button,
             self.friend_button,
         ):

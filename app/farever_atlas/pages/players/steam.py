@@ -112,6 +112,25 @@ def _resolve_steamid64(
     return int(normalized)
 
 
+def _launch_steam_url(url: str) -> bool:
+    """Hand a steam:// (or other) URL to the Steam client.
+
+    Prefers the ``steam`` CLI so the protocol string is passed intact — more
+    reliable than QDesktopServices/xdg-open on Linux. Returns True if a launch
+    was accepted (Steam may still ignore some legacy protocol paths).
+    """
+    text = str(url or "").strip()
+    if not text:
+        return False
+    steam_bin = QtCore.QStandardPaths.findExecutable("steam")
+    if steam_bin and QtCore.QProcess.startDetached(steam_bin, [text]):
+        return True
+    xdg = QtCore.QStandardPaths.findExecutable("xdg-open")
+    if xdg and QtCore.QProcess.startDetached(xdg, [text]):
+        return True
+    return bool(QtGui.QDesktopServices.openUrl(QtCore.QUrl(text)))
+
+
 def open_steam_profile(
     uid: object = None,
     *,
@@ -127,26 +146,9 @@ def open_steam_profile(
     if resolved is None:
         return False
     steam_url, browser_url = steam_profile_urls(resolved)
-    if QtGui.QDesktopServices.openUrl(QtCore.QUrl(steam_url)):
+    if _launch_steam_url(steam_url):
         return True
     return bool(QtGui.QDesktopServices.openUrl(QtCore.QUrl(browser_url)))
-
-
-def open_steam_chat(
-    uid: object = None,
-    *,
-    steamid64: object = None,
-) -> bool:
-    """Open Steam client chat for a Farever uid or SteamID64.
-
-    Steam-only deep link (no browser fallback). Returns True if the URL
-    open was accepted.
-    """
-    resolved = _resolve_steamid64(uid, steamid64=steamid64)
-    if resolved is None:
-        return False
-    chat_url = f"steam://friends/message/{resolved}"
-    return bool(QtGui.QDesktopServices.openUrl(QtCore.QUrl(chat_url)))
 
 
 def steam_visibility_is_private(visibility: object) -> bool:
