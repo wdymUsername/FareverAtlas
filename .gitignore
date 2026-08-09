@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *.tmp
 
+# Local scratch / one-off scan dumps (e.g. .tmp_scan_hl/)
+.tmp*/
+
 # Local user and machine state
 nyx_game_dir.conf
 game_dir.conf
