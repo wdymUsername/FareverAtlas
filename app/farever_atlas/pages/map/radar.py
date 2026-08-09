@@ -16,10 +16,22 @@ from ...config import (
     safe_int,
 )
 from ...critter_spawns import critter_spawns
+from ...cull_limits import (
+    DEFAULT_CRITTER_XY_M,
+    DEFAULT_CRITTER_Z_M,
+    DEFAULT_ENEMY_XY_M,
+    DEFAULT_ENEMY_Z_M,
+    DEFAULT_LOOT_XY_M,
+    DEFAULT_LOOT_Z_M,
+    DEFAULT_PATROL_LEASH_M,
+    DEFAULT_PATROL_XY_M,
+    DEFAULT_PATROL_Z_M,
+)
 from ...display_names import (
     format_gatherable_tooltip_name,
     format_unit_tooltip_name,
     is_activity_linked_chest,
+    is_orb_or_camp_chest,
     split_ident,
     unit_level,
 )
@@ -28,12 +40,6 @@ from .data import MapTexture, Snapshot
 from .fog import FogOfWar
 from .fow_layers import canonical_fow_layer
 from .gather_nav import _element_completed
-
-# Live enemy sweep radius / z; critters are also gated to this for path draw.
-_PATROL_LIVE_RANGE_M = 500.0
-_PATROL_LIVE_Z_M = 120.0
-# Max distance from a live unit to a path sample (or spawner) to claim it.
-_PATROL_LEASH_M = 65.0
 
 # Live Orb/Camp chests report Element.kind as bare "Chest"; match nearby activity.
 _ACTIVITY_CHEST_PROXIMITY_M = 120.0
@@ -104,12 +110,10 @@ class RadarWidget(QtWidgets.QWidget):
     # Game UI icons/playerCursor.png — white chevron + orange diamond (points +X).
     PLAYER_ARROW_ASSET = "playerCursor.png"
     PLAYER_ARROW_SIZE = 28
-    # Must match native_bridge interactible sweep (XY metres / Z cull).
+    # Must match native_bridge interactible sweep defaults (overridable via settings).
     # Static loot outside this bubble is drawn from the POI file; inside the
     # bubble, a static marker is suppressed only when a live interactible
     # covers it (failed/empty live sweeps must not blank the map).
-    LOOT_LIVE_RANGE_M = 500.0
-    LOOT_LIVE_Z_CULL_M = 160.0
     LOOT_LIVE_MATCH_M = 12.0
 
     # User-confirmed activities.png mapping. Numbers are one-based, left to
@@ -150,10 +154,16 @@ class RadarWidget(QtWidgets.QWidget):
         self.show_players = True
         self.show_player_names = False
         self.show_route_line = True
-        # World units of elevation difference before an enemy marker is dimmed.
-        self.enemy_z_fade = 30.0
-        # Same elevation fade for companion critter markers.
-        self.critter_z_fade = 30.0
+        # Atlas culls (settings). 0 on Z / actor XY = Off.
+        self.enemy_xy_m = float(DEFAULT_ENEMY_XY_M)
+        self.enemy_z_fade = float(DEFAULT_ENEMY_Z_M)
+        self.critter_xy_m = float(DEFAULT_CRITTER_XY_M)
+        self.critter_z_fade = float(DEFAULT_CRITTER_Z_M)
+        self.patrol_xy_m = float(DEFAULT_PATROL_XY_M)
+        self.patrol_z_m = float(DEFAULT_PATROL_Z_M)
+        self.patrol_leash_m = float(DEFAULT_PATROL_LEASH_M)
+        self.loot_live_range_m = float(DEFAULT_LOOT_XY_M)
+        self.loot_live_z_cull_m = float(DEFAULT_LOOT_Z_M)
         # Metres of |Δz| before a marker gets an up/down chevron.
         self.z_indicator_threshold = 2.0
         self.active_custom_waypoint_id: int | None = None
@@ -371,6 +381,10 @@ class RadarWidget(QtWidgets.QWidget):
         completed_signature = tuple(
             sorted(str(value) for value in completed_elements)
         ) if isinstance(completed_elements, list) else ()
+        completed_activities = self.state.get("completed_activities", [])
+        completed_activities_signature = tuple(
+            sorted(str(value) for value in completed_activities)
+        ) if isinstance(completed_activities, list) else ()
         live_signature = (
             party_signature,
             enemy_signature,
@@ -379,6 +393,7 @@ class RadarWidget(QtWidgets.QWidget):
             interactible_signature,
             target_signature,
             completed_signature,
+            completed_activities_signature,
         )
         if pois_changed or live_signature != self._live_marker_signature:
             self._live_marker_signature = live_signature
@@ -1323,8 +1338,11 @@ class RadarWidget(QtWidgets.QWidget):
         if not by_kind:
             return []
 
-        range_sq = _PATROL_LIVE_RANGE_M * _PATROL_LIVE_RANGE_M
-        leash_sq = _PATROL_LEASH_M * _PATROL_LEASH_M
+        range_m = max(0.0, float(self.patrol_xy_m))
+        range_sq = range_m * range_m
+        leash_m = max(1.0, float(self.patrol_leash_m))
+        leash_sq = leash_m * leash_m
+        patrol_z = float(self.patrol_z_m)
         claimed: dict[str, tuple[float, dict[str, Any]]] = {}
 
         for unit in live_units:
@@ -1343,9 +1361,13 @@ class RadarWidget(QtWidgets.QWidget):
             dy = uy - player_y
             if dx * dx + dy * dy > range_sq:
                 continue
-            if math.isfinite(uz) and math.isfinite(player_z):
-                if abs(uz - player_z) > _PATROL_LIVE_Z_M:
-                    continue
+            if (
+                patrol_z > 0.0
+                and math.isfinite(uz)
+                and math.isfinite(player_z)
+                and abs(uz - player_z) > patrol_z
+            ):
+                continue
 
             best_path: dict[str, Any] | None = None
             best_dist_sq = leash_sq
@@ -1631,6 +1653,15 @@ class RadarWidget(QtWidgets.QWidget):
                 ):
                     # Vault / Orb / Camp chests belong to Activities, not Chests.
                     if "activity" not in enabled_poi_kinds:
+                        continue
+                    # Orb/Camp activity markers are snapped onto the chest; skip
+                    # the duplicate chest pin. Vault chests have no activity row.
+                    if is_orb_or_camp_chest(
+                        poi.get("name"),
+                        poi.get("id"),
+                        poi.get("source"),
+                        poi.get("subkind"),
+                    ):
                         continue
                 else:
                     visible = (
@@ -2481,9 +2512,9 @@ class RadarWidget(QtWidgets.QWidget):
     @staticmethod
     def _muted_pixmap(pixmap: QtGui.QPixmap) -> QtGui.QPixmap:
         """Desaturate a marker so completed one-time collectibles read as done."""
-        image = pixmap.toImage().convertToFormat(
-            QtGui.QImage.Format.Format_ARGB32_Premultiplied
-        )
+        # Use straight ARGB — writing unpremultiplied RGB into a Premultiplied
+        # buffer turns antialiased atlas edges into false cyan/navy fringes.
+        image = pixmap.toImage().convertToFormat(QtGui.QImage.Format.Format_ARGB32)
         for y in range(image.height()):
             for x in range(image.width()):
                 color = QtGui.QColor.fromRgba(image.pixel(x, y))
@@ -3017,6 +3048,12 @@ class RadarWidget(QtWidgets.QWidget):
             for value in completed_elements
             if str(value).strip()
         } if isinstance(completed_elements, list) else set()
+        completed_activities = self.state.get("completed_activities", [])
+        completed_activity_ids = {
+            str(value).strip()
+            for value in completed_activities
+            if str(value).strip()
+        } if isinstance(completed_activities, list) else set()
 
         def _loot_kind_visible(kind: str) -> bool:
             if kind == "gatherable":
@@ -3031,10 +3068,10 @@ class RadarWidget(QtWidgets.QWidget):
                 return False
             if not (math.isfinite(px) and math.isfinite(py)):
                 return False
-            if math.hypot(px - player_x, py - player_y) > self.LOOT_LIVE_RANGE_M:
+            if math.hypot(px - player_x, py - player_y) > self.loot_live_range_m:
                 return False
             if math.isfinite(pz) and math.isfinite(player_z):
-                if abs(pz - player_z) > self.LOOT_LIVE_Z_CULL_M:
+                if abs(pz - player_z) > self.loot_live_z_cull_m:
                     return False
             return True
 
@@ -3053,6 +3090,14 @@ class RadarWidget(QtWidgets.QWidget):
                     continue
                 if kind == "chest" and self._is_activity_gated_chest(poi):
                     if "activity" not in enabled_poi_kinds:
+                        continue
+                    # Orb/Camp sites already have an activity marker at the chest.
+                    # Vault / nearby world chests still draw under Activities.
+                    if is_orb_or_camp_chest(
+                        poi.get("name"),
+                        poi.get("id"),
+                        poi.get("source"),
+                    ):
                         continue
                 elif not _loot_kind_visible(kind):
                     continue
@@ -3158,6 +3203,32 @@ class RadarWidget(QtWidgets.QWidget):
                     self._blit_marker_sprite(
                         painter, point, pixmap, sprite_half_w, sprite_half_h
                     )
+                elif kind == "chest" and _element_completed(
+                    poi_id, completed_element_ids
+                ):
+                    # Opened world/recipe chests stay on the map, muted.
+                    pixmap, sprite_half_w, sprite_half_h = self._marker_sprite(
+                        kind,
+                        str(poi.get("subkind") or ""),
+                        size,
+                        muted=True,
+                    )
+                    self._blit_marker_sprite(
+                        painter, point, pixmap, sprite_half_w, sprite_half_h
+                    )
+                elif kind == "activity" and _element_completed(
+                    poi_id, completed_activity_ids
+                ):
+                    # Character-scoped world activity: mute after hand-in.
+                    pixmap, sprite_half_w, sprite_half_h = self._marker_sprite(
+                        kind,
+                        str(poi.get("subkind") or ""),
+                        size,
+                        muted=True,
+                    )
+                    self._blit_marker_sprite(
+                        painter, point, pixmap, sprite_half_w, sprite_half_h
+                    )
                 else:
                     self._blit_marker_sprite(
                         painter, point, pixmap, sprite_half_w, sprite_half_h
@@ -3169,7 +3240,14 @@ class RadarWidget(QtWidgets.QWidget):
                         player_z,
                         gap=6.0 if size == "large" else 5.0,
                     )
-                if is_collectible and kind != "red_orb":
+                if (
+                    is_collectible
+                    and kind != "red_orb"
+                    and not (
+                        kind == "chest"
+                        and _element_completed(poi_id, completed_element_ids)
+                    )
+                ):
                     hit = hit_base
                     if size == "large":
                         hit += 3.0
@@ -3317,9 +3395,18 @@ class RadarWidget(QtWidgets.QWidget):
                 point = self._world_to_screen(
                     enemy, center, pixels_per_metre, view_center
                 )
+                if (
+                    self.enemy_xy_m > 0.0
+                    and math.isfinite(player_x)
+                    and math.isfinite(player_y)
+                    and math.hypot(enemy_x - player_x, enemy_y - player_y)
+                    > self.enemy_xy_m
+                ):
+                    continue
                 enemy_z = safe_float(enemy.get("z"), player_z)
                 far = (
-                    math.isfinite(enemy_z)
+                    self.enemy_z_fade > 0.0
+                    and math.isfinite(enemy_z)
                     and math.isfinite(player_z)
                     and abs(enemy_z - player_z) > self.enemy_z_fade
                 )
@@ -3381,7 +3468,8 @@ class RadarWidget(QtWidgets.QWidget):
                 )
                 spawn_z = safe_float(spawn.get("z"), player_z)
                 far = (
-                    math.isfinite(spawn_z)
+                    self.critter_z_fade > 0.0
+                    and math.isfinite(spawn_z)
                     and math.isfinite(player_z)
                     and abs(spawn_z - player_z) > self.critter_z_fade
                 )
@@ -3437,9 +3525,18 @@ class RadarWidget(QtWidgets.QWidget):
                 point = self._world_to_screen(
                     critter, center, pixels_per_metre, view_center
                 )
+                if (
+                    self.critter_xy_m > 0.0
+                    and math.isfinite(player_x)
+                    and math.isfinite(player_y)
+                    and math.hypot(critter_x - player_x, critter_y - player_y)
+                    > self.critter_xy_m
+                ):
+                    continue
                 critter_z = safe_float(critter.get("z"), player_z)
                 far = (
-                    math.isfinite(critter_z)
+                    self.critter_z_fade > 0.0
+                    and math.isfinite(critter_z)
                     and math.isfinite(player_z)
                     and abs(critter_z - player_z) > self.critter_z_fade
                 )

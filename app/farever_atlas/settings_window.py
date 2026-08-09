@@ -11,6 +11,7 @@ from typing import Any
 from PySide6 import QtCore, QtWidgets
 
 from .pages.map.fow_layers import FOW_LAYER_LABELS, FOW_LAYER_ORDER
+from .cull_limits import CULL_SETTING_KEYS, clamp_cull_value, cull_setting
 
 
 def _as_bool(value: Any, default: bool = False) -> bool:
@@ -98,6 +99,8 @@ def apply_settings_defaults(settings: QtCore.QSettings) -> None:
     settings.setValue("map/show_game_time", True)
     settings.setValue("map/show_rift_timer", True)
     settings.setValue("map/show_dps_overlay", True)
+    for key, (default, _minimum, _maximum) in CULL_SETTING_KEYS.items():
+        settings.setValue(key, default)
     settings.setValue("party/show_empty_slots", True)
     settings.setValue("party/slot_count", PARTY_SLOT_COUNT)
     settings.setValue("party/show_distance", True)
@@ -126,6 +129,7 @@ class SettingsPanel(QtCore.QObject):
         self._settings = settings
         self.dev_mode = bool(dev_mode)
         self._suppress = False
+        self.cull_spins: dict[str, QtWidgets.QSpinBox] = {}
         self.tabs = QtWidgets.QTabWidget()
         self.tabs.addTab(self._general_tab(), "General")
         self.tabs.addTab(self._map_tab(), "Map")
@@ -262,6 +266,8 @@ class SettingsPanel(QtCore.QObject):
             self.show_rift_timer.setChecked(
                 _as_bool(self._settings.value("map/show_rift_timer"), True)
             )
+            for key, spin in self.cull_spins.items():
+                spin.setValue(cull_setting(self._settings, key))
 
             self.show_empty_slots.setChecked(
                 _as_bool(self._settings.value("party/show_empty_slots"), True)
@@ -337,6 +343,29 @@ class SettingsPanel(QtCore.QObject):
             return
         self._settings.setValue(key, int(value))
         self._emit_changed()
+
+    def _set_cull_int(self, key: str, value: int) -> None:
+        if self._suppress:
+            return
+        self._settings.setValue(key, clamp_cull_value(key, value))
+        self._emit_changed()
+
+    def _cull_spin(
+        self,
+        key: str,
+        *,
+        tooltip: str,
+    ) -> QtWidgets.QSpinBox:
+        _default, minimum, maximum = CULL_SETTING_KEYS[key]
+        spin = QtWidgets.QSpinBox()
+        spin.setRange(minimum, maximum)
+        spin.setSuffix(" m")
+        spin.setToolTip(tooltip)
+        spin.valueChanged.connect(
+            lambda value, settings_key=key: self._set_cull_int(settings_key, value)
+        )
+        self.cull_spins[key] = spin
+        return spin
 
     @staticmethod
     def _page() -> tuple[QtWidgets.QWidget, QtWidgets.QVBoxLayout]:
@@ -523,6 +552,80 @@ class SettingsPanel(QtCore.QObject):
         self._bind_bool(self.show_player_names, "map/show_player_names")
         default_form.addRow("Player names", self.show_player_names)
         layout.addWidget(defaults)
+
+        ranges, range_form = self._group("Range & elevation")
+        range_note = QtWidgets.QLabel(
+            "Hide markers beyond XY / elevation from you. "
+            "0 = Off (no Atlas filter on that axis). "
+            "Maxima match the live game stream."
+        )
+        range_note.setWordWrap(True)
+        range_note.setObjectName("settingsDeferredNote")
+        range_form.addRow(range_note)
+        range_form.addRow(
+            "Enemies XY",
+            self._cull_spin(
+                "map/cull/enemy_xy_m",
+                tooltip="Atlas XY filter for enemy markers (max 500 m). 0 = Off.",
+            ),
+        )
+        range_form.addRow(
+            "Enemies Z",
+            self._cull_spin(
+                "map/cull/enemy_z_m",
+                tooltip="Hide enemies on other floors (max 120 m). 0 = Off.",
+            ),
+        )
+        range_form.addRow(
+            "Critters XY",
+            self._cull_spin(
+                "map/cull/critter_xy_m",
+                tooltip="Atlas XY filter for critter markers (max 500 m). 0 = Off.",
+            ),
+        )
+        range_form.addRow(
+            "Critters Z",
+            self._cull_spin(
+                "map/cull/critter_z_m",
+                tooltip="Hide critters on other floors (max 120 m). 0 = Off.",
+            ),
+        )
+        range_form.addRow(
+            "Patrol XY",
+            self._cull_spin(
+                "map/cull/patrol_xy_m",
+                tooltip="Only claim patrol paths for live units within this XY range (max 500 m).",
+            ),
+        )
+        range_form.addRow(
+            "Patrol Z",
+            self._cull_spin(
+                "map/cull/patrol_z_m",
+                tooltip="Patrol path elevation gate (max 120 m). 0 = Off.",
+            ),
+        )
+        range_form.addRow(
+            "Patrol leash",
+            self._cull_spin(
+                "map/cull/patrol_leash_m",
+                tooltip="Max distance from a live unit to its path samples (max 200 m).",
+            ),
+        )
+        range_form.addRow(
+            "Loot / NODE GUIDE XY",
+            self._cull_spin(
+                "map/cull/loot_xy_m",
+                tooltip="Live loot bubble radius (max 500 m).",
+            ),
+        )
+        range_form.addRow(
+            "Loot / NODE GUIDE Z",
+            self._cull_spin(
+                "map/cull/loot_z_m",
+                tooltip="Live loot elevation cull (max 160 m).",
+            ),
+        )
+        layout.addWidget(ranges)
         return self._finish(page, layout)
 
     def _party_tab(self) -> QtWidgets.QWidget:
