@@ -49,10 +49,18 @@ fi
 
 OUTPUT_WINDOWS="Z:${OUTPUT//\//\\}"
 
+# Join the live Farever wineserver when the game is already running. Plain
+# `proton run` from outside SteamLinuxRuntime can attach to a stale view where
+# hero/world pointers look valid but GameLayer.units stays empty and frozen.
+PROTON_VERB=run
+if pgrep -f '(^|/)Farever\.exe([[:space:]]|$)' >/dev/null 2>&1; then
+    PROTON_VERB=runinprefix
+fi
+
 exec env \
     STEAM_COMPAT_DATA_PATH="$COMPAT_DATA" \
     STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_ROOT" \
     SteamAppId=3672400 \
     SteamGameId=3672400 \
     WINEDEBUG=-all \
-    "$PROTON" run "$BRIDGE" --output "$OUTPUT_WINDOWS" --watch-ms "$INTERVAL_MS"
+    "$PROTON" "$PROTON_VERB" "$BRIDGE" --output "$OUTPUT_WINDOWS" --watch-ms "$INTERVAL_MS"

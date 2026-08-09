@@ -198,6 +198,15 @@ class AtlasWindow(
         self.enemies_filter.setChecked(self._setting_bool("map/show_enemies", True))
         self.enemies_filter.setToolTip("Show or hide nearby enemies on the map")
 
+        self.critters_filter = FilterChipButton(
+            "Critters", color="#6BE06B", marker="diamond"
+        )
+        self.critters_filter.setChecked(self._setting_bool("map/show_critters", True))
+        self.critters_filter.setToolTip(
+            "Show or hide companion critters on the map\n"
+            "Sparkling critters get a gold halo"
+        )
+
         self.players_filter = FilterChipButton(
             "Players", color="#E8B84A", marker="diamond"
         )
@@ -559,6 +568,7 @@ class AtlasWindow(
         self._position_main_navigation()
 
         self.enemies_filter.toggled.connect(self._controls_changed)
+        self.critters_filter.toggled.connect(self._controls_changed)
         self.players_filter.toggled.connect(self._controls_changed)
         for button in self.poi_filters.values():
             button.toggled.connect(self._poi_filter_changed)
@@ -1976,6 +1986,11 @@ class AtlasWindow(
             self._setting_bool("map/show_enemies", True)
         )
         self.enemies_filter.blockSignals(False)
+        self.critters_filter.blockSignals(True)
+        self.critters_filter.setChecked(
+            self._setting_bool("map/show_critters", True)
+        )
+        self.critters_filter.blockSignals(False)
         self.players_filter.blockSignals(True)
         self.players_filter.setChecked(
             self._setting_bool("map/show_players", True)
@@ -2119,6 +2134,7 @@ class AtlasWindow(
             "party/dim_invalid", True
         )
         self.radar.show_enemies = self.enemies_filter.isChecked()
+        self.radar.show_critters = self.critters_filter.isChecked()
         self.radar.show_players = self.players_filter.isChecked()
         self.radar.show_player_names = self._setting_bool(
             "map/show_player_names", False
@@ -2153,6 +2169,7 @@ class AtlasWindow(
             self._settings.setValue(f"map/loot_use_icon_{kind}", use_icon)
         self._settings.setValue("map/show_collectibles", any(loot_visibility.values()))
         self._settings.setValue("map/show_enemies", self.radar.show_enemies)
+        self._settings.setValue("map/show_critters", self.radar.show_critters)
         self._settings.setValue("map/show_players", self.radar.show_players)
         self._settings.setValue("map/fog_enabled", self.radar.fog.enabled)
         self._settings.setValue("map/fog_show_outlines", False)

@@ -14,6 +14,7 @@ from ...config import (
     safe_float,
     safe_int,
 )
+from ...critter_spawns import critter_spawns
 from .data import MapTexture, Snapshot
 from .fog import FogOfWar
 from .fow_layers import canonical_fow_layer
@@ -32,6 +33,11 @@ _POI_COLORS: dict[str, QtGui.QColor] = {
     "obelisk": QtGui.QColor("#9b6fd4"),
 }
 _POI_COLOR_FALLBACK = QtGui.QColor("#9ba7b4")
+_CRITTER_FILL = QtGui.QColor("#6BE06B")
+_CRITTER_SPAWN_FILL = QtGui.QColor(107, 224, 107, 95)
+_CRITTER_EDGE = QtGui.QColor("#0d1a0d")
+_SPARK_RING = QtGui.QColor("#FFE68A")
+_SPARK_SCALE = 1.45
 # Activity markers keep distinct hues by subkind (icons still win when present).
 _ACTIVITY_COLORS: dict[str, QtGui.QColor] = {
     "worldelite": QtGui.QColor("#e4b84a"),
@@ -108,11 +114,14 @@ class RadarWidget(QtWidgets.QWidget):
         self.show_party_health_rings = True
         self.dim_invalid_party_members = True
         self.show_enemies = True
+        self.show_critters = True
         self.show_players = True
         self.show_player_names = False
         self.show_route_line = True
         # World units of elevation difference before an enemy marker is dimmed.
         self.enemy_z_fade = 30.0
+        # Same elevation fade for companion critter markers.
+        self.critter_z_fade = 30.0
         # Same elevation fade for non-party player markers.
         self.player_z_fade = 30.0
         # Metres of |Δz| before a marker gets an up/down chevron.
@@ -257,6 +266,7 @@ class RadarWidget(QtWidgets.QWidget):
             (
                 str(enemy.get("id") or ""),
                 str(enemy.get("kind") or ""),
+                bool(enemy.get("spark")),
                 safe_float(enemy.get("x"), 0.0),
                 safe_float(enemy.get("y"), 0.0),
                 safe_float(enemy.get("z"), 0.0),
@@ -264,6 +274,19 @@ class RadarWidget(QtWidgets.QWidget):
             for enemy in enemies
             if isinstance(enemy, dict)
         ) if isinstance(enemies, list) else ()
+        critters = self.state.get("critters", []) if isinstance(self.state, dict) else []
+        critter_signature = tuple(
+            (
+                str(critter.get("id") or ""),
+                str(critter.get("kind") or ""),
+                bool(critter.get("spark")),
+                safe_float(critter.get("x"), 0.0),
+                safe_float(critter.get("y"), 0.0),
+                safe_float(critter.get("z"), 0.0),
+            )
+            for critter in critters
+            if isinstance(critter, dict)
+        ) if isinstance(critters, list) else ()
         nearby_players = self.state.get("players", []) if isinstance(self.state, dict) else []
         players_signature = tuple(
             (
@@ -308,6 +331,7 @@ class RadarWidget(QtWidgets.QWidget):
         live_signature = (
             party_signature,
             enemy_signature,
+            critter_signature,
             players_signature,
             interactible_signature,
             target_signature,
@@ -1148,10 +1172,68 @@ class RadarWidget(QtWidgets.QWidget):
     @staticmethod
     def _enemy_display_name(enemy: dict[str, Any]) -> str:
         kind = str(enemy.get("kind") or "").strip()
+        role = str(enemy.get("role") or "").strip().lower()
+        if role == "critter_spawn":
+            label = str(enemy.get("unit_group") or enemy.get("unit") or "").strip()
+            if not label and kind:
+                label = kind
+            if not label:
+                label = "Critter spawn"
+            else:
+                label = " ".join(part for part in label.replace("_", " ").split() if part)
+            tag = "Critter spawn"
+            if bool(enemy.get("spark")):
+                tag = f"{tag} · Spark pool"
+            return f"{label} ({tag})"
         if not kind:
-            return "Enemy"
-        # Creature ids arrive as HashLink identifiers like Crimson_Z2W_Sword_2.
-        return " ".join(part for part in kind.replace("_", " ").split() if part)
+            base = "Critter" if role == "critter" else "Enemy"
+        else:
+            # Creature ids arrive as HashLink identifiers like Crimson_Z2W_Sword_2.
+            base = " ".join(part for part in kind.replace("_", " ").split() if part)
+        tag = "Critter" if role == "critter" else "Enemy"
+        if bool(enemy.get("spark")) and "sparkl" not in base.lower():
+            tag = f"{tag} · Sparkling"
+        return f"{base} ({tag})" if kind else tag
+
+    @staticmethod
+    def _draw_critter_diamond(
+        painter: QtGui.QPainter,
+        point: QtCore.QPointF,
+        size: float,
+        fill: QtGui.QColor,
+        *,
+        spark: bool = False,
+    ) -> None:
+        if spark:
+            RadarWidget._draw_spark_halo(painter, point, size, alpha=fill.alpha())
+            size *= _SPARK_SCALE
+        diamond = QtGui.QPolygonF(
+            [
+                point + QtCore.QPointF(0, -size),
+                point + QtCore.QPointF(size, 0),
+                point + QtCore.QPointF(0, size),
+                point + QtCore.QPointF(-size, 0),
+            ]
+        )
+        painter.setPen(QtGui.QPen(_CRITTER_EDGE, 1.0))
+        painter.setBrush(fill)
+        painter.drawPolygon(diamond)
+
+    @staticmethod
+    def _draw_spark_halo(
+        painter: QtGui.QPainter,
+        point: QtCore.QPointF,
+        radius: float,
+        *,
+        alpha: int = 255,
+    ) -> None:
+        halo = QtGui.QColor(_SPARK_RING)
+        if alpha < 255:
+            halo.setAlpha(max(90, alpha))
+        painter.setPen(QtGui.QPen(halo, 1.6))
+        painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+        ring = radius * _SPARK_SCALE
+        painter.drawEllipse(point, ring, ring)
 
     @staticmethod
     def _node_size_label(item: dict[str, Any]) -> str:
@@ -2831,7 +2913,12 @@ class RadarWidget(QtWidgets.QWidget):
                 fill = QtGui.QColor("#FF5348")
                 if far:
                     fill.setAlpha(110)
-                size = 3.6
+                spark = bool(enemy.get("spark"))
+                size = 3.6 * (_SPARK_SCALE if spark else 1.0)
+                if spark:
+                    self._draw_spark_halo(
+                        painter, point, 3.6, alpha=fill.alpha()
+                    )
                 diamond = QtGui.QPolygonF(
                     [
                         point + QtCore.QPointF(0, -size),
@@ -2846,13 +2933,120 @@ class RadarWidget(QtWidgets.QWidget):
                 self._draw_z_indicator(
                     painter, point, enemy_z, player_z, gap=4.8, color=fill
                 )
-                hit = self._enemy_hit_radius
+                hit = self._enemy_hit_radius * (_SPARK_SCALE if spark else 1.0)
+                payload = dict(enemy)
+                payload["role"] = "enemy"
                 self._enemy_hits.append(
                     (
                         QtCore.QRectF(
                             point.x() - hit, point.y() - hit, hit * 2.0, hit * 2.0
                         ),
-                        dict(enemy),
+                        payload,
+                    )
+                )
+
+        critters = self.state.get("critters", []) if isinstance(self.state, dict) else []
+        if self.show_critters:
+            for spawn in critter_spawns():
+                spawn_x = safe_float(spawn.get("x"), math.nan)
+                spawn_y = safe_float(spawn.get("y"), math.nan)
+                if not (math.isfinite(spawn_x) and math.isfinite(spawn_y)):
+                    continue
+                if not self._world_in_view(
+                    spawn,
+                    view_center,
+                    viewport,
+                    half_width_m=view_half_w,
+                    half_height_m=view_half_h,
+                ):
+                    continue
+                point = self._world_to_screen(
+                    spawn, center, pixels_per_metre, view_center
+                )
+                spawn_z = safe_float(spawn.get("z"), player_z)
+                far = (
+                    math.isfinite(spawn_z)
+                    and math.isfinite(player_z)
+                    and abs(spawn_z - player_z) > self.critter_z_fade
+                )
+                fill = QtGui.QColor(_CRITTER_SPAWN_FILL)
+                if far:
+                    fill.setAlpha(55)
+                self._draw_critter_diamond(painter, point, 3.2, fill, spark=False)
+                kinds = spawn.get("kinds") if isinstance(spawn.get("kinds"), list) else []
+                kind_label = ""
+                if kinds:
+                    kind_label = str(kinds[0] or "")
+                    if len(kinds) > 1:
+                        kind_label = f"{kind_label} +{len(kinds) - 1}"
+                payload = {
+                    "role": "critter_spawn",
+                    "kind": kind_label,
+                    "unit": spawn.get("unit"),
+                    "unit_group": spawn.get("unit_group"),
+                    "spark": bool(spawn.get("spark")),
+                    "x": spawn_x,
+                    "y": spawn_y,
+                    "z": spawn_z,
+                    "zone": spawn.get("zone"),
+                    "roaming_range": spawn.get("roaming_range"),
+                    "kinds": list(kinds),
+                }
+                hit = self._enemy_hit_radius * 0.9
+                self._enemy_hits.append(
+                    (
+                        QtCore.QRectF(
+                            point.x() - hit, point.y() - hit, hit * 2.0, hit * 2.0
+                        ),
+                        payload,
+                    )
+                )
+
+        if self.show_critters and isinstance(critters, list):
+            for critter in critters:
+                if not isinstance(critter, dict):
+                    continue
+                critter_x = safe_float(critter.get("x"), math.nan)
+                critter_y = safe_float(critter.get("y"), math.nan)
+                if not (math.isfinite(critter_x) and math.isfinite(critter_y)):
+                    continue
+                if not self._world_in_view(
+                    critter,
+                    view_center,
+                    viewport,
+                    half_width_m=view_half_w,
+                    half_height_m=view_half_h,
+                ):
+                    continue
+                point = self._world_to_screen(
+                    critter, center, pixels_per_metre, view_center
+                )
+                critter_z = safe_float(critter.get("z"), player_z)
+                far = (
+                    math.isfinite(critter_z)
+                    and math.isfinite(player_z)
+                    and abs(critter_z - player_z) > self.critter_z_fade
+                )
+                fill = QtGui.QColor(_CRITTER_FILL)
+                if far:
+                    fill.setAlpha(110)
+                spark = bool(critter.get("spark"))
+                size = 3.6
+                self._draw_critter_diamond(
+                    painter, point, size, fill, spark=spark
+                )
+                self._draw_z_indicator(
+                    painter, point, critter_z, player_z, gap=4.8, color=fill
+                )
+                hit = self._enemy_hit_radius * (_SPARK_SCALE if spark else 1.0)
+                payload = dict(critter)
+                payload["role"] = "critter"
+                self._enemy_hits.append(
+                    (
+                        QtCore.QRectF(
+                            point.x() - hit, point.y() - hit, hit * 2.0, hit * 2.0
+                        ),
+                        payload,
                     )
                 )
 

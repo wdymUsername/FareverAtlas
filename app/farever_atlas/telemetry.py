@@ -13,6 +13,7 @@ from PySide6 import QtCore
 from .config import ASSET_ROOT, PROJECT_ROOT, safe_float
 from .currency_caps import enrich_currencies
 from .pages.map.data import Snapshot
+from .unit_traits import is_critter_kind, is_spark_kind
 
 
 def _gatherable_size(name: str) -> str:
@@ -189,29 +190,57 @@ class DataHub(QtCore.QObject):
                     }
                 )
         enemies: list[dict[str, Any]] = []
+        critters: list[dict[str, Any]] = []
+        seen_critter_ids: set[str] = set()
+
+        def _append_actor(row: dict[str, Any], *, bucket: list[dict[str, Any]]) -> None:
+            position = row.get("position", {})
+            if not isinstance(position, dict):
+                position = {}
+            actor_id = row.get("id")
+            kind = row.get("kind")
+            if not isinstance(actor_id, str) or not actor_id:
+                return
+            if kind is not None and not isinstance(kind, str):
+                kind = None
+            kind_text = kind or ""
+            spark = bool(row.get("spark")) or is_spark_kind(kind_text)
+            bucket.append(
+                {
+                    "id": actor_id,
+                    "kind": kind_text,
+                    "spark": spark,
+                    "x": position.get("x"),
+                    "y": position.get("y"),
+                    "z": position.get("z"),
+                }
+            )
+
+        native_critters = payload.get("critters", [])
+        if isinstance(native_critters, list):
+            for row in native_critters:
+                if not isinstance(row, dict):
+                    continue
+                actor_id = row.get("id")
+                if isinstance(actor_id, str) and actor_id:
+                    seen_critter_ids.add(actor_id)
+                _append_actor(row, bucket=critters)
+
         native_enemies = payload.get("enemies", [])
         if isinstance(native_enemies, list):
             for enemy in native_enemies:
                 if not isinstance(enemy, dict):
                     continue
-                enemy_position = enemy.get("position", {})
-                if not isinstance(enemy_position, dict):
-                    enemy_position = {}
                 enemy_id = enemy.get("id")
                 kind = enemy.get("kind")
-                if not isinstance(enemy_id, str) or not enemy_id:
+                if isinstance(kind, str) and is_critter_kind(kind):
+                    if isinstance(enemy_id, str) and enemy_id in seen_critter_ids:
+                        continue
+                    _append_actor(enemy, bucket=critters)
+                    if isinstance(enemy_id, str) and enemy_id:
+                        seen_critter_ids.add(enemy_id)
                     continue
-                if kind is not None and not isinstance(kind, str):
-                    kind = None
-                enemies.append(
-                    {
-                        "id": enemy_id,
-                        "kind": kind or "",
-                        "x": enemy_position.get("x"),
-                        "y": enemy_position.get("y"),
-                        "z": enemy_position.get("z"),
-                    }
-                )
+                _append_actor(enemy, bucket=enemies)
         players: list[dict[str, Any]] = []
         native_players = payload.get("players", [])
         if isinstance(native_players, list):
@@ -326,6 +355,7 @@ class DataHub(QtCore.QObject):
             "sections": ["player"],
             "party": party,
             "enemies": enemies,
+            "critters": critters,
             "players": players,
             "interactibles": interactibles,
             "instance": instance,
