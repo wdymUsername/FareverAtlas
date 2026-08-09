@@ -15,10 +15,17 @@ from ...config import (
     safe_int,
 )
 from ...critter_spawns import critter_spawns
+from ...patrol_paths import patrol_paths_by_kind
 from .data import MapTexture, Snapshot
 from .fog import FogOfWar
 from .fow_layers import canonical_fow_layer
 from .gather_nav import _element_completed
+
+# Live enemy sweep radius / z; critters are also gated to this for path draw.
+_PATROL_LIVE_RANGE_M = 500.0
+_PATROL_LIVE_Z_M = 120.0
+# Max distance from a live unit to a path sample (or spawner) to claim it.
+_PATROL_LEASH_M = 65.0
 
 # Built once: rebuilding these per marker cost ~7.6k QColor allocations a frame.
 _POI_COLORS: dict[str, QtGui.QColor] = {
@@ -127,6 +134,7 @@ class RadarWidget(QtWidgets.QWidget):
         self.dim_invalid_party_members = True
         self.show_enemies = True
         self.show_critters = True
+        self.show_patrol_paths = True
         self.show_players = True
         self.show_player_names = False
         self.show_route_line = True
@@ -1221,6 +1229,176 @@ class RadarWidget(QtWidgets.QWidget):
         if rank == "elite":
             return QtGui.QColor(_ELITE_FILL), _ELITE_SCALE
         return QtGui.QColor(_ENEMY_FILL), 1.0
+
+    @staticmethod
+    def _patrol_path_pen_color(rank: str, *, spark: bool = False) -> QtGui.QColor:
+        if rank in ("boss", "miniboss"):
+            color = QtGui.QColor(_BOSS_FILL)
+        elif rank == "unique":
+            color = QtGui.QColor(_UNIQUE_FILL)
+        elif rank == "elite":
+            color = QtGui.QColor(_ELITE_FILL)
+        elif rank == "spark" or spark:
+            color = QtGui.QColor(_SPARK_RING)
+        else:
+            color = QtGui.QColor(_ENEMY_FILL)
+        color.setAlpha(150)
+        return color
+
+    def _active_patrol_paths(
+        self,
+        *,
+        player_x: float,
+        player_y: float,
+        player_z: float,
+    ) -> list[dict[str, Any]]:
+        """Return authored paths claimed by a live unit in the enemy sweep."""
+        if not self.show_patrol_paths:
+            return []
+        if not (math.isfinite(player_x) and math.isfinite(player_y)):
+            return []
+
+        live_units: list[dict[str, Any]] = []
+        if self.show_enemies:
+            enemies = self.state.get("enemies", []) if isinstance(self.state, dict) else []
+            if isinstance(enemies, list):
+                live_units.extend(
+                    unit for unit in enemies if isinstance(unit, dict)
+                )
+        if self.show_critters:
+            critters = (
+                self.state.get("critters", []) if isinstance(self.state, dict) else []
+            )
+            if isinstance(critters, list):
+                live_units.extend(
+                    unit for unit in critters if isinstance(unit, dict)
+                )
+        if not live_units:
+            return []
+
+        by_kind = patrol_paths_by_kind()
+        if not by_kind:
+            return []
+
+        range_sq = _PATROL_LIVE_RANGE_M * _PATROL_LIVE_RANGE_M
+        leash_sq = _PATROL_LEASH_M * _PATROL_LEASH_M
+        claimed: dict[str, tuple[float, dict[str, Any]]] = {}
+
+        for unit in live_units:
+            kind = str(unit.get("kind") or "").strip()
+            if not kind:
+                continue
+            candidates = by_kind.get(kind)
+            if not candidates:
+                continue
+            ux = safe_float(unit.get("x"), math.nan)
+            uy = safe_float(unit.get("y"), math.nan)
+            uz = safe_float(unit.get("z"), player_z)
+            if not (math.isfinite(ux) and math.isfinite(uy)):
+                continue
+            dx = ux - player_x
+            dy = uy - player_y
+            if dx * dx + dy * dy > range_sq:
+                continue
+            if math.isfinite(uz) and math.isfinite(player_z):
+                if abs(uz - player_z) > _PATROL_LIVE_Z_M:
+                    continue
+
+            best_path: dict[str, Any] | None = None
+            best_dist_sq = leash_sq
+            for path in candidates:
+                path_id = str(path.get("id") or "")
+                if not path_id:
+                    continue
+                dist_sq = self._distance_sq_to_patrol_path(ux, uy, path)
+                if dist_sq > best_dist_sq:
+                    continue
+                best_dist_sq = dist_sq
+                best_path = path
+            if best_path is None:
+                continue
+            path_id = str(best_path.get("id") or "")
+            previous = claimed.get(path_id)
+            if previous is None or best_dist_sq < previous[0]:
+                claimed[path_id] = (best_dist_sq, best_path)
+
+        return [item[1] for item in claimed.values()]
+
+    @staticmethod
+    def _distance_sq_to_patrol_path(
+        x: float, y: float, path: dict[str, Any]
+    ) -> float:
+        best = math.inf
+        sx = safe_float(path.get("x"), math.nan)
+        sy = safe_float(path.get("y"), math.nan)
+        if math.isfinite(sx) and math.isfinite(sy):
+            dx = x - sx
+            dy = y - sy
+            best = dx * dx + dy * dy
+        points = path.get("points")
+        if not isinstance(points, list):
+            return best
+        for point in points:
+            if not isinstance(point, (list, tuple)) or len(point) < 2:
+                continue
+            try:
+                px = float(point[0])
+                py = float(point[1])
+            except (TypeError, ValueError):
+                continue
+            if not (math.isfinite(px) and math.isfinite(py)):
+                continue
+            dx = x - px
+            dy = y - py
+            dist_sq = dx * dx + dy * dy
+            if dist_sq < best:
+                best = dist_sq
+        return best
+
+    def _draw_patrol_paths(
+        self,
+        painter: QtGui.QPainter,
+        *,
+        center: QtCore.QPointF,
+        pixels_per_metre: float,
+        view_center: dict[str, float],
+        player_x: float,
+        player_y: float,
+        player_z: float,
+    ) -> None:
+        active = self._active_patrol_paths(
+            player_x=player_x, player_y=player_y, player_z=player_z
+        )
+        if not active:
+            return
+        for path in active:
+            points = path.get("points")
+            if not isinstance(points, list) or len(points) < 2:
+                continue
+            poly = QtGui.QPolygonF()
+            for point in points:
+                if not isinstance(point, (list, tuple)) or len(point) < 2:
+                    continue
+                try:
+                    wx = float(point[0])
+                    wy = float(point[1])
+                except (TypeError, ValueError):
+                    continue
+                if not (math.isfinite(wx) and math.isfinite(wy)):
+                    continue
+                screen = self._world_to_screen(
+                    {"x": wx, "y": wy}, center, pixels_per_metre, view_center
+                )
+                poly.append(screen)
+            if poly.size() < 2:
+                continue
+            rank = str(path.get("rank") or self._enemy_rank(path) or "")
+            color = self._patrol_path_pen_color(
+                rank, spark=bool(path.get("spark"))
+            )
+            painter.setPen(QtGui.QPen(color, 1.6, QtCore.Qt.PenStyle.DashLine))
+            painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+            painter.drawPolyline(poly)
 
     @staticmethod
     def _enemy_display_name(enemy: dict[str, Any]) -> str:
@@ -2946,6 +3124,15 @@ class RadarWidget(QtWidgets.QWidget):
                     painter, point, waypoint, is_active
                 )
 
+        self._draw_patrol_paths(
+            painter,
+            center=center,
+            pixels_per_metre=pixels_per_metre,
+            view_center=view_center,
+            player_x=player_x,
+            player_y=player_y,
+            player_z=player_z,
+        )
 
         enemies = self.state.get("enemies", []) if isinstance(self.state, dict) else []
         if self.show_enemies and isinstance(enemies, list):

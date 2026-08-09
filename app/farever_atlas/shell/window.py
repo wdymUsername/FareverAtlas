@@ -207,6 +207,16 @@ class AtlasWindow(
             "Sparkling critters get a gold halo"
         )
 
+        self.patrol_paths_filter = FilterChipButton(
+            "Patrols", color="#B45CFF", marker="diamond"
+        )
+        self.patrol_paths_filter.setChecked(
+            self._setting_bool("map/show_patrol_paths", True)
+        )
+        self.patrol_paths_filter.setToolTip(
+            "Show authored patrol paths for nearby unique / elite / spark units\n"
+            "Only drawn while a matching live enemy or critter is in range"
+        )
 
         self.players_filter = FilterChipButton(
             "Players", color="#5AAFE0", marker="dot"
@@ -573,6 +583,7 @@ class AtlasWindow(
 
         self.enemies_filter.toggled.connect(self._controls_changed)
         self.critters_filter.toggled.connect(self._controls_changed)
+        self.patrol_paths_filter.toggled.connect(self._controls_changed)
         self.players_filter.toggled.connect(self._controls_changed)
         for button in self.poi_filters.values():
             button.toggled.connect(self._poi_filter_changed)
@@ -1995,6 +2006,11 @@ class AtlasWindow(
             self._setting_bool("map/show_critters", True)
         )
         self.critters_filter.blockSignals(False)
+        self.patrol_paths_filter.blockSignals(True)
+        self.patrol_paths_filter.setChecked(
+            self._setting_bool("map/show_patrol_paths", True)
+        )
+        self.patrol_paths_filter.blockSignals(False)
         self.players_filter.blockSignals(True)
         self.players_filter.setChecked(
             self._setting_bool("map/show_players", True)
@@ -2139,6 +2155,7 @@ class AtlasWindow(
         )
         self.radar.show_enemies = self.enemies_filter.isChecked()
         self.radar.show_critters = self.critters_filter.isChecked()
+        self.radar.show_patrol_paths = self.patrol_paths_filter.isChecked()
         self.radar.show_players = self.players_filter.isChecked()
         self.radar.show_player_names = self._setting_bool(
             "map/show_player_names", False
@@ -2174,6 +2191,9 @@ class AtlasWindow(
         self._settings.setValue("map/show_collectibles", any(loot_visibility.values()))
         self._settings.setValue("map/show_enemies", self.radar.show_enemies)
         self._settings.setValue("map/show_critters", self.radar.show_critters)
+        self._settings.setValue(
+            "map/show_patrol_paths", self.radar.show_patrol_paths
+        )
         self._settings.setValue("map/show_players", self.radar.show_players)
         self._settings.setValue("map/fog_enabled", self.radar.fog.enabled)
         self._settings.setValue("map/fog_show_outlines", False)

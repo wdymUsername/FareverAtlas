@@ -5,6 +5,7 @@ Supported files:
 - map/w1_siagarta.json
 - pois_W1_Siagarta.json
 - critter_spawns_W1_Siagarta.json (wild companion spawn points from map prefabs)
+- patrol_paths_W1_Siagarta.json (authored patrol splines for ranked/spark spawners)
 - activities.png
 - rift_icon_128.png
 - currency_gold.png
@@ -37,6 +38,11 @@ Wild critter spawn points (authored map spawners, not live entities) are in
 critter_spawns_W1_Siagarta.json. Rebuild from extracted res.map + data.cdb with:
 
   python tools/extract_critter_spawns.py
+
+Ranked/spark patrol polylines (spawner path refs resolved to world spline
+samples) are in patrol_paths_W1_Siagarta.json. Rebuild with:
+
+  python tools/extract_patrol_paths.py
 
 Unit trait kind lists (companions, Spark rares, Elite / Boss / Miniboss /
 Unique specials) are in unit_traits.json. Rebuild from extracted data.cdb with:

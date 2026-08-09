@@ -105,7 +105,12 @@ class FilterSidebarMixin:
             return page
 
         actors_page = _chip_grid_page(
-            [self.enemies_filter, self.critters_filter, self.players_filter]
+            [
+                self.enemies_filter,
+                self.critters_filter,
+                self.patrol_paths_filter,
+                self.players_filter,
+            ]
         )
         self.sidebar_filter_stack.addWidget(actors_page)
 
