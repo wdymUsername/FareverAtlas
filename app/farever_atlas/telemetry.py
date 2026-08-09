@@ -73,6 +73,19 @@ def _sanitize_player_display_name(name: object) -> str | None:
 class DataHub(QtCore.QObject):
     updated = QtCore.Signal(object)
 
+    # The bridge writes on its own schedule, so polling at the same rate
+    # aliases against it: some ticks see nothing and the next sees a sample
+    # that is already stale, which the radar reads as an uneven sample rate and
+    # renders as stuttering movement. Sampling several times per write costs a
+    # stat() and pins detection to within a tick of the write landing.
+    POLL_INTERVAL_MS = 33
+    # Emitting on every poll would put the whole snapshot chain - radar
+    # signatures, gather nav, the party strip - on a 30 Hz treadmill, when
+    # nothing downstream changes until the bridge writes. Freshness is the
+    # exception: staleness, the age readout and the waiting countdown all move
+    # on wall-clock time, so emit at least this often whatever the bridge does.
+    FRESHNESS_INTERVAL_MS = 100
+
     def __init__(self) -> None:
         super().__init__()
         self.live_file = PROJECT_ROOT / "native_bridge/farever-telemetry.json"
@@ -84,8 +97,12 @@ class DataHub(QtCore.QObject):
         self._last_good_monotonic: float | None = None
         self._active_poi_file = self.asset_poi_file
         self.online = True
+        self._last_emit_monotonic = 0.0
         self.timer = QtCore.QTimer(self)
-        self.timer.setInterval(100)
+        # Coarse timers may be shifted by 5% and coalesced with other timers,
+        # which is exactly the jitter this poll rate exists to avoid.
+        self.timer.setTimerType(QtCore.Qt.TimerType.PreciseTimer)
+        self.timer.setInterval(self.POLL_INTERVAL_MS)
         self.timer.timeout.connect(self.poll)
 
     def start(self) -> None:
@@ -366,6 +383,9 @@ class DataHub(QtCore.QObject):
             "schema": 1,
             "bridge_version": payload.get("bridge_version"),
             "source_time": payload.get("timestamp_ms"),
+            # The bridge numbers its samples, so a jump greater than one means
+            # writes landed between polls and only the newest survived.
+            "source_sequence": payload.get("sequence"),
             "locked": payload.get("state") == "connected",
             "sections": ["player"],
             "party": party,
@@ -412,6 +432,7 @@ class DataHub(QtCore.QObject):
         message = "Waiting for bridge output"
         connected = False
         age: float | None = None
+        changed = False
 
         try:
             stat = self.live_file.stat()
@@ -422,6 +443,7 @@ class DataHub(QtCore.QObject):
                 self.state = self._normalize_native(payload)
                 self._live_mtime_ns = stat.st_mtime_ns
                 self._last_good_monotonic = time.monotonic()
+                changed = True
             age = max(0.0, time.time() - stat.st_mtime)
             native_connected = (
                 self.state.get("native_bridge", {}).get("state") == "connected"
@@ -456,12 +478,19 @@ class DataHub(QtCore.QObject):
                             item for item in raw if isinstance(item, dict)
                         ]
                     self._poi_mtime_ns = stat.st_mtime_ns
+                    changed = True
         except FileNotFoundError:
             pass
         except (OSError, ValueError, json.JSONDecodeError):
             # Keep the last valid POI snapshot; live telemetry is more important.
             pass
 
+        now = time.monotonic()
+        if not changed and (now - self._last_emit_monotonic) < (
+            self.FRESHNESS_INTERVAL_MS / 1000.0
+        ):
+            return
+        self._last_emit_monotonic = now
         self.updated.emit(
             Snapshot(
                 self.state,

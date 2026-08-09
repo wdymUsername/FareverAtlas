@@ -59,6 +59,9 @@ _POI_COLORS: dict[str, QtGui.QColor] = {
     "obelisk": QtGui.QColor("#9b6fd4"),
 }
 _POI_COLOR_FALLBACK = QtGui.QColor("#9ba7b4")
+_Z_CHEVRON_FILL = QtGui.QColor("#e8eef5")
+_Z_CHEVRON_OUTLINE = QtGui.QColor("#0b1117")
+_Z_CHEVRON_SIZE = 3.6
 _CRITTER_FILL = QtGui.QColor("#6BE06B")
 _CRITTER_SPAWN_FILL = QtGui.QColor(107, 224, 107, 95)
 _CRITTER_EDGE = QtGui.QColor("#0d1a0d")
@@ -105,6 +108,57 @@ class RadarWidget(QtWidgets.QWidget):
     # Zoom levels are defined against this reference canvas height. Window
     # resizing changes the visible world extent, not the world-to-pixel scale.
     ZOOM_REFERENCE_HEIGHT_PX = 600.0
+    # How finely player motion is sampled, not how fast it interpolates - the
+    # interpolation below is frame-rate independent. A tick this fine costs a
+    # full repaint only where the stride below is 1, which is the zoomed-in end
+    # where frames are cheapest; wide views decimate instead of running the
+    # painter at 60 Hz.
+    SMOOTHING_INTERVAL_MS = 16
+    # Assumed telemetry spacing until two samples have been timed. Matches the
+    # FAREVER_TELEMETRY_INTERVAL_MS default; the measured rate takes over once
+    # a second sample lands, so a reconfigured feed self-corrects.
+    DEFAULT_SAMPLE_INTERVAL_NS = 100_000_000
+    # Leaves room for a slower configured feed while still rejecting the long
+    # gaps left by a paused game or a zone reload, which would otherwise be
+    # learned as the sample rate and leave the marker crawling afterwards.
+    MAX_SAMPLE_INTERVAL_NS = 500_000_000
+    # A sample describes where the player was when it was taken, so drawing it
+    # directly is always a step behind. Projecting the speed it implies forward
+    # over its own age puts the marker where the player is now; interpolating
+    # between the last two samples instead would be smooth but permanently late.
+    SAMPLE_EXTRAPOLATION_GAIN = 1.0
+    # Never predict further past a sample than this. If the feed hiccups the
+    # marker coasts briefly instead of sailing off across the zone.
+    MAX_EXTRAPOLATION_S = 0.18
+    # Filters jitter out of the predicted pose. Short, because the target it
+    # chases is already continuous - it is not fighting a staircase.
+    POSE_SMOOTHING_TAU = 0.035
+    # How far the scene should travel between repaints. Scale is
+    # 600 / (2 * radius), so walking moves it 0.29 px per tick zoomed in but
+    # only 0.01 px at a full-map view, where nearly every repaint would redraw
+    # an identical image. Repaints are therefore decimated onto a stride of
+    # whole ticks: 1 at the zoomed-in end, up to the gap budget below at the
+    # wide end.
+    #
+    # The stride is derived from zoom alone, so the cadence only ever changes
+    # when the zoom does. Repainting once accumulated motion crosses a
+    # threshold would instead tie the interval to instantaneous speed - slow
+    # walking stretched gaps past 190 ms while sprinting kept them at 33 ms -
+    # and an uneven cadence reads as judder however high the average rate is.
+    REPAINT_MOTION_TARGET_PX = 0.22
+    # The pace the stride is sized against; a constant for the same reason.
+    TYPICAL_SPEED_MPS = 6.0
+    # Decimation may never hold the picture longer than this.
+    MAX_REPAINT_GAP_MS = 100
+    # In north-up mode a heading change only spins the player arrow, so it is
+    # this far from the centre that matters, not the width of the map.
+    ARROW_RADIUS_PX = 14.0
+    # The facing cone is the only thing camera heading moves.
+    CAMERA_CONE_RADIUS_PX = 60.0
+    # Beyond this view radius the whole zone is on screen and a floor chevron on
+    # every node is unreadable clutter, so node markers drop theirs. Live actors
+    # keep theirs at every zoom - there are few of them and they still matter.
+    NODE_Z_INDICATOR_MAX_RADIUS_M = 650.0
     ICON_ATLAS_CELL_SIZE = 128
     ICON_ATLAS_COLUMNS = 8
     WAYPOINT_ICON_SIZE = 24
@@ -204,8 +258,15 @@ class RadarWidget(QtWidgets.QWidget):
         self._marker_sprite_cache: dict[
             tuple[str, str, str, bool, float], tuple[QtGui.QPixmap, float, float]
         ] = {}
+        self._z_chevron_cache: dict[
+            tuple[bool, int, float, float], tuple[QtGui.QPixmap, float, float]
+        ] = {}
+        # Sampled once per frame: every sprite lookup needs it, and querying the
+        # paint device per marker showed up in the paint profile.
+        self._paint_dpr = float(self.devicePixelRatioF() or 1.0)
         self._prepared_source: list[Any] | None = None
         self._prepared_filters: tuple[Any, ...] | None = None
+        self._sprite_filters: tuple[Any, ...] | None = None
         self._prepared_pois: list[tuple[Any, ...]] = []
         # World positions of ChestOrb / WorldCamp activities — used to hide live
         # Orb/Camp chests (Element.kind is often just "Chest") when Activities is off.
@@ -275,9 +336,31 @@ class RadarWidget(QtWidgets.QWidget):
         self._smoothing_clock = QtCore.QElapsedTimer()
         self._smoothing_clock.start()
         self._last_smoothing_ns = self._smoothing_clock.nsecsElapsed()
+        # When the newest sample landed and how far apart samples have been
+        # running, which together set the pace the display walks toward it.
+        self._last_raw_sample: tuple[float | None, ...] | None = None
+        self._raw_sample_ns: int | None = None
+        self._raw_sample_interval_ns = float(self.DEFAULT_SAMPLE_INTERVAL_NS)
+        self._sample_pose: tuple[float, float, float, float] | None = None
+        self._sample_velocity = (0.0, 0.0, 0.0, 0.0)
+        # The bridge stamps and numbers each sample. Its stamps time the samples
+        # against each other; the local arrival time says how old the newest one
+        # is. Mixing the two clocks would be wrong, so both are kept.
+        self._sample_source_ms: float | None = None
+        self._sample_identity: object | None = None
+        self._pending_arrival_ns: int | None = None
+        self._pending_source_ms: float | None = None
+        self._detection_interval_ns = float(self.DEFAULT_SAMPLE_INTERVAL_NS)
+        # Display pose as of the last repaint, so sub-pixel movement can be
+        # accumulated instead of redrawn.
+        self._painted_pose: tuple[float, float, float, float] | None = None
+        self._ticks_since_paint = 0
+        # Live markers moved but the repaint is left to the next stride boundary
+        # so telemetry ticks cannot land between them and break the cadence.
+        self._content_dirty = False
         self._smoothing_timer = QtCore.QTimer(self)
         self._smoothing_timer.setTimerType(QtCore.Qt.TimerType.PreciseTimer)
-        self._smoothing_timer.setInterval(16)
+        self._smoothing_timer.setInterval(self.SMOOTHING_INTERVAL_MS)
         self._smoothing_timer.timeout.connect(self._advance_player_smoothing)
         self._smoothing_timer.start()
 
@@ -288,19 +371,27 @@ class RadarWidget(QtWidgets.QWidget):
         pois_changed = snapshot.pois is not self.pois
         self.state = snapshot.state
         self.pois = snapshot.pois
+        self._note_sample_arrival()
         self._sync_follow_center()
         raw = self._raw_player()
         if not self._display_pose_valid() and self._raw_pose_valid(raw):
             self._snap_display_player(raw)
+        # These signatures decide whether a telemetry tick repaints. Comparing
+        # raw metres repaints for motion the screen cannot resolve - at a
+        # full-map zoom an enemy walking a whole metre shifts a sixth of a pixel
+        # - so positions collapse to the on-screen step they land in. Hoisted
+        # because this runs several times for every live marker.
+        position_step = self._pixels_per_metre() / self.REPAINT_MOTION_TARGET_PX
+        heading_step = self.ARROW_RADIUS_PX / self.REPAINT_MOTION_TARGET_PX
         party = self.state.get("party", []) if isinstance(self.state, dict) else []
         enemies = self.state.get("enemies", []) if isinstance(self.state, dict) else []
         target = self.state.get("target", {}) if isinstance(self.state, dict) else {}
         party_signature = tuple(
             (
                 str(member.get("uid") or member.get("name") or ""),
-                safe_float(member.get("x"), 0.0),
-                safe_float(member.get("y"), 0.0),
-                safe_float(member.get("heading"), 0.0),
+                int(safe_float(member.get("x"), 0.0) * position_step),
+                int(safe_float(member.get("y"), 0.0) * position_step),
+                int(safe_float(member.get("heading"), 0.0) * heading_step),
                 round(safe_float(member.get("hp"), 0.0)),
                 round(safe_float(member.get("max_hp"), 0.0)),
                 bool(member.get("hero_valid", True)),
@@ -317,9 +408,9 @@ class RadarWidget(QtWidgets.QWidget):
                 bool(enemy.get("boss")),
                 bool(enemy.get("miniboss")),
                 bool(enemy.get("unique")),
-                safe_float(enemy.get("x"), 0.0),
-                safe_float(enemy.get("y"), 0.0),
-                safe_float(enemy.get("z"), 0.0),
+                int(safe_float(enemy.get("x"), 0.0) * position_step),
+                int(safe_float(enemy.get("y"), 0.0) * position_step),
+                round(safe_float(enemy.get("z"), 0.0), 1),
             )
             for enemy in enemies
             if isinstance(enemy, dict)
@@ -334,9 +425,9 @@ class RadarWidget(QtWidgets.QWidget):
                 bool(critter.get("boss")),
                 bool(critter.get("miniboss")),
                 bool(critter.get("unique")),
-                safe_float(critter.get("x"), 0.0),
-                safe_float(critter.get("y"), 0.0),
-                safe_float(critter.get("z"), 0.0),
+                int(safe_float(critter.get("x"), 0.0) * position_step),
+                int(safe_float(critter.get("y"), 0.0) * position_step),
+                round(safe_float(critter.get("z"), 0.0), 1),
             )
             for critter in critters
             if isinstance(critter, dict)
@@ -346,10 +437,10 @@ class RadarWidget(QtWidgets.QWidget):
             (
                 str(other.get("id") or ""),
                 str(other.get("uid") or other.get("name") or ""),
-                safe_float(other.get("x"), 0.0),
-                safe_float(other.get("y"), 0.0),
-                safe_float(other.get("heading"), 0.0),
-                safe_float(other.get("z"), 0.0),
+                int(safe_float(other.get("x"), 0.0) * position_step),
+                int(safe_float(other.get("y"), 0.0) * position_step),
+                int(safe_float(other.get("heading"), 0.0) * heading_step),
+                round(safe_float(other.get("z"), 0.0), 1),
             )
             for other in nearby_players
             if isinstance(other, dict)
@@ -398,7 +489,7 @@ class RadarWidget(QtWidgets.QWidget):
         )
         if pois_changed or live_signature != self._live_marker_signature:
             self._live_marker_signature = live_signature
-            self.update()
+            self._content_dirty = True
 
     def set_offline_mode(
         self, offline: bool, cached_center: tuple[float, float] | None = None
@@ -483,6 +574,201 @@ class RadarWidget(QtWidgets.QWidget):
             self.radius_m = target
         self.update()
 
+    @staticmethod
+    def _sample_key(*values: float) -> tuple[float | None, ...]:
+        # NaN never compares equal to itself, so an absent field would make every
+        # frame look like a fresh sample. Collapse those to None instead.
+        return tuple(v if math.isfinite(v) else None for v in values)
+
+    def _angle_rate(self, current: float, previous: float, gap: float) -> float:
+        if not (math.isfinite(current) and math.isfinite(previous)):
+            return 0.0
+        return self._shortest_angle_delta(current, previous) / gap
+
+    def _note_sample_arrival(self) -> None:
+        """Stamp a bridge sample the moment it lands.
+
+        Snapshots arrive between smoothing ticks, so leaving the next tick to
+        notice would round arrival up by whatever was left of that tick. A
+        bridge too old to number its samples leaves this unset, and sample
+        timing falls back to the tick that spots the pose change.
+        """
+        state = self.state if isinstance(self.state, dict) else {}
+        sequence = state.get("source_sequence")
+        source_ms = safe_float(state.get("source_time"), math.nan)
+        if sequence is not None:
+            identity: object = sequence
+        elif math.isfinite(source_ms):
+            identity = source_ms
+        else:
+            return
+        if identity == self._sample_identity:
+            return
+        self._sample_identity = identity
+        self._pending_arrival_ns = self._smoothing_clock.nsecsElapsed()
+        self._pending_source_ms = source_ms if math.isfinite(source_ms) else None
+
+    def _note_raw_sample(
+        self,
+        sample: tuple[float | None, ...],
+        now_ns: int,
+        pose: tuple[float, float, float, float],
+    ) -> None:
+        """Record a freshly arrived telemetry pose and the speed it implies."""
+        if sample == self._last_raw_sample:
+            return
+        previous_ns = self._raw_sample_ns
+        previous_pose = self._sample_pose
+        previous_source_ms = self._sample_source_ms
+        # Timestamped when the snapshot landed rather than when this tick
+        # noticed it, which would round arrival up to the tick.
+        arrival_ns = now_ns if self._pending_arrival_ns is None else self._pending_arrival_ns
+        source_ms = self._pending_source_ms
+        self._pending_arrival_ns = None
+        self._last_raw_sample = sample
+        self._raw_sample_ns = arrival_ns
+        self._sample_pose = pose
+        self._sample_source_ms = source_ms
+        if previous_ns is None or previous_pose is None:
+            return
+
+        detected_ns = arrival_ns - previous_ns
+        if 0 < detected_ns <= self.MAX_SAMPLE_INTERVAL_NS:
+            self._detection_interval_ns = (
+                self._detection_interval_ns * 0.7 + detected_ns * 0.3
+            )
+
+        # How far apart two samples really were is a difference of the bridge's
+        # own clock. Timing them locally instead folds in poll and tick jitter,
+        # and dividing a real distance by a jittery time is what makes the
+        # marker surge and stall. Only the difference is used, never the
+        # absolute value, so the two clocks never have to agree.
+        gap_ns = detected_ns
+        if source_ms is not None and previous_source_ms is not None:
+            stamped_ns = int((source_ms - previous_source_ms) * 1_000_000.0)
+            if 0 < stamped_ns <= self.MAX_SAMPLE_INTERVAL_NS:
+                gap_ns = stamped_ns
+        if not 0 < gap_ns <= self.MAX_SAMPLE_INTERVAL_NS:
+            # A pause, a reload, a fast travel, or a bridge restart that reset
+            # its clock. The implied speed would be nonsense, so stop predicting
+            # until normal samples resume.
+            self._sample_velocity = (0.0, 0.0, 0.0, 0.0)
+            return
+        self._raw_sample_interval_ns = self._raw_sample_interval_ns * 0.7 + gap_ns * 0.3
+
+        gap = gap_ns / 1_000_000_000.0
+        measured = (
+            (pose[0] - previous_pose[0]) / gap,
+            (pose[1] - previous_pose[1]) / gap,
+            self._angle_rate(pose[2], previous_pose[2], gap),
+            self._angle_rate(pose[3], previous_pose[3], gap),
+        )
+        previous_velocity = self._sample_velocity
+        # Averaged so a single noisy sample cannot throw the prediction, but
+        # weighted towards the newest one so stopping is picked up quickly.
+        self._sample_velocity = tuple(
+            old * 0.4 + new * 0.6 for old, new in zip(previous_velocity, measured)
+        )
+
+    def _predicted_pose(
+        self, now_ns: int, pose: tuple[float, float, float, float]
+    ) -> tuple[float, float, float, float]:
+        """The newest sample carried forward over the time since it arrived."""
+        if self._raw_sample_ns is None:
+            return pose
+        age = (now_ns - self._raw_sample_ns) / 1_000_000_000.0
+        lead = min(max(age, 0.0), self.MAX_EXTRAPOLATION_S)
+        lead *= self.SAMPLE_EXTRAPOLATION_GAIN
+
+        # Telemetry only changes while the player moves, so a standing player
+        # produces no new samples and the last measured speed would otherwise
+        # keep the marker parked ahead of them forever. Once a sample is overdue,
+        # fade the prediction out so the marker settles onto the real position.
+        # Overdue is judged against how often samples actually reach us, not how
+        # far apart the bridge stamped them - age is measured on the same local
+        # clock as arrivals.
+        interval = self._detection_interval_ns / 1_000_000_000.0
+        grace = interval * 1.25
+        if age > grace and interval > 0.0:
+            lead *= max(0.0, 1.0 - (age - grace) / interval)
+        if lead <= 0.0:
+            return pose
+        vx, vy, vheading, vcamera = self._sample_velocity
+        return (
+            pose[0] + vx * lead,
+            pose[1] + vy * lead,
+            pose[2] + vheading * lead,
+            pose[3] + vcamera * lead,
+        )
+
+    def _unpainted_motion_px(self) -> float:
+        """How far the view has drifted on screen since the last repaint."""
+        painted = self._painted_pose
+        if painted is None:
+            return math.inf
+        display = self._display_player
+        pixels_per_metre = self._pixels_per_metre()
+        moved = math.hypot(
+            (display.get("x", 0.0) - painted[0]) * pixels_per_metre,
+            (display.get("y", 0.0) - painted[1]) * pixels_per_metre,
+        )
+
+        heading = display.get("heading", math.nan)
+        if math.isfinite(heading) and math.isfinite(painted[2]):
+            if self.heading_up:
+                # The map counter-rotates, so the corners sweep furthest.
+                rect = self.rect()
+                radius = math.hypot(rect.width(), rect.height()) * 0.5
+            else:
+                radius = self.ARROW_RADIUS_PX
+            moved += abs(self._shortest_angle_delta(heading, painted[2])) * radius
+
+        camera = display.get("camera_heading", math.nan)
+        if math.isfinite(camera) and math.isfinite(painted[3]):
+            moved += (
+                abs(self._shortest_angle_delta(camera, painted[3]))
+                * self.CAMERA_CONE_RADIUS_PX
+            )
+        return moved
+
+    def _mark_pose_painted(self) -> None:
+        display = self._display_player
+        self._painted_pose = (
+            display.get("x", 0.0),
+            display.get("y", 0.0),
+            display.get("heading", math.nan),
+            display.get("camera_heading", math.nan),
+        )
+
+    def _commit_paint(self) -> None:
+        self._mark_pose_painted()
+        self._ticks_since_paint = 0
+        self._content_dirty = False
+        self.update()
+
+    def _repaint_stride_for_view(self) -> int:
+        """Ticks to skip between repaints at the current zoom.
+
+        Depends only on scale, so the cadence holds steady while the player
+        speeds up, slows down or turns.
+        """
+        if self.heading_up:
+            # The map counter-rotates with the player, so a turn moves every
+            # pixel on screen. Nothing here is safe to skip.
+            return 1
+        max_stride = max(
+            1, int(self.MAX_REPAINT_GAP_MS / self.SMOOTHING_INTERVAL_MS)
+        )
+        per_tick = (
+            self.TYPICAL_SPEED_MPS
+            * (self.SMOOTHING_INTERVAL_MS / 1000.0)
+            * self._pixels_per_metre()
+        )
+        if per_tick <= 1e-6:
+            return max_stride
+        stride = int(round(self.REPAINT_MOTION_TARGET_PX / per_tick))
+        return max(1, min(max_stride, stride))
+
     def _advance_player_smoothing(self) -> None:
         now_ns = self._smoothing_clock.nsecsElapsed()
         dt = max(0.001, min(0.050, (now_ns - self._last_smoothing_ns) / 1_000_000_000.0))
@@ -496,21 +782,34 @@ class RadarWidget(QtWidgets.QWidget):
             zoom_alpha = 1.0 - math.exp(-dt / 0.115)
             self.radius_m += radius_delta * zoom_alpha
             zoom_changed = True
-        else:
+        elif self.radius_m != self.target_radius_m:
+            # Final snap onto the target. Sub-pixel, but painting it keeps the
+            # displayed scale honest rather than a hair off forever.
             self.radius_m = self.target_radius_m
+            zoom_changed = True
 
+        self._ticks_since_paint += 1
         raw = self._raw_player()
         if not self._raw_pose_valid(raw):
-            if zoom_changed:
-                self.update()
+            # No usable pose, but live markers may still have moved.
+            if zoom_changed or self._content_dirty:
+                self._commit_paint()
             return
         if not self._display_pose_valid():
             self._snap_display_player(raw)
-            self.update()
+            self._commit_paint()
             return
 
         target_x = safe_float(raw.get("x"), math.nan)
         target_y = safe_float(raw.get("y"), math.nan)
+        target_heading = safe_float(raw.get("heading"), math.nan)
+        target_camera = safe_float(raw.get("camera_heading"), math.nan)
+        pose = (target_x, target_y, target_heading, target_camera)
+        self._note_raw_sample(self._sample_key(*pose), now_ns, pose)
+        target_x, target_y, target_heading, target_camera = self._predicted_pose(
+            now_ns, pose
+        )
+        pose_alpha = 1.0 - math.exp(-dt / self.POSE_SMOOTHING_TAU)
         current_x = self._display_player["x"]
         current_y = self._display_player["y"]
         distance = math.hypot(target_x - current_x, target_y - current_y)
@@ -524,44 +823,48 @@ class RadarWidget(QtWidgets.QWidget):
             self._display_player["y"] = target_y
             pose_changed = True
         elif distance > 0.002:
-            position_alpha = 1.0 - math.exp(-dt / 0.095)
-            self._display_player["x"] = current_x + (target_x - current_x) * position_alpha
-            self._display_player["y"] = current_y + (target_y - current_y) * position_alpha
+            self._display_player["x"] = current_x + (target_x - current_x) * pose_alpha
+            self._display_player["y"] = current_y + (target_y - current_y) * pose_alpha
             pose_changed = True
         else:
             self._display_player["x"] = target_x
             self._display_player["y"] = target_y
 
-        target_heading = safe_float(raw.get("heading"), math.nan)
         if math.isfinite(target_heading):
             current_heading = self._display_player.get("heading", target_heading)
             if not math.isfinite(current_heading):
                 current_heading = target_heading
             angle_delta = self._shortest_angle_delta(target_heading, current_heading)
             if abs(angle_delta) > 0.0002:
-                heading_alpha = 1.0 - math.exp(-dt / 0.075)
-                current_heading += angle_delta * heading_alpha
+                current_heading += angle_delta * pose_alpha
                 pose_changed = True
             else:
                 current_heading = target_heading
             self._display_player["heading"] = current_heading
 
-        target_camera = safe_float(raw.get("camera_heading"), math.nan)
         if math.isfinite(target_camera):
             current_camera = self._display_player.get("camera_heading", target_camera)
             if not math.isfinite(current_camera):
                 current_camera = target_camera
             camera_delta = self._shortest_angle_delta(target_camera, current_camera)
             if abs(camera_delta) > 0.0002:
-                camera_alpha = 1.0 - math.exp(-dt / 0.075)
-                current_camera += camera_delta * camera_alpha
+                current_camera += camera_delta * pose_alpha
                 pose_changed = True
             else:
                 current_camera = target_camera
             self._display_player["camera_heading"] = current_camera
 
-        if zoom_changed or pose_changed:
-            self.update()
+        if zoom_changed:
+            # Zoom rescales the whole scene, so every easing frame is visible.
+            self._commit_paint()
+            return
+
+        if self._ticks_since_paint < self._repaint_stride_for_view():
+            return
+        if self._unpainted_motion_px() <= 0.0 and not self._content_dirty:
+            # Nothing moved and nothing changed; leave the screen alone.
+            return
+        self._commit_paint()
 
     def _player(self) -> dict[str, Any]:
         raw = self._raw_player()
@@ -1074,6 +1377,7 @@ class RadarWidget(QtWidgets.QWidget):
 
     def _pixels_per_metre(self) -> float:
         return self.ZOOM_REFERENCE_HEIGHT_PX / (2.0 * max(self.radius_m, 1.0))
+
 
     def _instance_state(self) -> dict[str, Any]:
         instance = self.state.get("instance", {}) if isinstance(self.state, dict) else {}
@@ -1615,17 +1919,25 @@ class RadarWidget(QtWidgets.QWidget):
         by telemetry — live-feed suppression, collected orbs, the view cull —
         stays in the paint loop.
         """
-        filters = (
-            tuple(sorted(self.poi_kind_visibility.items())),
-            tuple(sorted(self.loot_kind_visibility.items())),
+        # A sprite's pixels depend only on the icon mode and the device ratio;
+        # which kinds are switched on just changes who gets drawn. Keeping the
+        # two keys apart means toggling a filter no longer re-renders sprites.
+        sprite_filters = (
             tuple(sorted(self.loot_kind_icon_mode.items())),
             round(float(self.devicePixelRatioF() or 1.0), 3),
         )
+        filters = (
+            tuple(sorted(self.poi_kind_visibility.items())),
+            tuple(sorted(self.loot_kind_visibility.items())),
+            sprite_filters,
+        )
+        if self._sprite_filters != sprite_filters:
+            self._sprite_filters = sprite_filters
+            self._marker_sprite_cache.clear()
         if self._prepared_source is self.pois and self._prepared_filters == filters:
             return
         self._prepared_source = self.pois
         self._prepared_filters = filters
-        self._marker_sprite_cache.clear()
         self._ensure_activity_chest_anchors()
 
         enabled_poi_kinds = {
@@ -2498,8 +2810,8 @@ class RadarWidget(QtWidgets.QWidget):
         self, kind: str, subkind: str, size: str, *, muted: bool = False
     ) -> tuple[QtGui.QPixmap, float, float]:
         """Pre-rendered marker pixmap plus its centre offset in logical pixels."""
-        dpr = float(self.devicePixelRatioF() or 1.0)
-        key = (kind, subkind, size, bool(muted), round(dpr, 3))
+        dpr = self._paint_dpr
+        key = (kind, subkind, size, bool(muted), dpr)
         cached = self._marker_sprite_cache.get(key)
         if cached is not None:
             return cached
@@ -2670,22 +2982,70 @@ class RadarWidget(QtWidgets.QWidget):
         delta = item_z - player_z
         if abs(delta) < self.z_indicator_threshold:
             return
-        above = delta > 0.0
-        fill = color if color is not None else QtGui.QColor("#e8eef5")
-        outline = QtGui.QColor("#0b1117")
-        size = 3.6
-        # Screen Y grows downward: "above player" → chevron pointing up (toward top).
+        pixmap, offset_x, offset_y = self._z_chevron_sprite(
+            delta > 0.0, color if color is not None else _Z_CHEVRON_FILL, gap
+        )
+        painter.drawPixmap(
+            QtCore.QPointF(point.x() + offset_x, point.y() + offset_y), pixmap
+        )
+
+    def _z_chevron_sprite(
+        self, above: bool, color: QtGui.QColor, gap: float
+    ) -> tuple[QtGui.QPixmap, float, float]:
+        """Pre-rendered floor chevron plus its offset from the marker centre.
+
+        A full-map view draws one of these per visible marker, so building the
+        triangle per call dominated the frame.
+        """
+        dpr = self._paint_dpr
+        key = (above, color.rgba(), gap, dpr)
+        cached = self._z_chevron_cache.get(key)
+        if cached is not None:
+            return cached
+
+        size = _Z_CHEVRON_SIZE
+        margin = 1.0
+        # Chevron bounding box relative to the marker centre. Screen Y grows
+        # downward, so "above the player" points toward the top.
+        left = -size - margin
+        top = (-(gap + size) - margin) if above else (gap - margin)
+        # Blit on whole device pixels but keep the sub-pixel remainder in the
+        # geometry, so the chevron lands exactly where drawing it directly did.
+        offset_x = math.floor(left * dpr) / dpr
+        offset_y = math.floor(top * dpr) / dpr
+        pixmap = QtGui.QPixmap(
+            max(1, math.ceil((2.0 * size + 2.0 * margin + 1.0 / dpr) * dpr)),
+            max(1, math.ceil((size + 2.0 * margin + 1.0 / dpr) * dpr)),
+        )
+        pixmap.setDevicePixelRatio(dpr)
+        pixmap.fill(QtCore.Qt.GlobalColor.transparent)
+
+        centre_x = -offset_x
         if above:
-            tip = point + QtCore.QPointF(0.0, -(gap + size))
-            left = point + QtCore.QPointF(-size, -gap)
-            right = point + QtCore.QPointF(size, -gap)
+            tip_y = -(gap + size) - offset_y
+            base_y = -gap - offset_y
         else:
-            tip = point + QtCore.QPointF(0.0, gap + size)
-            left = point + QtCore.QPointF(-size, gap)
-            right = point + QtCore.QPointF(size, gap)
-        painter.setPen(QtGui.QPen(outline, 1.0))
-        painter.setBrush(fill)
-        painter.drawPolygon(QtGui.QPolygonF([tip, left, right]))
+            tip_y = (gap + size) - offset_y
+            base_y = gap - offset_y
+
+        sprite_painter = QtGui.QPainter(pixmap)
+        sprite_painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        sprite_painter.setPen(QtGui.QPen(_Z_CHEVRON_OUTLINE, 1.0))
+        sprite_painter.setBrush(color)
+        sprite_painter.drawPolygon(
+            QtGui.QPolygonF(
+                [
+                    QtCore.QPointF(centre_x, tip_y),
+                    QtCore.QPointF(centre_x - size, base_y),
+                    QtCore.QPointF(centre_x + size, base_y),
+                ]
+            )
+        )
+        sprite_painter.end()
+
+        entry = (pixmap, offset_x, offset_y)
+        self._z_chevron_cache[key] = entry
+        return entry
 
     @staticmethod
     def _star_polygon(point: QtCore.QPointF, outer: float, inner: float) -> QtGui.QPolygonF:
@@ -2930,6 +3290,7 @@ class RadarWidget(QtWidgets.QWidget):
         # Rebuild marker sprites / POI caches before opening a painter. Clearing
         # QPixmap caches mid-paint races Wayland's SHM flush (SEGV in
         # QPaintDevice::devicePixelRatio).
+        self._paint_dpr = float(self.devicePixelRatioF() or 1.0)
         local_instance = self._local_instance_mode()
         if not local_instance:
             self._ensure_prepared_pois()
@@ -3031,6 +3392,7 @@ class RadarWidget(QtWidgets.QWidget):
         player_x = safe_float(player.get("x"), math.nan)
         player_y = safe_float(player.get("y"), math.nan)
         player_z = safe_float(player.get("z"), math.nan)
+        node_z_indicators = self.radius_m <= self.NODE_Z_INDICATOR_MAX_RADIUS_M
         view_half_w, view_half_h = self._view_half_extents(viewport, 12.0)
         view_half_w_wp, view_half_h_wp = self._view_half_extents(viewport, 24.0)
         view_half_w_party, view_half_h_party = self._view_half_extents(viewport, 28.0)
@@ -3119,13 +3481,14 @@ class RadarWidget(QtWidgets.QWidget):
                 draw_kind = "ore" if kind == "gatherable" else kind
                 size = self._node_size_label(poi)
                 self._draw_poi_marker(painter, point, draw_kind, "", size=size)
-                self._draw_z_indicator(
-                    painter,
-                    point,
-                    safe_float(poi.get("z"), math.nan),
-                    player_z,
-                    gap=6.0 if size == "large" else 5.0,
-                )
+                if node_z_indicators:
+                    self._draw_z_indicator(
+                        painter,
+                        point,
+                        safe_float(poi.get("z"), math.nan),
+                        player_z,
+                        gap=6.0 if size == "large" else 5.0,
+                    )
                 hit = self._interactible_hit_radius
                 if size == "large":
                     hit += 3.0
@@ -3234,13 +3597,14 @@ class RadarWidget(QtWidgets.QWidget):
                     self._blit_marker_sprite(
                         painter, point, pixmap, sprite_half_w, sprite_half_h
                     )
-                    self._draw_z_indicator(
-                        painter,
-                        point,
-                        world_z,
-                        player_z,
-                        gap=6.0 if size == "large" else 5.0,
-                    )
+                    if node_z_indicators:
+                        self._draw_z_indicator(
+                            painter,
+                            point,
+                            world_z,
+                            player_z,
+                            gap=6.0 if size == "large" else 5.0,
+                        )
                 if (
                     is_collectible
                     and kind != "red_orb"

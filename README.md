@@ -181,7 +181,11 @@ Optional environment variables:
 - `FAREVER_GAME_DIR` — Farever install directory
 - `FAREVER_STEAM_ROOT` — Steam root used to find the Proton prefix (Linux)
 - `FAREVER_PROTON` — Proton launcher path (Linux)
-- `FAREVER_TELEMETRY_INTERVAL_MS` — bridge poll interval (default `100`)
+- `FAREVER_TELEMETRY_INTERVAL_MS` — how often the bridge samples the game and
+  writes telemetry, held to a fixed cadence (default `100`, range `50`-`5000`)
+- `FAREVER_BRIDGE_PROFILE` — set to any value to write per-phase sample timings
+  to `native_bridge/farever-telemetry.profile.txt`, for when the bridge cannot
+  keep its cadence and you need to know which sweep is responsible
 
 Live telemetry is read from `native_bridge/farever-telemetry.json`.
 All local state (settings, waypoints, friends, builds, FoW edits, game-dir
