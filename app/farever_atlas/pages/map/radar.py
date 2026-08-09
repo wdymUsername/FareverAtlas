@@ -204,6 +204,7 @@ class RadarWidget(QtWidgets.QWidget):
         self._hovered_custom_waypoint_id: int | None = None
         self._hovered_enemy_id: str | None = None
         self._hovered_interactible_id: str | None = None
+        self._hovered_player_key: str | None = None
         self._live_marker_signature: tuple[Any, ...] | None = None
         # Generous hit slack around the small enemy dots so hover is usable.
         self._enemy_hit_radius = 9.0
@@ -1149,6 +1150,32 @@ class RadarWidget(QtWidgets.QWidget):
                 best = player
         return dict(best) if best is not None else None
 
+    def _player_hover_key(self, player: dict[str, Any] | None) -> str | None:
+        if not isinstance(player, dict):
+            return None
+        uid = str(player.get("uid") or "").strip()
+        if uid:
+            return uid
+        name = str(player.get("name") or "").strip()
+        if not name:
+            return None
+        party = "party" if player.get("in_party") else "other"
+        return f"{party}:{name}"
+
+    def _player_map_name_visible(self, player: dict[str, Any]) -> bool:
+        if player.get("in_party"):
+            return bool(self.show_party_names)
+        return bool(self.show_player_names)
+
+    def _player_hover_tooltip(self, player: dict[str, Any]) -> str:
+        name = str(player.get("name") or "").strip() or "Unknown"
+        klass = str(player.get("class") or "").strip()
+        level = safe_int(player.get("level"), 0)
+        first = f"{name}, {klass}" if klass else name
+        if level > 0:
+            return f"{first}\nLevel {level}"
+        return first
+
     def _register_player_hit(
         self,
         point: QtCore.QPointF,
@@ -1964,28 +1991,51 @@ class RadarWidget(QtWidgets.QWidget):
             event.accept()
             return
         self._cancel_cursor_release_ease()
-        waypoint = self.custom_waypoint_at(event.position())
+        # Prefer players over other markers so hover matches pointing-hand cursor.
+        hovered_player = self.player_at(event.position())
+        player_key = self._player_hover_key(hovered_player)
+        waypoint = (
+            None
+            if hovered_player is not None
+            else self.custom_waypoint_at(event.position())
+        )
         waypoint_id = safe_int(waypoint.get("id"), -1) if waypoint else None
-        enemy = None if waypoint is not None else self.enemy_at(event.position())
+        enemy = (
+            None
+            if hovered_player is not None or waypoint is not None
+            else self.enemy_at(event.position())
+        )
         enemy_id = str(enemy.get("id") or "") if enemy is not None else None
         interactible = (
             None
-            if waypoint is not None or enemy is not None
+            if hovered_player is not None or waypoint is not None or enemy is not None
             else self.interactible_at(event.position())
         )
         interactible_id = (
             str(interactible.get("id") or "") if interactible is not None else None
         )
         hover_changed = (
-            waypoint_id != self._hovered_custom_waypoint_id
+            player_key != self._hovered_player_key
+            or waypoint_id != self._hovered_custom_waypoint_id
             or enemy_id != self._hovered_enemy_id
             or interactible_id != self._hovered_interactible_id
         )
         if hover_changed:
+            self._hovered_player_key = player_key
             self._hovered_custom_waypoint_id = waypoint_id
             self._hovered_enemy_id = enemy_id
             self._hovered_interactible_id = interactible_id
-            if waypoint is not None:
+            if hovered_player is not None:
+                self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+                if self._player_map_name_visible(hovered_player):
+                    QtWidgets.QToolTip.hideText()
+                else:
+                    QtWidgets.QToolTip.showText(
+                        event.globalPosition().toPoint(),
+                        self._player_hover_tooltip(hovered_player),
+                        self,
+                    )
+            elif waypoint is not None:
                 player = self._player()
                 distance = math.hypot(
                     safe_float(waypoint.get("x")) - safe_float(player.get("x")),
@@ -2040,6 +2090,7 @@ class RadarWidget(QtWidgets.QWidget):
         self._hovered_custom_waypoint_id = None
         self._hovered_enemy_id = None
         self._hovered_interactible_id = None
+        self._hovered_player_key = None
         self._fow_line_cursor = None
         self._fow_hover_ring = None
         self._fow_hover_vertex = None
