@@ -376,6 +376,7 @@ class DataHub(QtCore.QObject):
             "instance": instance,
             "time_of_day": time_of_day,
             "completed_elements": payload.get("completed_elements", []),
+            "completed_activities": payload.get("completed_activities", []),
             "player": {
                 "name": player_name,
                 "uid": native_player.get("uid"),

@@ -130,7 +130,17 @@ def walk_nodes(
     root: Any,
     callback: Callable[[dict[str, Any], float, float, float], None],
 ) -> None:
-    """Walk a prefab node tree with parent-relative x/y/z (+ rotationZ)."""
+    """Walk a prefab node tree with parent-relative x/y/z (+ rotationZ).
+
+    Farever/Heaps applies ``rotationZ`` on the horizontal plane as::
+
+        dx = lx * sin(rot) - ly * cos(rot)
+        dy = lx * cos(rot) + ly * sin(rot)
+
+    (equivalently a standard CCW rotation by ``-rot + 90°``). The usual
+    ``(lx cos - ly sin, lx sin + ly cos)`` form disagrees with live entity
+    positions for nested Orb/Camp chests under rotated activity parents.
+    """
 
     def visit(node: Any, ox: float, oy: float, oz: float, rot: float) -> None:
         if not isinstance(node, dict):
@@ -143,8 +153,8 @@ def walk_nodes(
             angle = math.radians(rot)
             cos_a = math.cos(angle)
             sin_a = math.sin(angle)
-            dx = lx * cos_a - ly * sin_a
-            dy = lx * sin_a + ly * cos_a
+            dx = lx * sin_a - ly * cos_a
+            dy = lx * cos_a + ly * sin_a
         x = ox + dx
         y = oy + dy
         z = oz + lz

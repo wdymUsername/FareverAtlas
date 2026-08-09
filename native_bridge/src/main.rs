@@ -495,6 +495,7 @@ mod windows_bridge {
     const PROGRESS_TYPE_INDEX: usize = 1_415;
     // st.player.Progress inherits BaseState(17); counters is declared field 2 → 19.
     const PROGRESS_COUNTERS_FIELD_INDEX: usize = 19;
+    const PROGRESS_ACTIVITIES_FIELD_INDEX: usize = 20;
     const PROGRESS_ELEMENTS_FIELD_INDEX: usize = 21;
     const MAP_DATA_TYPE_INDEX: usize = 1_038;
     const MAP_DATA_MAP_FIELD_INDEX: usize = 4;
@@ -502,6 +503,9 @@ mod windows_bridge {
     const STRING_MAP_HANDLE_FIELD_INDEX: usize = 0;
     const COMPLETION_PROXY_TYPE_INDEX: usize = 23_065;
     const COMPLETION_PROXY_COMPLETED_FIELD_INDEX: usize = 2;
+    // Progress.activities values: completedOnce + lastCompletion.
+    const ACTIVITY_COMPLETION_PROXY_TYPE_INDEX: usize = 17_646;
+    const ACTIVITY_COMPLETION_PROXY_COMPLETED_ONCE_FIELD_INDEX: usize = 2;
     const HERO_DATA_TYPE_INDEX: usize = 1_365;
     // Flattened indexes: BaseState(17)+DBState(4)=21 inherited, then HeroData
     // declared fields (currencies=17 → 38, progress=23 → 44).
@@ -805,10 +809,12 @@ mod windows_bridge {
         array_dyn_array_offset: usize,
         group_players_offset: usize,
         progress_counters_offset: usize,
+        progress_activities_offset: usize,
         progress_elements_offset: usize,
         map_data_map_offset: usize,
         string_map_handle_offset: usize,
         completion_proxy_completed_offset: usize,
+        activity_completion_proxy_completed_once_offset: usize,
         hero_data_currencies_offset: usize,
         hero_data_progress_offset: usize,
         hero_loadout_offset: usize,
@@ -2597,6 +2603,11 @@ mod windows_bridge {
             types_address + PROGRESS_TYPE_INDEX * 32,
             PROGRESS_COUNTERS_FIELD_INDEX,
         )?;
+        let progress_activities_offset = object_field_offset(
+            process,
+            types_address + PROGRESS_TYPE_INDEX * 32,
+            PROGRESS_ACTIVITIES_FIELD_INDEX,
+        )?;
         let progress_elements_offset = object_field_offset(
             process,
             types_address + PROGRESS_TYPE_INDEX * 32,
@@ -2616,6 +2627,11 @@ mod windows_bridge {
             process,
             types_address + COMPLETION_PROXY_TYPE_INDEX * 32,
             COMPLETION_PROXY_COMPLETED_FIELD_INDEX,
+        )?;
+        let activity_completion_proxy_completed_once_offset = object_field_offset(
+            process,
+            types_address + ACTIVITY_COMPLETION_PROXY_TYPE_INDEX * 32,
+            ACTIVITY_COMPLETION_PROXY_COMPLETED_ONCE_FIELD_INDEX,
         )?;
         let hero_data_currencies_offset = object_field_offset(
             process,
@@ -2784,10 +2800,12 @@ mod windows_bridge {
             array_dyn_array_offset,
             group_players_offset,
             progress_counters_offset,
+            progress_activities_offset,
             progress_elements_offset,
             map_data_map_offset,
             string_map_handle_offset,
             completion_proxy_completed_offset,
+            activity_completion_proxy_completed_once_offset,
             hero_data_currencies_offset,
             hero_data_progress_offset,
             hero_loadout_offset,
@@ -2964,6 +2982,7 @@ mod windows_bridge {
         instance: InstanceSample,
         time_of_day: Option<TimeOfDaySample>,
         completed_elements: Vec<String>,
+        completed_activities: Vec<String>,
     }
 
     struct PartySample {
@@ -3699,6 +3718,129 @@ mod windows_bridge {
                 )?;
                 if value >= 1.0 {
                     let key = read_bounded_utf16(process, key_pointer, "completed element key")?;
+                    if !key.is_empty() {
+                        completed.push(key);
+                    }
+                }
+            }
+            index += chunk;
+        }
+        completed.sort_unstable();
+        completed.dedup();
+        Ok(completed)
+    }
+
+    fn read_completed_activities(
+        process: &OwnedHandle,
+        code: &CodeAnchor,
+        root: &PlayerRoot,
+        player: usize,
+    ) -> Result<Vec<String>, String> {
+        let hero_data = read_object_pointer_field(process, player, root.player_hero_data_offset)?;
+        let progress = if hero_data != 0
+            && read_u64_le(&read_process_bytes(process, hero_data, 8)?, 0)? as usize
+                == code.types_address + HERO_DATA_TYPE_INDEX * 32
+        {
+            read_object_pointer_field(process, hero_data, root.hero_data_progress_offset)?
+        } else {
+            read_object_pointer_field(process, player, root.player_progress_offset)?
+        };
+        if progress == 0 {
+            return Ok(Vec::new());
+        }
+        if read_u64_le(&read_process_bytes(process, progress, 8)?, 0)? as usize
+            != code.types_address + PROGRESS_TYPE_INDEX * 32
+        {
+            return Err("Player.progress is not a live st.player.Progress object".to_owned());
+        }
+        let activities =
+            read_object_pointer_field(process, progress, root.progress_activities_offset)?;
+        if activities == 0 {
+            return Ok(Vec::new());
+        }
+        if read_u64_le(&read_process_bytes(process, activities, 8)?, 0)? as usize
+            != code.types_address + MAP_DATA_TYPE_INDEX * 32
+        {
+            return Err("Progress.activities is not an hxbit.MapData object".to_owned());
+        }
+        let map_value = read_object_pointer_field(process, activities, root.map_data_map_offset)?;
+        if map_value == 0 {
+            return Ok(Vec::new());
+        }
+        let expected_map_type = code.types_address + STRING_MAP_TYPE_INDEX * 32;
+        let map_object = if read_u64_le(&read_process_bytes(process, map_value, 8)?, 0)? as usize
+            == expected_map_type
+        {
+            map_value
+        } else {
+            let wrapper = read_process_bytes(process, map_value, 40)?;
+            [8_usize, 16, 24, 32]
+                .into_iter()
+                .filter_map(|offset| read_u64_le(&wrapper, offset).ok())
+                .map(|value| value as usize)
+                .find(|candidate| {
+                    *candidate != 0
+                        && read_process_bytes(process, *candidate, 8)
+                            .ok()
+                            .and_then(|bytes| read_u64_le(&bytes, 0).ok())
+                            .map(|value| value as usize == expected_map_type)
+                            .unwrap_or(false)
+                })
+                .ok_or_else(|| "Progress.activities map is not a StringMap".to_owned())?
+        };
+        let handle = read_object_pointer_field(process, map_object, root.string_map_handle_offset)?;
+        if handle == 0 {
+            return Ok(Vec::new());
+        }
+        let header = read_process_bytes(process, handle, 64)?;
+        let values = read_u64_le(&header, 24)? as usize;
+        let nentries = read_u32_le(&header, 52)? as usize;
+        let maxentries = read_u32_le(&header, 56)? as usize;
+        if nentries > maxentries || maxentries > 100_000 || (maxentries > 0 && values == 0) {
+            return Err("Progress.activities StringMap header failed sanity validation".to_owned());
+        }
+        const ENTRY_SIZE: usize = 16;
+        const CHUNK_ENTRIES: usize = 4096 / ENTRY_SIZE;
+        let expected_value_type = code.types_address + ACTIVITY_COMPLETION_PROXY_TYPE_INDEX * 32;
+        // Some builds may still store float completion proxies on activities.
+        let legacy_value_type = code.types_address + COMPLETION_PROXY_TYPE_INDEX * 32;
+        let mut completed = Vec::new();
+        let mut index = 0usize;
+        while index < maxentries {
+            let chunk = (maxentries - index).min(CHUNK_ENTRIES);
+            let entries =
+                read_process_bytes(process, values + index * ENTRY_SIZE, chunk * ENTRY_SIZE)?;
+            for local in 0..chunk {
+                let offset = local * ENTRY_SIZE;
+                let key_pointer = read_u64_le(&entries, offset)? as usize;
+                let value_pointer = read_u64_le(&entries, offset + 8)? as usize;
+                if key_pointer == 0 || value_pointer == 0 {
+                    continue;
+                }
+                let value_type =
+                    read_u64_le(&read_process_bytes(process, value_pointer, 8)?, 0)? as usize;
+                let done = if value_type == expected_value_type {
+                    read_process_bytes(
+                        process,
+                        value_pointer + root.activity_completion_proxy_completed_once_offset,
+                        1,
+                    )?[0]
+                        != 0
+                } else if value_type == legacy_value_type {
+                    let value = read_f64_le(
+                        &read_process_bytes(
+                            process,
+                            value_pointer + root.completion_proxy_completed_offset,
+                            8,
+                        )?,
+                        0,
+                    )?;
+                    value >= 1.0
+                } else {
+                    false
+                };
+                if done {
+                    let key = read_bounded_utf16(process, key_pointer, "completed activity key")?;
                     if !key.is_empty() {
                         completed.push(key);
                     }
@@ -4564,6 +4706,7 @@ mod windows_bridge {
         allow_hud_discovery: bool,
         party_gauge_cache: &mut Vec<PartyGaugeCache>,
         completed_elements_cache: &mut Vec<String>,
+        completed_activities_cache: &mut Vec<String>,
     ) -> Result<TelemetrySample, String> {
         let root = &code.player_root;
         let game_app = read_object_pointer_field(
@@ -4796,6 +4939,9 @@ mod windows_bridge {
             if let Ok(completed) = read_completed_elements(process, code, root, player) {
                 *completed_elements_cache = completed;
             }
+            if let Ok(completed) = read_completed_activities(process, code, root, player) {
+                *completed_activities_cache = completed;
+            }
         }
         let currencies = read_currencies(process, code, root, player, hero);
         let currency_counters = read_currency_counters(process, code, root, player);
@@ -4835,6 +4981,7 @@ mod windows_bridge {
             instance,
             time_of_day,
             completed_elements: completed_elements_cache.clone(),
+            completed_activities: completed_activities_cache.clone(),
         })
     }
 
@@ -4848,6 +4995,7 @@ mod windows_bridge {
         let mut hud_shield_gauge = None;
         let mut party_gauge_cache = Vec::new();
         let mut completed_elements_cache = Vec::new();
+        let mut completed_activities_cache = Vec::new();
         let mut observed_dps = ObservedDps::new();
         let mut last_good_player_name = String::new();
         let mut last_good_player_uid = String::new();
@@ -4870,6 +5018,7 @@ mod windows_bridge {
                         hud_shield_gauge = None;
                         party_gauge_cache.clear();
                         completed_elements_cache.clear();
+                        completed_activities_cache.clear();
                         observed_dps = ObservedDps::new();
                         // Keep last_good_player_name across soft reattaches so
                         // teleport blips do not wipe the display name.
@@ -4898,6 +5047,7 @@ mod windows_bridge {
                     sequence == 1 || sequence % 10 == 0,
                     &mut party_gauge_cache,
                     &mut completed_elements_cache,
+                    &mut completed_activities_cache,
                 ) {
                     Ok(mut sample) => {
                         consecutive_sample_failures = 0;
@@ -5068,6 +5218,12 @@ mod windows_bridge {
                             .map(|value| json_string(value))
                             .collect::<Vec<_>>()
                             .join(",");
+                        let completed_activities_json = sample
+                            .completed_activities
+                            .iter()
+                            .map(|value| json_string(value))
+                            .collect::<Vec<_>>()
+                            .join(",");
                         let instance_json = format!(
                             "{{\"type\":{},\"map_id\":{},\"is_rift\":{},\"is_dungeon\":{},\"is_world_map\":{},\"activity_kind\":{}}}",
                             json_string(sample.instance.kind),
@@ -5111,7 +5267,7 @@ mod windows_bridge {
                             .join(",");
                         (
                             format!(
-                                "{{\"schema\":1,\"bridge_version\":\"{BRIDGE_VERSION}\",\"state\":\"connected\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"game_app_address\":\"0x{:x}\",\"player_address\":\"0x{:x}\",\"hero_address\":\"0x{:x}\",\"player\":{{\"name\":{},\"uid\":{},\"class\":{},\"level\":{},\"in_combat\":{},\"vitality\":{},\"health\":{},\"max_health\":{},\"health_regen\":{},\"shield\":{},\"shield_ratio\":{},\"shield_capacity\":{},\"shield_gauge_visible\":{},\"raw_shield\":{},\"shield_gauge_available\":{},\"special_energy\":{},\"special_energy_regen\":{},\"currencies\":[{currencies_json}],\"currency_counters\":{{{currency_counters_json}}}}},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}},\"rotation_z\":{},\"camera_yaw\":{camera_yaw_json},\"party\":[{}],\"enemies\":[{}],\"critters\":[{}],\"players\":[{}],\"interactibles\":[{}],\"instance\":{instance_json},\"time_of_day\":{time_of_day_json},\"completed_elements\":[{}],\"dps\":{{\"mode\":\"observed_nearby\",\"fight_id\":{},\"current\":{},\"total\":{},\"elapsed\":{},\"in_combat\":{},\"damage_skills\":[{{\"skill\":\"Observed nearby damage\",\"total\":{},\"hits\":0,\"crits\":0,\"max\":0}}],\"healing_skills\":[]}}}}\n",
+                                "{{\"schema\":1,\"bridge_version\":\"{BRIDGE_VERSION}\",\"state\":\"connected\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"game_app_address\":\"0x{:x}\",\"player_address\":\"0x{:x}\",\"hero_address\":\"0x{:x}\",\"player\":{{\"name\":{},\"uid\":{},\"class\":{},\"level\":{},\"in_combat\":{},\"vitality\":{},\"health\":{},\"max_health\":{},\"health_regen\":{},\"shield\":{},\"shield_ratio\":{},\"shield_capacity\":{},\"shield_gauge_visible\":{},\"raw_shield\":{},\"shield_gauge_available\":{},\"special_energy\":{},\"special_energy_regen\":{},\"currencies\":[{currencies_json}],\"currency_counters\":{{{currency_counters_json}}}}},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}},\"rotation_z\":{},\"camera_yaw\":{camera_yaw_json},\"party\":[{}],\"enemies\":[{}],\"critters\":[{}],\"players\":[{}],\"interactibles\":[{}],\"instance\":{instance_json},\"time_of_day\":{time_of_day_json},\"completed_elements\":[{}],\"completed_activities\":[{}],\"dps\":{{\"mode\":\"observed_nearby\",\"fight_id\":{},\"current\":{},\"total\":{},\"elapsed\":{},\"in_combat\":{},\"damage_skills\":[{{\"skill\":\"Observed nearby damage\",\"total\":{},\"hits\":0,\"crits\":0,\"max\":0}}],\"healing_skills\":[]}}}}\n",
                                 sample.game_app,
                                 sample.player,
                                 sample.hero,
@@ -5142,6 +5298,7 @@ mod windows_bridge {
                                 players_json,
                                 interactibles_json,
                                 completed_elements_json,
+                                completed_activities_json,
                                 observed_dps.fight_id,
                                 dps_rate,
                                 observed_dps.total,

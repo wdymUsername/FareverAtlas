@@ -33,7 +33,11 @@ them from Farever's res.map.pak with:
   .venv/bin/python tools/build_map_assets.py
 
 POI dataset and activity icon atlas stay at the assets root so Atlas does not
-depend on files installed into the Farever game folder.
+depend on files installed into the Farever game folder. Refresh POI world
+coordinates from extracted map prefabs (Heaps rotationZ, snap each activity
+onto its gameplay anchor, add missing activity chests) with:
+
+  python tools/extract_pois.py
 
 Wild critter spawn points (authored map spawners, not live entities) are in
 critter_spawns_W1_Siagarta.json. Rebuild from extracted res.map + data.cdb with:
