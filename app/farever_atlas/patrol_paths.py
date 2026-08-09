@@ -1,4 +1,4 @@
-"""Static patrol polylines for ranked/spark spawners.
+"""Static patrol polylines for ranked/spark and wild-critter spawners.
 
 Source of truth: ``assets/patrol_paths_W1_Siagarta.json``, rebuilt with
 ``python tools/extract_patrol_paths.py``. Paths are authored map splines;

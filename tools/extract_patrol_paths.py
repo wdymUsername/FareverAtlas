@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Extract authored patrol polylines for ranked/spark spawners (W1 Siagarta).
+"""Extract authored patrol polylines for ranked/spark and wild critters (W1).
 
 Spawner nodes in ``gameplayData/*.prefab`` may set ``props.patrol.path`` to a
 named spline id. Spline nodes (``type: "spline"``) store world-space
-``samples`` used for drawing. Only spawners whose unit / unitGroup resolves to
-at least one Spark / Elite / Boss / Miniboss / Unique kind are kept.
+``samples`` used for drawing. Keep spawners whose unit / unitGroup resolves to
+at least one Spark / Elite / Boss / Miniboss / Unique kind, or any wild
+companion critter kind from ``unit_traits``.
 
 Usage:
     python tools/extract_patrol_paths.py
@@ -88,6 +89,7 @@ def highest_rank(
     boss_set: set[str],
     miniboss_set: set[str],
     unique_set: set[str],
+    critter_set: set[str],
 ) -> str:
     if any(kind in boss_set for kind in kinds):
         return "boss"
@@ -99,6 +101,8 @@ def highest_rank(
         return "elite"
     if any(kind in spark_set for kind in kinds):
         return "spark"
+    if any(kind in critter_set for kind in kinds):
+        return "critter"
     return ""
 
 
@@ -145,6 +149,9 @@ def main() -> int:
         print(f"missing prefab dir: {PREFAB_DIR}", file=sys.stderr)
         return 1
     traits = json.loads(TRAITS_PATH.read_text(encoding="utf-8"))
+    critter_set = {
+        str(k) for k in (traits.get("critter") or []) if isinstance(k, str) and k
+    }
     spark_set = {str(k) for k in (traits.get("spark") or []) if isinstance(k, str) and k}
     elite_set = {str(k) for k in (traits.get("elite") or []) if isinstance(k, str) and k}
     boss_set = {str(k) for k in (traits.get("boss") or []) if isinstance(k, str) and k}
@@ -155,8 +162,11 @@ def main() -> int:
         str(k) for k in (traits.get("unique") or []) if isinstance(k, str) and k
     }
     ranked_set = spark_set | elite_set | boss_set | miniboss_set | unique_set
-    if not ranked_set:
-        print("assets/unit_traits.json has no ranked/spark kinds", file=sys.stderr)
+    if not ranked_set and not critter_set:
+        print(
+            "assets/unit_traits.json has no ranked/spark or critter kinds",
+            file=sys.stderr,
+        )
         return 1
 
     cdb = json.loads(CDB_PATH.read_text(encoding="utf-8"))
@@ -231,7 +241,9 @@ def main() -> int:
                     continue
                 seen.add(kind)
                 kinds.append(kind)
-            if not any(kind in ranked_set for kind in kinds):
+            is_ranked = any(kind in ranked_set for kind in kinds)
+            is_critter = any(kind in critter_set for kind in kinds)
+            if not is_ranked and not is_critter:
                 return
 
             rank = highest_rank(
@@ -241,6 +253,7 @@ def main() -> int:
                 boss_set=boss_set,
                 miniboss_set=miniboss_set,
                 unique_set=unique_set,
+                critter_set=critter_set,
             )
             zone = props.get("zoneBaked")
             spawners.append(
