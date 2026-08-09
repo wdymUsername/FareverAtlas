@@ -207,6 +207,14 @@ class FogOfWar:
     def layer_inverted(self, tier: str) -> bool:
         return bool(self._layer(tier).inverted)
 
+    @property
+    def world_path_generation(self) -> int:
+        """Bumped whenever the drawn shape of the fog changes.
+
+        Callers that cache anything derived from the fog key it on this.
+        """
+        return self._world_path_generation
+
     def layer_transform(self, tier: str) -> FowLayerTransform:
         return self._layer(tier).transform
 
