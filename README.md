@@ -20,18 +20,29 @@ Start Farever and log in to a character before launching Atlas.
 - Pan, zoom, recenter / free view
 - Live player position, heading, HP / shield
 - Player / party display names
+- WAYPOINTS filter panel with Actors / POI / Loot / Custom segments
 - Static POIs with filters (obelisks, respawns, dungeons, merchants, activities)
 - Loot filters (chests, red orbs, plants, ore) and live interactibles in range
-- Nearby enemies and players (optional names)
+  (~500 m / tall Z band)
+- Nearby enemies and players (optional names; same live range)
 - Instance detection with local-instance view (blank map until custom dungeon
   art exists — map files are not shipped unless someone draws them)
 - Offline mode (stops bridge polling; keeps last map position)
+- In-game day cycle (icon · HH:MM · period) beside the Rift countdown
 - Nightling Rift hourly countdown
+- Live currency strip (Gold, Craft, Demonic Soul, Nightblood) with caps
+- Status bar toggles in Settings → Map (currencies, time of day, Rift timer)
+
+**NODE GUIDE**
+- Floating map panel: route to nearest plant, ore, world/recipe chest, or red orb
+- Type / size filters; mute completed red orbs for this character
+- Collect → next loop with active route line
 
 **Fog of war**
 - Enable / disable, soft edge, hide markers under fog
+- Players and NPCs stay visible through fog
 - Baked clear-zone FoW in release builds
-- Layer / bake authoring tools (`--dev` only)
+- Collapsible layer / bake authoring tools (`--dev` only)
 
 **Waypoints**
 - Create, edit, delete; manager; visibility; active route line
@@ -45,7 +56,7 @@ Start Farever and log in to a character before launching Atlas.
 - Live instance roster: search, sort, class pin, party-only
 - Local friends (★) with HERE / AWAY on this layer
 - Focus / follow on the map
-- Steam profile and chat; Web API avatars / status and Steam-friend badge
+- Steam profile; Web API avatars / status and Steam-friend badge
   (configure Steam Web API key; SteamID64 for Steam-friend list)
 
 **App / launcher**
@@ -56,7 +67,6 @@ Start Farever and log in to a character before launching Atlas.
 
 ### WIP
 
-- Gather nav (first implementation)
 - DPS widget / Combat Meter (UI present; telemetry not wired properly yet)
 - Planner (page shell and some UI only)
 
@@ -64,7 +74,6 @@ Start Farever and log in to a character before launching Atlas.
 
 - Codex
 - Alerts / target cast warnings (need live cast data from the bridge)
-- Completed red-orb tracking (hide when collected)
 - Combat Meter advanced options (after DPS pipeline rework)
 - Planner equipment, live stats, selectable skills, real talent data / icons
 
