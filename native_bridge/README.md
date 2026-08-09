@@ -4,7 +4,7 @@ Read-only Windows telemetry helper for Farever Atlas (`farever-atlas-bridge`).
 
 It discovers `Farever.exe` inside the same Proton / Windows process space, fingerprints the supported build, attaches with query + VM-read rights only, and writes a live snapshot to `farever-telemetry.json`. Atlas polls that file while it is fresh.
 
-Current report version: **0.21.9** (`bridge_version` in the JSON). Release builds are a headless Windows PE (no console window).
+Current report version: **0.23.6** (`bridge_version` in the JSON). Release builds are a headless Windows PE (no console window).
 
 ## Safety boundary
 
@@ -46,13 +46,13 @@ Discovery, fingerprinting, and HashLink metadata traversal happen once per attac
 
 | Field | Contents |
 | --- | --- |
-| `player` | name, uid, class, level, combat flag, vitality / health / shield / special energy (HUD gauges used when available) |
+| `player` | name, uid, class, level, combat flag, vitality / health / shield / special energy (HUD gauges used when available); `currencies` (`kind` / `amount` purse rows from loadout, with HeroData fallback); `currency_counters` (progress counters used for tiered caps, currently `DemonicSouls_CapacityIndex`) |
 | `position`, `rotation_z` | local hero transform |
 | `camera_yaw` | world camera yaw when readable, else `null` |
 | `party` | up to 3 other group members (name, class, vitals, position, distance) |
-| `enemies` | nearby non-summon `ent.Foe` markers (id, kind, position; ~500 m / 120 z cull) |
-| `players` | other layer heroes outside the party (uncapped distance; display/sort only) |
-| `interactibles` | nearby gatherables / chests (`kind`: ore, plant, chest, gatherable) |
+| `enemies` | nearby non-summon `ent.Foe` markers (id, kind, position; ~500 m / 120 z cull, max 150) |
+| `players` | other layer heroes outside the party (uncapped distance; display/sort only; max 400) |
+| `interactibles` | nearby gatherables / chests (`kind`: ore, plant, chest, gatherable; ~500 m / 160 z cull, max 200) |
 | `instance` | coarse map bucket (`world` / `rift` / `dungeon` / `instance` / `unknown`) plus `map_id` and flags |
 | `time_of_day` | day cycle from `world.World.timeOfDay` (`factor` 0–1, `elapsed`, `speed`, `paused`), or `null` |
 | `completed_elements` | completion keys from player progress (refreshed periodically) |
