@@ -1,8 +1,6 @@
 # Farever Atlas
 
-[![FareverAtlas.exe](https://github.com/wdymUsername/FareverAtlas/actions/workflows/windows-portable.yml/badge.svg)](https://github.com/wdymUsername/FareverAtlas/actions/workflows/windows-portable.yml) [![Downloads](https://img.shields.io/github/downloads/wdymUsername/FareverAtlas/total)](https://github.com/wdymUsername/FareverAtlas/releases/tag/Nightly)
-
-[![VirusTotal](https://badges.cssnr.com/vt/wdymUsername/FareverAtlas/FareverAtlas.exe)](https://github.com/wdymUsername/FareverAtlas/releases/tag/Nightly)
+[![FareverAtlas.exe](https://github.com/wdymUsername/FareverAtlas/actions/workflows/windows-portable.yml/badge.svg)](https://github.com/wdymUsername/FareverAtlas/actions/workflows/windows-portable.yml)[![Downloads](https://img.shields.io/github/downloads/wdymUsername/FareverAtlas/total)](https://github.com/wdymUsername/FareverAtlas/releases/tag/Nightly)[![VirusTotal](https://badges.cssnr.com/vt/wdymUsername/FareverAtlas/FareverAtlas.exe)](https://github.com/wdymUsername/FareverAtlas/releases/tag/Nightly)
 
 
 
@@ -12,29 +10,32 @@ bridge. It does not write game memory.
 
 Start Farever and log in to a character before launching Atlas.
 
-## TL;DR
+## TL;DR 
+<sub>Proper readme bellow for those who can handle couple lines of text.</sub>
 
-**What it is.** Live map + companion for Farever. Start the game, log in, then
+**What is this.** Live map + companion for Farever. Start the game, log in, then
 launch Atlas (portable Windows exe, or `./farever start` on Linux / Proton).
 
-**Features (working).** Live player / party / nearby actors on the world map;
+**Features (working, probably).** Live player / party / nearby actors on the world map;
 POI and loot filters; NODE GUIDE routing for gatherables; fog of war;
 waypoints; instance roster and local friends; currencies, day cycle, and
 Nightling Rift timer. DPS meter and Planner are still WIP.
 
-**Safety.** Atlas hooks into and only reads the memory of another piece of
+**Safety and Antivirus.** Atlas hooks into and only reads the memory of another piece of
 software — in this case, a game. The native bridge opens Farever with
 query + `PROCESS_VM_READ` rights only. It does not write game memory, inject
-code, simulate input, or network out. Unknown Farever builds are rejected
+code, simulate input, or network out. Unknown Farever builds (means after game update) are rejected
 instead of guessed.
 
-**Antivirus.** That read-only memory access may be seen as potentially
+That read-only memory access may be seen as potentially
 malicious — though it is not inherently malicious — and can therefore falsely
 trigger antivirus software. PyInstaller packaging, no code signing, and a
 fresh Nightly hash make false positives more likely. Prefer the
 [Nightly release](https://github.com/wdymUsername/FareverAtlas/releases/tag/Nightly),
 check the `.sha256` / VirusTotal badge, and exclude the Atlas folder if your
 AV quarantines it. Details below under [Antivirus / VirusTotal](#antivirus--virustotal).
+
+<sub>The promised proper readme:</sub>
 
 ## Features
 
