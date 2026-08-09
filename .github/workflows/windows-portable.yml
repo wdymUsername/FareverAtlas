@@ -100,22 +100,17 @@ jobs:
           if [[ "${{ github.event_name }}" == "schedule" || "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             tag="Nightly"
           fi
-          exists="false"
-          if [[ -n "${tag}" ]] && gh release view "${tag}" >/dev/null 2>&1; then
-            exists="true"
-          fi
           sha="$(git rev-parse --short HEAD)"
           stamp="$(date -u +"%Y-%m-%d %H:%M:%S UTC")"
           body="Nightly portable Windows build from ${sha} (${stamp})."
           {
             echo "tag=${tag}"
-            echo "exists=${exists}"
             echo "body<<EOF"
             printf '%s\n' "${body}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
           if [[ -n "${tag}" ]]; then
-            echo "Publishing Nightly release (exists=${exists}, sha=${sha})"
+            echo "Publishing Nightly release (sha=${sha})"
           else
             echo "No Nightly publish for event ${{ github.event_name }}; artifact only"
           fi
@@ -134,6 +129,23 @@ jobs:
           files: |
             dist/FareverAtlas.exe
             dist/FareverAtlas.exe.sha256
+
+      - name: Refresh Nightly published timestamp
+        if: steps.release.outputs.id != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.release.outputs.id }}
+        run: |
+          set -euo pipefail
+          # GitHub only bumps published_at when a release goes draft → published.
+          # Asset/body edits alone leave the sidebar "X ago" stuck on first publish.
+          # Use JSON booleans; -f draft=true is sent as a string and is ignored.
+          repo="${{ github.repository }}"
+          gh api -X PATCH "repos/${repo}/releases/${RELEASE_ID}" --input - <<<'{"draft":true}' >/dev/null
+          gh api -X PATCH "repos/${repo}/releases/${RELEASE_ID}" --input - <<<'{"draft":false,"make_latest":"true"}' >/dev/null
+          published="$(gh api "repos/${repo}/releases/${RELEASE_ID}" --jq .published_at)"
+          echo "Nightly published_at=${published}"
 
       - name: Prepare VirusTotal API key
         id: vt_key
@@ -167,22 +179,6 @@ jobs:
             printf '%s\n' "$key"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
-
-      - name: Strip previous VirusTotal release notes
-        if: steps.vt_key.outputs.value != '' && steps.release_meta.outputs.exists == 'true'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: Nightly
-          BODY: ${{ steps.release_meta.outputs.body }}
-        run: |
-          set -euo pipefail
-          # softprops already wrote the fresh Nightly body; ensure no stale VT
-          # section remains before the scan step appends a new one.
-          notes_file="$(mktemp)"
-          printf '%s\n' "${BODY}" > "${notes_file}"
-          gh release edit "${TAG}" --notes-file "${notes_file}"
-          rm -f "${notes_file}"
 
       - name: VirusTotal scan release assets
         id: vt
