@@ -159,6 +159,11 @@ class RadarWidget(QtWidgets.QWidget):
     # every node is unreadable clutter, so node markers drop theirs. Live actors
     # keep theirs at every zoom - there are few of them and they still matter.
     NODE_Z_INDICATOR_MAX_RADIUS_M = 650.0
+    # How far the cached map-and-fog backdrop may scroll before it is redrawn.
+    # A 200 m view moves about nine pixels a second while walking, so this
+    # holds for roughly ten seconds; wider views hold far longer. Redrawing
+    # covers this margin too, which is why it is not simply enormous.
+    BACKGROUND_CACHE_PAD_PX = 96.0
     ICON_ATLAS_CELL_SIZE = 128
     ICON_ATLAS_COLUMNS = 8
     WAYPOINT_ICON_SIZE = 24
@@ -226,6 +231,15 @@ class RadarWidget(QtWidgets.QWidget):
         self.radius_m = 200.0
         self.target_radius_m = 200.0
         self.heading_up = False
+        # The view centre, parsed once per frame. See _view_center_xy.
+        self._view_center_memo_source: dict[str, Any] | None = None
+        self._view_center_memo = (0.0, 0.0)
+        # The map-and-fog backdrop, rendered oversized and scrolled. See
+        # _paint_background_cached.
+        self._background_cache: QtGui.QPixmap | None = None
+        self._background_key: tuple[Any, ...] | None = None
+        self._background_anchor = (0.0, 0.0)
+        self._background_map_drawn = False
         self.show_pois = True
         self.poi_kind_visibility: dict[str, bool] = {
             "obelisk": True,
@@ -1424,6 +1438,224 @@ class RadarWidget(QtWidgets.QWidget):
             f"{self.map_texture.diagnostic(player)}"
         )
 
+    def _view_center_xy(self, view_center: dict[str, Any]) -> tuple[float, float]:
+        """The view centre as plain floats, parsed once per frame.
+
+        _view_center() builds a fresh dict of floats per call, so the pair is
+        constant for a whole frame - yet it was parsed again for every marker
+        placed or tested against the viewport, which at a few hundred markers
+        came to thousands of redundant lookups a frame. The source dict is kept
+        alive so its identity cannot be recycled under the memo.
+        """
+        if view_center is self._view_center_memo_source:
+            return self._view_center_memo
+        parsed = (
+            safe_float(view_center.get("x")),
+            safe_float(view_center.get("y")),
+        )
+        self._view_center_memo_source = view_center
+        self._view_center_memo = parsed
+        return parsed
+
+    def _paint_background(
+        self,
+        painter: QtGui.QPainter,
+        *,
+        viewport: QtCore.QRectF,
+        center: QtCore.QPointF,
+        pixels_per_metre: float,
+        view_center: dict[str, Any],
+        player: dict[str, Any],
+    ) -> bool:
+        """Draw the map texture, its dim wash and the fog over `viewport`.
+
+        Written against whatever rectangle it is handed so the same code can
+        fill the widget directly or an oversized offscreen tile.
+        """
+        clip_shape = QtGui.QPainterPath()
+        clip_shape.addRect(viewport)
+        painter.save()
+        if self.heading_up:
+            painter.translate(center)
+            painter.rotate(-map_heading_degrees(player.get("heading")))
+            painter.translate(-center)
+        painter.setOpacity(0.92)
+        map_drawn = bool(
+            self.map_texture.draw_view(
+                painter,
+                target_rect=viewport,
+                view_center=view_center,
+                pixels_per_metre=pixels_per_metre,
+            )
+        )
+        if not map_drawn and not self.map_texture.image.isNull():
+            # Never present a featureless black square when telemetry and the
+            # calibration disagree. A dim full-zone texture makes the failure
+            # explicit while the projection self-check waits for POIs.
+            painter.setOpacity(0.38)
+            painter.drawImage(viewport, self.map_texture.image)
+        painter.restore()
+        painter.fillPath(clip_shape, QtGui.QColor(0, 0, 0, 24))
+        if map_drawn:
+            self.fog.paint(
+                painter,
+                viewport=viewport,
+                center=center,
+                pixels_per_metre=pixels_per_metre,
+                view_center=view_center,
+                world_to_screen=self._world_to_screen,
+                draft_ring=self._fow_line_draft if self._fow_line_tool else None,
+                draft_cursor=self._fow_line_cursor if self._fow_line_tool else None,
+                show_custom_handles=bool(
+                    self._fow_line_tool and not self._fow_line_draft
+                ),
+                handle_layer=self._fow_edit_layer,
+                selected_vertices=self._fow_selected if self._fow_line_tool else None,
+                hover_ring=self._fow_hover_ring,
+                hover_vertex=self._fow_hover_vertex,
+                hover_edge=self._fow_hover_edge,
+                active_ring=self._fow_edit_ring if self._fow_edit_dragging else None,
+                active_vertex=(
+                    self._fow_edit_vertex if self._fow_edit_dragging else None
+                ),
+                map_texture=self.map_texture,
+            )
+        return map_drawn
+
+    def _background_is_interactive(self) -> bool:
+        """Whether the fog editor is drawing something that follows the cursor.
+
+        Handles, hover highlights and the draft ring change between frames
+        without the world changing, so those frames cannot come from a cache
+        keyed on the world.
+        """
+        return bool(
+            self._fow_line_tool
+            or self._fow_edit_dragging
+            or self._fow_hover_ring is not None
+            or self._fow_hover_vertex is not None
+            or self._fow_hover_edge is not None
+        )
+
+    def _background_cache_key(
+        self, viewport: QtCore.QRectF, pixels_per_metre: float
+    ) -> tuple[Any, ...]:
+        """Everything the backdrop depends on except where the view sits."""
+        fog = self.fog
+        return (
+            round(viewport.width(), 3),
+            round(viewport.height(), 3),
+            round(pixels_per_metre, 9),
+            self._paint_dpr,
+            bool(self.show_texture),
+            # Identity alone would be reused if a replacement landed on the
+            # freed object's address, so pair it with the label.
+            id(self.map_texture),
+            getattr(self.map_texture, "label", ""),
+            bool(fog.enabled),
+            fog.accessible_tiers,
+            fog.world_path_generation,
+        )
+
+    def _paint_background_cached(
+        self,
+        painter: QtGui.QPainter,
+        *,
+        viewport: QtCore.QRectF,
+        center: QtCore.QPointF,
+        pixels_per_metre: float,
+        view_center: dict[str, Any],
+        player: dict[str, Any],
+    ) -> bool:
+        """Paint the backdrop, reusing the last one when only the view moved.
+
+        Redrawing the map and fog is the single most expensive thing a frame
+        does, yet at a 200 m view walking shifts them about a seventh of a
+        pixel between frames. The backdrop is therefore drawn once onto a tile
+        larger than the widget and afterwards simply scrolled, which resamples
+        it a touch but costs a blit instead of a full redraw.
+        """
+        def direct() -> bool:
+            return self._paint_background(
+                painter,
+                viewport=viewport,
+                center=center,
+                pixels_per_metre=pixels_per_metre,
+                view_center=view_center,
+                player=player,
+            )
+
+        if self.heading_up or self._background_is_interactive():
+            self._background_cache = None
+            return direct()
+
+        center_x, center_y = self._view_center_xy(view_center)
+        if not (math.isfinite(center_x) and math.isfinite(center_y)):
+            self._background_cache = None
+            return direct()
+
+        key = self._background_cache_key(viewport, pixels_per_metre)
+        pad = self.BACKGROUND_CACHE_PAD_PX
+        offset_x = (center_x - self._background_anchor[0]) * pixels_per_metre
+        offset_y = (center_y - self._background_anchor[1]) * pixels_per_metre
+        if (
+            self._background_cache is None
+            or self._background_key != key
+            or abs(offset_x) > pad
+            or abs(offset_y) > pad
+        ):
+            self._rebuild_background_cache(
+                viewport, pixels_per_metre, center_x, center_y, key, player
+            )
+            offset_x = 0.0
+            offset_y = 0.0
+        if self._background_cache is None:
+            return direct()
+        painter.drawPixmap(
+            QtCore.QPointF(
+                viewport.left() - pad - offset_x,
+                viewport.top() - pad - offset_y,
+            ),
+            self._background_cache,
+        )
+        return self._background_map_drawn
+
+    def _rebuild_background_cache(
+        self,
+        viewport: QtCore.QRectF,
+        pixels_per_metre: float,
+        center_x: float,
+        center_y: float,
+        key: tuple[Any, ...],
+        player: dict[str, Any],
+    ) -> None:
+        pad = self.BACKGROUND_CACHE_PAD_PX
+        dpr = self._paint_dpr or 1.0
+        width = viewport.width() + 2.0 * pad
+        height = viewport.height() + 2.0 * pad
+        pixmap = QtGui.QPixmap(
+            max(1, math.ceil(width * dpr)), max(1, math.ceil(height * dpr))
+        )
+        pixmap.setDevicePixelRatio(dpr)
+        pixmap.fill(QtCore.Qt.GlobalColor.transparent)
+        tile = QtGui.QPainter(pixmap)
+        tile.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        tile.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform)
+        padded = QtCore.QRectF(0.0, 0.0, width, height)
+        drawn = self._paint_background(
+            tile,
+            viewport=padded,
+            center=padded.center(),
+            pixels_per_metre=pixels_per_metre,
+            view_center={"x": center_x, "y": center_y},
+            player=player,
+        )
+        tile.end()
+        self._background_cache = pixmap
+        self._background_key = key
+        self._background_anchor = (center_x, center_y)
+        self._background_map_drawn = drawn
+
     def _north_up_point(
         self,
         obj: dict[str, Any],
@@ -1432,8 +1664,9 @@ class RadarWidget(QtWidgets.QWidget):
         view_center: dict[str, Any],
     ) -> QtCore.QPointF:
         # World-space orientation is authoritative: +X east/right, +Y south/down.
-        dx = safe_float(obj.get("x")) - safe_float(view_center.get("x"))
-        dy = safe_float(obj.get("y")) - safe_float(view_center.get("y"))
+        center_x, center_y = self._view_center_xy(view_center)
+        dx = safe_float(obj.get("x")) - center_x
+        dy = safe_float(obj.get("y")) - center_y
         return center + QtCore.QPointF(dx * pixels_per_metre, dy * pixels_per_metre)
 
     def _world_to_screen(
@@ -2129,8 +2362,9 @@ class RadarWidget(QtWidgets.QWidget):
             half_width_m, half_height_m = self._view_half_extents(
                 viewport, margin_pixels
             )
-        dx = abs(safe_float(obj.get("x")) - safe_float(view_center.get("x")))
-        dy = abs(safe_float(obj.get("y")) - safe_float(view_center.get("y")))
+        center_x, center_y = self._view_center_xy(view_center)
+        dx = abs(safe_float(obj.get("x")) - center_x)
+        dy = abs(safe_float(obj.get("y")) - center_y)
         return dx <= half_width_m and dy <= half_height_m
 
     def _cancel_cursor_release_ease(self) -> None:
@@ -3324,54 +3558,16 @@ class RadarWidget(QtWidgets.QWidget):
             self.show_texture and self.map_texture is not None and not local_instance
         )
         if draw_texture:
-            painter.save()
-            if self.heading_up:
-                painter.translate(center)
-                painter.rotate(-map_heading_degrees(player.get("heading")))
-                painter.translate(-center)
-            painter.setOpacity(0.92)
-            map_drawn = bool(
-                self.map_texture.draw_view(
-                    painter,
-                    target_rect=viewport,
-                    view_center=view_center,
-                    pixels_per_metre=pixels_per_metre,
-                )
+            map_drawn = self._paint_background_cached(
+                painter,
+                viewport=viewport,
+                center=center,
+                pixels_per_metre=pixels_per_metre,
+                view_center=view_center,
+                player=player,
             )
-            if not map_drawn and not self.map_texture.image.isNull():
-                # Never present a featureless black square when telemetry and the
-                # calibration disagree. A dim full-zone texture makes the failure
-                # explicit while the projection self-check waits for POIs.
-                painter.setOpacity(0.38)
-                painter.drawImage(viewport, self.map_texture.image)
-            painter.restore()
-            painter.fillPath(clip_shape, QtGui.QColor(0, 0, 0, 24))
-            if map_drawn:
-                self.fog.paint(
-                    painter,
-                    viewport=viewport,
-                    center=center,
-                    pixels_per_metre=pixels_per_metre,
-                    view_center=view_center,
-                    world_to_screen=self._world_to_screen,
-                    draft_ring=self._fow_line_draft if self._fow_line_tool else None,
-                    draft_cursor=self._fow_line_cursor if self._fow_line_tool else None,
-                    show_custom_handles=bool(
-                        self._fow_line_tool and not self._fow_line_draft
-                    ),
-                    handle_layer=self._fow_edit_layer,
-                    selected_vertices=self._fow_selected if self._fow_line_tool else None,
-                    hover_ring=self._fow_hover_ring,
-                    hover_vertex=self._fow_hover_vertex,
-                    hover_edge=self._fow_hover_edge,
-                    active_ring=self._fow_edit_ring if self._fow_edit_dragging else None,
-                    active_vertex=(
-                        self._fow_edit_vertex if self._fow_edit_dragging else None
-                    ),
-                    map_texture=self.map_texture,
-                )
-                if self._fow_line_tool:
-                    self._fow_paint_marquee(painter)
+            if map_drawn and self._fow_line_tool:
+                self._fow_paint_marquee(painter)
         elif local_instance:
             painter.fillPath(clip_shape, QtGui.QColor("#0a0f08"))
             instance = self._instance_state()
