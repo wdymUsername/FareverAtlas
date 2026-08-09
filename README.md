@@ -12,6 +12,30 @@ bridge. It does not write game memory.
 
 Start Farever and log in to a character before launching Atlas.
 
+## TL;DR
+
+**What it is.** Live map + companion for Farever. Start the game, log in, then
+launch Atlas (portable Windows exe, or `./farever start` on Linux / Proton).
+
+**Features (working).** Live player / party / nearby actors on the world map;
+POI and loot filters; NODE GUIDE routing for gatherables; fog of war;
+waypoints; instance roster and local friends; currencies, day cycle, and
+Nightling Rift timer. DPS meter and Planner are still WIP.
+
+**Safety.** Atlas hooks into and only reads the memory of another piece of
+software — in this case, a game. The native bridge opens Farever with
+query + `PROCESS_VM_READ` rights only. It does not write game memory, inject
+code, simulate input, or network out. Unknown Farever builds are rejected
+instead of guessed.
+
+**Antivirus.** That read-only memory access may be seen as potentially
+malicious — though it is not inherently malicious — and can therefore falsely
+trigger antivirus software. PyInstaller packaging, no code signing, and a
+fresh Nightly hash make false positives more likely. Prefer the
+[Nightly release](https://github.com/wdymUsername/FareverAtlas/releases/tag/Nightly),
+check the `.sha256` / VirusTotal badge, and exclude the Atlas folder if your
+AV quarantines it. Details below under [Antivirus / VirusTotal](#antivirus--virustotal).
+
 ## Features
 
 ### Working
