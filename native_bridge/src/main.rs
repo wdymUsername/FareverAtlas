@@ -149,6 +149,153 @@ mod windows_bridge {
     const ENEMY_SWEEP_RADIUS: f64 = 500.0;
     const ENEMY_SWEEP_Z_CULL: f64 = 120.0;
     const ENEMY_SWEEP_MAX: usize = 150;
+    // Companion critters (cdb unit.type Critter). Still ent.Foe at runtime;
+    // classified by kind list. Full layer like players (units+entities, no
+    // XY/Z cull); budget only. Foe-type checks are type-pointer cached.
+    const CRITTER_SWEEP_MAX: usize = 120;
+    const CRITTER_KINDS: &[&str] = &[
+        "DemonDog_Beige",
+        "DemonDog_Blue",
+        "DemonDog_Blue02",
+        "DemonDog_Orange",
+        "DemonDog_Purple",
+        "DemonDog_Red",
+        "Frog_Blue",
+        "Frog_BlueGreen",
+        "Frog_BluePurple",
+        "Frog_Brown",
+        "Frog_Demon",
+        "Frog_Green",
+        "Frog_RedOrange",
+        "Frog_Spark",
+        "Frog_Yellow",
+        "Goat_Beige01",
+        "Goat_Beige02",
+        "Goat_Black",
+        "Goat_Brown",
+        "Goat_Demon",
+        "Goat_Grey",
+        "Goat_Spark",
+        "Ladybug_Blue",
+        "Ladybug_Demon",
+        "Ladybug_Green",
+        "Ladybug_Purple",
+        "Ladybug_Red",
+        "Ladybug_Spark",
+        "Ladybug_Yellow",
+        "Lizard_Blue",
+        "Lizard_BlueOrange",
+        "Lizard_Demon",
+        "Lizard_Green",
+        "Lizard_RedOrange",
+        "Lizard_Spark",
+        "Lizard_Yellow",
+        "Rabbit_Brown",
+        "Rabbit_Demon",
+        "Rabbit_EarlyAccess_Spark",
+        "Rabbit_Green",
+        "Rabbit_Grey",
+        "Rabbit_Pink",
+        "Rabbit_Spark",
+        "Rabbit_Yellow",
+        "Rabbit_Yellow02",
+        "Sheep_Beige",
+        "Sheep_Black",
+        "Sheep_Black02",
+        "Sheep_Brown",
+        "Sheep_Brown02",
+        "Sheep_Demon",
+        "Sheep_Spark",
+        "Squirrel_Blue",
+        "Squirrel_Brown",
+        "Squirrel_Demon",
+        "Squirrel_Green",
+        "Squirrel_Grey",
+        "Squirrel_Red",
+        "Squirrel_Spark",
+        "StinkBug_Blue",
+        "StinkBug_Demon",
+        "StinkBug_Green",
+        "StinkBug_Purple",
+        "StinkBug_RedOrange",
+        "StinkBug_Spark",
+        "Turtle_Blue",
+        "Turtle_Demon",
+        "Turtle_Green",
+        "Turtle_Grey",
+        "Turtle_Pink",
+        "Turtle_Red",
+        "Turtle_Spark",
+        "Turtle_Yellow",
+        "YellowRabbits",
+    ];
+    const SPARK_KINDS: &[&str] = &[
+        "Bee_Z1W_U",
+        "Bee_Z2W_U",
+        "Boar_Z2W_U",
+        "Crab_Z1W_U",
+        "Elemental_Z1W_Earth_U",
+        "Elemental_Z2W_Underwater_U",
+        "FaerieBee_Z1W_Spear_U",
+        "FaerieBee_Z2W_GreatMace_U",
+        "FaerieBee_Z2W_GreatMace_U_2",
+        "FaerieBee_Z2W_Spear_U",
+        "Frog_Spark",
+        "GiantCrab_Z1W_U",
+        "Goat_Spark",
+        "Golem_Z2W_U",
+        "Kobold_Z1W_Mace_U",
+        "Ladybug_Spark",
+        "Lizard_Spark",
+        "Manfish_Z1W_U_Caster",
+        "OgreKobold_Z1W_Claws_U",
+        "OgreManfish_Z1W_Claws_U",
+        "Rabbit_EarlyAccess_Spark",
+        "Rabbit_Spark",
+        "Sheep_Spark",
+        "Skunk_Z1W_U",
+        "Slime_Z1W_U",
+        "Sprout_Rice_Z2W_U",
+        "Squirrel_Spark",
+        "StinkBug_Spark",
+        "TODO_Crocopork_Spark",
+        "TODO_OgreBagon_Spark",
+        "TODO_SnowPanther_Spark",
+        "TODO_Sprout_Garlic_Spark",
+        "TODO_Sprout_Onion_Spark",
+        "TODO_Sprout_Turnip_Spark",
+        "Turtle_Spark",
+        "Wolf_Z2W_U",
+    ];
+    fn kind_in_list(kind: &str, list: &[&str]) -> bool {
+        list.binary_search(&kind).is_ok()
+    }
+
+    /// `object_is_a` for foes, cached by the object's concrete type pointer.
+    /// Walking `GameLayer.entities` hits the same few classes thousands of
+    /// times; without this cache the inheritance walk starves other sweeps.
+    fn object_is_foe_cached(
+        process: &OwnedHandle,
+        object_address: usize,
+        foe_type: usize,
+        cache: &mut HashMap<usize, bool>,
+    ) -> bool {
+        let Ok(bytes) = read_process_bytes(process, object_address, 8) else {
+            return false;
+        };
+        let Ok(type_address) = read_u64_le(&bytes, 0).map(|value| value as usize) else {
+            return false;
+        };
+        if type_address == 0 {
+            return false;
+        }
+        if let Some(&known) = cache.get(&type_address) {
+            return known;
+        }
+        let known = object_is_a(process, object_address, foe_type);
+        cache.insert(type_address, known);
+        known
+    }
     // Layer roster of non-party players (GameLayer.units + entities / ent.Hero).
     // No range cull — distance is display-only — matching FareverMeter's
     // uncapped hero sweep (SWEEP_MAX=400, array length bound 20000).
@@ -537,10 +684,12 @@ mod windows_bridge {
     struct EnemySample {
         address: usize,
         kind: String,
+        spark: bool,
         x: f64,
         y: f64,
         z: f64,
     }
+
 
     /// Live heroes on the current GameLayer that are not the local player and
     /// not in the party. Distance is for UI sort/display only.
@@ -1216,6 +1365,8 @@ mod windows_bridge {
         })
     }
 
+    /// Nearby combat foes only. Companion critters are excluded here and
+    /// collected by `read_layer_critters` (full-layer, no range cull).
     fn read_nearby_enemies(
         process: &OwnedHandle,
         code: &CodeAnchor,
@@ -1244,8 +1395,8 @@ mod windows_bridge {
                 .try_into()
                 .unwrap(),
         );
-        if !(0..=2_000).contains(&length) {
-            return Err("GameLayer.units has an invalid length".to_owned());
+        if length <= 0 || length > PLAYER_ARRAY_LENGTH_MAX {
+            return Ok(Vec::new());
         }
         let storage = read_object_pointer_field(process, units, root.array_storage_offset)?;
         if storage == 0 {
@@ -1284,6 +1435,21 @@ mod windows_bridge {
             if summon_owner != 0 {
                 continue;
             }
+            let kind = read_object_pointer_field(process, unit, root.unit_kind_offset)
+                .ok()
+                .and_then(|kind_pointer| {
+                    read_hashlink_identifier(
+                        process,
+                        code.types_address,
+                        kind_pointer,
+                        "enemy unit kind",
+                    )
+                    .ok()
+                })
+                .unwrap_or_default();
+            if kind_in_list(&kind, CRITTER_KINDS) {
+                continue;
+            }
             let Ok(x_bytes) = read_process_bytes(process, unit + root.position_x_offset, 8) else {
                 continue;
             };
@@ -1316,20 +1482,9 @@ mod windows_bridge {
             if (z - player_z).abs() > ENEMY_SWEEP_Z_CULL {
                 continue;
             }
-            let kind = read_object_pointer_field(process, unit, root.unit_kind_offset)
-                .ok()
-                .and_then(|kind_pointer| {
-                    read_hashlink_identifier(
-                        process,
-                        code.types_address,
-                        kind_pointer,
-                        "enemy unit kind",
-                    )
-                    .ok()
-                })
-                .unwrap_or_default();
             enemies.push(EnemySample {
                 address: unit,
+                spark: kind_in_list(&kind, SPARK_KINDS),
                 kind,
                 x: (x * 10.0).round() / 10.0,
                 y: (y * 10.0).round() / 10.0,
@@ -1337,6 +1492,179 @@ mod windows_bridge {
             });
         }
         Ok(enemies)
+    }
+
+    /// Full-layer wild companion critters for the map (uncapped range).
+    ///
+    /// Same walk as players: `units` then `entities`, no XY/Z cull. Critters
+    /// are `ent.Foe` at runtime; classified by CastleDB Critter kind list.
+    /// Foe-type checks are cached by concrete type pointer so the entities
+    /// pass stays cheap (unlike a naive per-object inheritance walk).
+    ///
+    /// Only unowned (wild) Critter kinds are emitted — companion pets with
+    /// `Foe.summonOwner` set are skipped, matching FareverMeter.
+    fn read_layer_critters(
+        process: &OwnedHandle,
+        code: &CodeAnchor,
+        hero: usize,
+    ) -> Result<Vec<EnemySample>, String> {
+        let root = &code.player_root;
+        let layer = read_object_pointer_field(process, hero, root.layer_offset)?;
+        if layer == 0
+            || read_u64_le(&read_process_bytes(process, layer, 8)?, 0)? as usize
+                != code.types_address + GAME_LAYER_TYPE_INDEX * 32
+        {
+            return Ok(Vec::new());
+        }
+        let foe_type = code.types_address + FOE_TYPE_INDEX * 32;
+        let mut critters = Vec::new();
+        let mut seen = HashSet::new();
+        let mut foe_type_cache = HashMap::new();
+        for array_offset in [
+            root.game_layer_units_offset,
+            root.game_layer_entities_offset,
+        ] {
+            append_layer_critters_from_array(
+                process,
+                code,
+                root,
+                layer,
+                array_offset,
+                hero,
+                foe_type,
+                &mut seen,
+                &mut foe_type_cache,
+                &mut critters,
+            );
+            if critters.len() >= CRITTER_SWEEP_MAX {
+                break;
+            }
+        }
+        Ok(critters)
+    }
+
+    fn append_layer_critters_from_array(
+        process: &OwnedHandle,
+        code: &CodeAnchor,
+        root: &PlayerRoot,
+        layer: usize,
+        array_field_offset: usize,
+        local_hero: usize,
+        foe_type: usize,
+        seen: &mut HashSet<usize>,
+        foe_type_cache: &mut HashMap<usize, bool>,
+        critters: &mut Vec<EnemySample>,
+    ) {
+        let Ok(units) = read_object_pointer_field(process, layer, array_field_offset) else {
+            return;
+        };
+        if units == 0 {
+            return;
+        }
+        let Ok(units_ty) = read_u64_le(&read_process_bytes(process, units, 8).unwrap_or_default(), 0)
+            .map(|value| value as usize)
+        else {
+            return;
+        };
+        if units_ty != code.types_address + ARRAY_OBJ_TYPE_INDEX * 32 {
+            return;
+        }
+        let length = i32::from_le_bytes(
+            read_process_bytes(process, units + root.array_length_offset, 4)
+                .unwrap_or_else(|_| vec![0, 0, 0, 0])
+                .try_into()
+                .unwrap_or([0, 0, 0, 0]),
+        );
+        if length <= 0 || length > PLAYER_ARRAY_LENGTH_MAX {
+            return;
+        }
+        let Ok(storage) = read_object_pointer_field(process, units, root.array_storage_offset) else {
+            return;
+        };
+        if storage == 0 {
+            return;
+        }
+        for index in 0..length as usize {
+            if critters.len() >= CRITTER_SWEEP_MAX {
+                break;
+            }
+            let Some(entry) = storage.checked_add(24 + index * 8) else {
+                continue;
+            };
+            let Ok(entry_bytes) = read_process_bytes(process, entry, 8) else {
+                continue;
+            };
+            let Ok(unit) = read_u64_le(&entry_bytes, 0).map(|value| value as usize) else {
+                continue;
+            };
+            if unit == 0 || unit == local_hero || !seen.insert(unit) {
+                continue;
+            }
+            if !object_is_foe_cached(process, unit, foe_type, foe_type_cache) {
+                continue;
+            }
+            let Ok(removed) = read_process_bytes(process, unit + root.state_removed_offset, 1) else {
+                continue;
+            };
+            if removed[0] != 0 {
+                continue;
+            }
+            let Ok(summon_owner) =
+                read_object_pointer_field(process, unit, root.foe_summon_owner_offset)
+            else {
+                continue;
+            };
+            if summon_owner != 0 {
+                continue;
+            }
+            let kind = read_object_pointer_field(process, unit, root.unit_kind_offset)
+                .ok()
+                .and_then(|kind_pointer| {
+                    read_hashlink_identifier(
+                        process,
+                        code.types_address,
+                        kind_pointer,
+                        "critter unit kind",
+                    )
+                    .ok()
+                })
+                .unwrap_or_default();
+            if !kind_in_list(&kind, CRITTER_KINDS) {
+                continue;
+            }
+            let Ok(x_bytes) = read_process_bytes(process, unit + root.position_x_offset, 8) else {
+                continue;
+            };
+            let Ok(y_bytes) = read_process_bytes(process, unit + root.position_y_offset, 8) else {
+                continue;
+            };
+            let Ok(z_bytes) = read_process_bytes(process, unit + root.position_z_offset, 8) else {
+                continue;
+            };
+            let Ok(x) = read_f64_le(&x_bytes, 0) else {
+                continue;
+            };
+            let Ok(y) = read_f64_le(&y_bytes, 0) else {
+                continue;
+            };
+            let Ok(z) = read_f64_le(&z_bytes, 0) else {
+                continue;
+            };
+            if [x, y, z]
+                .iter()
+                .any(|value| !value.is_finite() || value.abs() > 10_000_000.0)
+            {
+                continue;
+            }
+            critters.push(EnemySample {
+                address: unit,
+                spark: kind_in_list(&kind, SPARK_KINDS),
+                kind,
+                x: (x * 10.0).round() / 10.0,
+                y: (y * 10.0).round() / 10.0,
+                z: (z * 10.0).round() / 10.0,
+            });
+        }
     }
 
     /// Full GameLayer hero roster for the Players page / map (non-party).
@@ -3871,7 +4199,7 @@ mod windows_bridge {
 
     fn waiting_report(sequence: u64, timestamp_ms: u128, message: &str) -> String {
         format!(
-            "{{\"schema\":1,\"bridge_version\":\"0.23.6\",\"state\":\"waiting\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"message\":{}}}\n",
+            "{{\"schema\":1,\"bridge_version\":\"0.23.19\",\"state\":\"waiting\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"message\":{}}}\n",
             json_string(message)
         )
     }
@@ -4457,6 +4785,8 @@ mod windows_bridge {
                             sample.z,
                         )
                         .unwrap_or_default();
+                        let critters = read_layer_critters(process, code, sample.hero)
+                            .unwrap_or_default();
                         let layer_players = read_layer_players(
                             process,
                             code,
@@ -4504,12 +4834,28 @@ mod windows_bridge {
                             .iter()
                             .map(|enemy| {
                                 format!(
-                                    "{{\"id\":\"0x{:x}\",\"kind\":{},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}}}}",
+                                    "{{\"id\":\"0x{:x}\",\"kind\":{},\"spark\":{},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}}}}",
                                     enemy.address,
                                     json_string(&enemy.kind),
+                                    if enemy.spark { "true" } else { "false" },
                                     enemy.x,
                                     enemy.y,
                                     enemy.z,
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        let critters_json = critters
+                            .iter()
+                            .map(|critter| {
+                                format!(
+                                    "{{\"id\":\"0x{:x}\",\"kind\":{},\"spark\":{},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}}}}",
+                                    critter.address,
+                                    json_string(&critter.kind),
+                                    if critter.spark { "true" } else { "false" },
+                                    critter.x,
+                                    critter.y,
+                                    critter.z,
                                 )
                             })
                             .collect::<Vec<_>>()
@@ -4597,7 +4943,7 @@ mod windows_bridge {
                             .join(",");
                         (
                             format!(
-                                "{{\"schema\":1,\"bridge_version\":\"0.23.6\",\"state\":\"connected\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"game_app_address\":\"0x{:x}\",\"player_address\":\"0x{:x}\",\"hero_address\":\"0x{:x}\",\"player\":{{\"name\":{},\"uid\":{},\"class\":{},\"level\":{},\"in_combat\":{},\"vitality\":{},\"health\":{},\"max_health\":{},\"health_regen\":{},\"shield\":{},\"shield_ratio\":{},\"shield_capacity\":{},\"shield_gauge_visible\":{},\"raw_shield\":{},\"shield_gauge_available\":{},\"special_energy\":{},\"special_energy_regen\":{},\"currencies\":[{currencies_json}],\"currency_counters\":{{{currency_counters_json}}}}},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}},\"rotation_z\":{},\"camera_yaw\":{camera_yaw_json},\"party\":[{}],\"enemies\":[{}],\"players\":[{}],\"interactibles\":[{}],\"instance\":{instance_json},\"time_of_day\":{time_of_day_json},\"completed_elements\":[{}],\"dps\":{{\"mode\":\"observed_nearby\",\"fight_id\":{},\"current\":{},\"total\":{},\"elapsed\":{},\"in_combat\":{},\"damage_skills\":[{{\"skill\":\"Observed nearby damage\",\"total\":{},\"hits\":0,\"crits\":0,\"max\":0}}],\"healing_skills\":[]}}}}\n",
+                                "{{\"schema\":1,\"bridge_version\":\"0.23.19\",\"state\":\"connected\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"game_app_address\":\"0x{:x}\",\"player_address\":\"0x{:x}\",\"hero_address\":\"0x{:x}\",\"player\":{{\"name\":{},\"uid\":{},\"class\":{},\"level\":{},\"in_combat\":{},\"vitality\":{},\"health\":{},\"max_health\":{},\"health_regen\":{},\"shield\":{},\"shield_ratio\":{},\"shield_capacity\":{},\"shield_gauge_visible\":{},\"raw_shield\":{},\"shield_gauge_available\":{},\"special_energy\":{},\"special_energy_regen\":{},\"currencies\":[{currencies_json}],\"currency_counters\":{{{currency_counters_json}}}}},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}},\"rotation_z\":{},\"camera_yaw\":{camera_yaw_json},\"party\":[{}],\"enemies\":[{}],\"critters\":[{}],\"players\":[{}],\"interactibles\":[{}],\"instance\":{instance_json},\"time_of_day\":{time_of_day_json},\"completed_elements\":[{}],\"dps\":{{\"mode\":\"observed_nearby\",\"fight_id\":{},\"current\":{},\"total\":{},\"elapsed\":{},\"in_combat\":{},\"damage_skills\":[{{\"skill\":\"Observed nearby damage\",\"total\":{},\"hits\":0,\"crits\":0,\"max\":0}}],\"healing_skills\":[]}}}}\n",
                                 sample.game_app,
                                 sample.player,
                                 sample.hero,
@@ -4624,6 +4970,7 @@ mod windows_bridge {
                                 sample.rotation,
                                 party_json,
                                 enemies_json,
+                                critters_json,
                                 players_json,
                                 interactibles_json,
                                 completed_elements_json,

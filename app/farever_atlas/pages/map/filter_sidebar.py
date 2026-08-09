@@ -104,7 +104,9 @@ class FilterSidebarMixin:
             page_layout.addStretch(1)
             return page
 
-        actors_page = _chip_grid_page([self.enemies_filter, self.players_filter])
+        actors_page = _chip_grid_page(
+            [self.enemies_filter, self.critters_filter, self.players_filter]
+        )
         self.sidebar_filter_stack.addWidget(actors_page)
 
         poi_page = _chip_grid_page(

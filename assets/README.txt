@@ -4,6 +4,7 @@ Supported files:
 - map/w1_siagarta.webp
 - map/w1_siagarta.json
 - pois_W1_Siagarta.json
+- critter_spawns_W1_Siagarta.json (wild companion spawn points from map prefabs)
 - activities.png
 - rift_icon_128.png
 - currency_gold.png
@@ -11,6 +12,7 @@ Supported files:
 - currency_demonic_soul.png
 - currency_nightblood.png
 - currency_caps.json (from data.cdb item.props.currency.max)
+- unit_traits.json (critter + Spark kind lists from CastleDB unit sheet)
 - redOrb.webp
 - plant.webp
 - ore.webp
@@ -30,6 +32,11 @@ them from Farever's res.map.pak with:
 
 POI dataset and activity icon atlas stay at the assets root so Atlas does not
 depend on files installed into the Farever game folder.
+
+Wild critter spawn points (authored map spawners, not live entities) are in
+critter_spawns_W1_Siagarta.json. Rebuild from extracted res.map + data.cdb with:
+
+  python tools/extract_critter_spawns.py
 
 UI fonts are prepared by `python -m farever_atlas.fonts` (also run by
 ./farever setup, farever.bat setup, and the Windows packaging scripts). That
