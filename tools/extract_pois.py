@@ -11,12 +11,15 @@ farever-minimap / game data). Prefab export issues this tool corrects:
 
 Activity snap targets (first matching child under the activity node):
 
-  ChestOrb / WorldCamp     → OrbChest / CampChest
-  FightStone               → FightStone.prefab
+  ChestOrb / WorldCamp     → OrbChest / CampChest (Heaps rotationZ)
+  FightStone               → FightStone.prefab (standard rotationZ; matches live)
   TimerCollectRun          → TimerCollectOrbFirstOrb (start orb)
   Ascension                → Ascension_Start
   MountRush                → MountRush_Start
   WorldElite / WorldPlant  → activity root (no useful child offset)
+
+FightStone interactibles disagree with the Heaps child transform used for
+Orb/Camp chests — their live XY matches a standard CCW rotationZ instead.
 
 Usage:
     python tools/extract_pois.py
@@ -49,12 +52,13 @@ _ACTIVITY_CHEST_SOURCES = frozenset(
     }
 )
 _VAULT_CHEST_SOURCE = "Gameplay/Elements/Activities/VaultChest.prefab"
+_FIGHT_STONE_SOURCE = "Gameplay/Elements/Activities/FightStone.prefab"
 
 # subkind (lower) → preferred child source paths, in priority order.
 _ACTIVITY_ANCHOR_SOURCES: dict[str, tuple[str, ...]] = {
     "chestorb": ("Gameplay/Elements/Activities/OrbChest.prefab",),
     "worldcamp": ("Gameplay/Elements/Activities/CampChest.prefab",),
-    "fightstone": ("Gameplay/Elements/Activities/FightStone.prefab",),
+    "fightstone": (_FIGHT_STONE_SOURCE,),
     "timercollectrun": (
         "Gameplay/Elements/Activities/TimerCollectOrbFirstOrb.prefab",
     ),
@@ -65,6 +69,26 @@ _ACTIVITY_ANCHOR_SOURCES: dict[str, tuple[str, ...]] = {
 
 def round4(value: float) -> float:
     return round(float(value) * 10000.0) / 10000.0
+
+
+def _heaps_offset(lx: float, ly: float, rot: float) -> tuple[float, float]:
+    """Farever/Heaps horizontal offset (matches Orb/Camp live positions)."""
+    if not rot:
+        return lx, ly
+    angle = math.radians(rot)
+    cos_a = math.cos(angle)
+    sin_a = math.sin(angle)
+    return lx * sin_a - ly * cos_a, lx * cos_a + ly * sin_a
+
+
+def _standard_offset(lx: float, ly: float, rot: float) -> tuple[float, float]:
+    """Standard CCW rotationZ offset (matches live FightStone interactibles)."""
+    if not rot:
+        return lx, ly
+    angle = math.radians(rot)
+    cos_a = math.cos(angle)
+    sin_a = math.sin(angle)
+    return lx * cos_a - ly * sin_a, lx * sin_a + ly * cos_a
 
 
 def _pos_delta(poi: dict[str, Any], pref: dict[str, Any]) -> float:
@@ -125,14 +149,8 @@ def collect_prefab_data() -> tuple[
             lx = float(node.get("x") or 0.0)
             ly = float(node.get("y") or 0.0)
             lz = float(node.get("z") or 0.0)
-            dx, dy = lx, ly
-            if rot:
-                # Must match tools/hbson.py walk_nodes (Farever/Heaps convention).
-                angle = math.radians(rot)
-                cos_a = math.cos(angle)
-                sin_a = math.sin(angle)
-                dx = lx * sin_a - ly * cos_a
-                dy = lx * cos_a + ly * sin_a
+            # Tree walk stays on Heaps offsets (Orb/Camp + nested ids).
+            dx, dy = _heaps_offset(lx, ly, rot)
             x = ox + dx
             y = oy + dy
             z = oz + lz
@@ -144,9 +162,15 @@ def collect_prefab_data() -> tuple[
             zone = props_d.get("zoneBaked")
             zone_s = zone if isinstance(zone, str) else None
             name = props_d.get("name") or node.get("name")
+            # Live FightStone chests use standard rotationZ on this child only.
+            if source == _FIGHT_STONE_SOURCE:
+                sdx, sdy = _standard_offset(lx, ly, rot)
+                rec_x, rec_y = ox + sdx, oy + sdy
+            else:
+                rec_x, rec_y = x, y
             rec = {
-                "x": round4(x),
-                "y": round4(y),
+                "x": round4(rec_x),
+                "y": round4(rec_y),
                 "z": round4(z),
                 "source_tile": tile,
                 "zone": zone_s,

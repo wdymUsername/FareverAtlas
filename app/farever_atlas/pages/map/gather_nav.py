@@ -61,7 +61,9 @@ _TYPE_LABELS = {
 }
 
 # Activity-linked chests — found via quest/activity progression, not NODE GUIDE.
-_ACTIVITY_CHEST_TYPES = frozenset({"orbchest", "chestorb", "campchest", "vaultchest"})
+_ACTIVITY_CHEST_TYPES = frozenset(
+    {"orbchest", "chestorb", "campchest", "vaultchest", "fightstone"}
+)
 
 _PLANT_TYPE_FALLBACKS = (
     "lavendula",
@@ -1076,6 +1078,12 @@ class GatherNavMixin:
             for live in sized_live:
                 live_id = str(live.get("id") or "")
                 if live_id and live_id in covered_live_ids:
+                    continue
+                # Opened world/recipe chests stay in the live feed; name is the POI id.
+                live_name = str(live.get("name") or "").strip()
+                if str(live.get("kind") or "").strip().lower() == "chest" and (
+                    _element_completed(live_name, completed)
+                ):
                     continue
                 key = _live_key(live)
                 if key in self.gather_nav_skipped or key in self.gather_nav_depleted:

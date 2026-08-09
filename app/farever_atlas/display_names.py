@@ -28,8 +28,9 @@ _CHEST_TYPE_LABELS = {
 
 # Shown under the Activities POI chip, not the Chests loot chip.
 # Include both prefab stems (OrbChest) and zone-id stems (ChestOrb / Camp_N_Chest).
+# Live FightStone interactibles report Element.kind as chest with name "FightStone".
 _ACTIVITY_CHEST_KEYS = frozenset(
-    {"orbchest", "chestorb", "campchest", "vaultchest"}
+    {"orbchest", "chestorb", "campchest", "vaultchest", "fightstone"}
 )
 _ACTIVITY_CAMP_CHEST_RE = re.compile(r"camp\d*chest")
 
@@ -121,7 +122,7 @@ def chest_label_from_id(node_id: str | None) -> str | None:
 
 
 def is_activity_linked_chest(*parts: str | None) -> bool:
-    """True for Vault / Orb / Camp chests (activity loot, not world chests)."""
+    """True for Vault / Orb / Camp / FightStone chests (activity loot, not world)."""
     cleaned = [str(part).strip() for part in parts if part and str(part).strip()]
     if not cleaned:
         return False
@@ -147,9 +148,10 @@ def is_activity_linked_chest(*parts: str | None) -> bool:
 
 
 def is_orb_or_camp_chest(*parts: str | None) -> bool:
-    """True for Orb/Camp chests that already have a ChestOrb/WorldCamp activity POI.
+    """True when an activity marker already sits on this chest/stone.
 
-    Vault chests stay as standalone markers (no matching activity row).
+    Orb/Camp/FightStone have a colocated Activities POI. Vault chests stay as
+    standalone markers (no matching activity row).
     """
     if not is_activity_linked_chest(*parts):
         return False
