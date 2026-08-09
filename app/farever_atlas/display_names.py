@@ -146,6 +146,20 @@ def is_activity_linked_chest(*parts: str | None) -> bool:
     return False
 
 
+def is_orb_or_camp_chest(*parts: str | None) -> bool:
+    """True for Orb/Camp chests that already have a ChestOrb/WorldCamp activity POI.
+
+    Vault chests stay as standalone markers (no matching activity row).
+    """
+    if not is_activity_linked_chest(*parts):
+        return False
+    cleaned = [str(part).strip() for part in parts if part and str(part).strip()]
+    compact = re.sub(r"[^a-z0-9]", "", " ".join(cleaned).lower())
+    if "vaultchest" in compact:
+        return False
+    return True
+
+
 def resolve_chest_label(*parts: str | None) -> str | None:
     """Best chest label from name / id / source (prefers Vault/Orb/Camp/World)."""
     cleaned = [str(part).strip() for part in parts if part and str(part).strip()]

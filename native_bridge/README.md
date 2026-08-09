@@ -57,6 +57,7 @@ Discovery, fingerprinting, and HashLink metadata traversal happen once per attac
 | `instance` | coarse map bucket (`world` / `rift` / `dungeon` / `instance` / `unknown`) plus `map_id` and flags |
 | `time_of_day` | day cycle from `world.World.timeOfDay` (`factor` 0–1, `elapsed`, `speed`, `paused`), or `null` |
 | `completed_elements` | completion keys from player progress (refreshed periodically) |
+| `completed_activities` | finished world-activity keys from `Progress.activities` (refreshed periodically) |
 | `dps` | observed nearby foe-health delta (`mode: observed_nearby`), not skill-parsed combat log |
 
 ## Build
