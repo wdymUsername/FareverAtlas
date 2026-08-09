@@ -1,6 +1,6 @@
 # Farever Atlas
 
-[![FareverAtlas.exe](https://github.com/wdymUsername/FareverAtlas/actions/workflows/windows-portable.yml/badge.svg)](https://github.com/wdymUsername/FareverAtlas/actions/workflows/windows-portable.yml)[![Downloads](https://img.shields.io/github/downloads/wdymUsername/FareverAtlas/total)](https://github.com/wdymUsername/FareverAtlas/releases/tag/Nightly)[![VirusTotal](https://badges.cssnr.com/vt/wdymUsername/FareverAtlas/FareverAtlas.exe)](https://github.com/wdymUsername/FareverAtlas/releases/tag/Nightly)
+[![FareverAtlas.exe](https://github.com/wdymUsername/FareverAtlas/actions/workflows/windows-portable.yml/badge.svg)](https://github.com/wdymUsername/FareverAtlas/actions/workflows/windows-portable.yml)[![VirusTotal](https://badges.cssnr.com/vt/wdymUsername/FareverAtlas/FareverAtlas.exe)](https://github.com/wdymUsername/FareverAtlas/releases/tag/Nightly)[![Downloads](https://img.shields.io/github/downloads/wdymUsername/FareverAtlas/total)](https://github.com/wdymUsername/FareverAtlas/releases/tag/Nightly)
 
 
 
