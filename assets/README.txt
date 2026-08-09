@@ -14,6 +14,7 @@ Supported files:
 - currency_nightblood.png
 - currency_caps.json (from data.cdb item.props.currency.max)
 - unit_traits.json (critter / Spark / Elite / Boss / Miniboss / Unique kind lists from CastleDB unit sheet)
+- display_names.json (unit + gatherable in-game labels from CastleDB for map tooltips)
 - redOrb.webp
 - plant.webp
 - ore.webp
@@ -48,6 +49,11 @@ Unit trait kind lists (companions, Spark rares, Elite / Boss / Miniboss /
 Unique specials) are in unit_traits.json. Rebuild from extracted data.cdb with:
 
   python tools/extract_unit_traits.py
+
+In-game unit / gatherable tooltip labels (e.g. ``2 · Green Slime``,
+``Copper Ore · Large``) are in display_names.json. Rebuild with:
+
+  python tools/extract_display_names.py
 
 UI fonts are prepared by `python -m farever_atlas.fonts` (also run by
 ./farever setup, farever.bat setup, and the Windows packaging scripts). That

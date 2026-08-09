@@ -9,6 +9,11 @@ from typing import Any
 from PySide6 import QtCore, QtWidgets
 
 from ...config import safe_float
+from ...display_names import (
+    chest_label_from_id,
+    format_gatherable_tooltip_name,
+    is_activity_linked_chest,
+)
 from ...toast import notify
 
 
@@ -54,7 +59,7 @@ _TYPE_LABELS = {
 }
 
 # Activity-linked chests — found via quest/activity progression, not NODE GUIDE.
-_ACTIVITY_CHEST_TYPES = frozenset({"orbchest", "campchest", "vaultchest"})
+_ACTIVITY_CHEST_TYPES = frozenset({"orbchest", "chestorb", "campchest", "vaultchest"})
 
 _PLANT_TYPE_FALLBACKS = (
     "lavendula",
@@ -164,6 +169,9 @@ def _pretty_type_label(type_key: str, sample_name: str = "") -> str:
     known = _TYPE_LABELS.get(key)
     if known:
         return known
+    chest = chest_label_from_id(key) or chest_label_from_id(sample_name)
+    if chest:
+        return chest
     # Prefer a cleaned sample name (drop size tokens) when available.
     sample_parts = [
         part
@@ -189,7 +197,15 @@ def _discover_gather_types(
         type_key = _node_type_key(item)
         if not type_key:
             continue
-        if kind == "chest" and type_key in _ACTIVITY_CHEST_TYPES:
+        if kind == "chest" and (
+            type_key in _ACTIVITY_CHEST_TYPES
+            or is_activity_linked_chest(
+                item.get("name"),
+                item.get("id"),
+                item.get("source"),
+                item.get("subkind"),
+            )
+        ):
             continue
         found.setdefault(type_key, _pretty_type_label(type_key, _raw_node_name(item)))
     return sorted(found.items(), key=lambda pair: pair[1].lower())
@@ -198,16 +214,15 @@ def _discover_gather_types(
 def _display_name(item: dict[str, Any]) -> str:
     raw = _raw_node_name(item)
     kind = str(item.get("kind") or "").strip()
-    parts = [
-        part
-        for part in raw.replace("_", " ").split()
-        if part and part.lower() != "generic"
-    ]
-    pretty = " ".join(parts) if parts else (kind.title() if kind else "Node")
     size = _node_size_label(item)
-    if size and size not in pretty.lower():
-        pretty = f"{pretty} ({size.title()})"
-    return pretty
+    return format_gatherable_tooltip_name(
+        raw or None,
+        kind=kind or None,
+        size=size or None,
+        fallback=raw or None,
+        source=str(item.get("source") or "") or None,
+        item_id=str(item.get("id") or "") or None,
+    )
 
 
 def _static_key(poi: dict[str, Any]) -> str:
@@ -705,7 +720,12 @@ class GatherNavMixin:
         if kind != wanted:
             return False
         # Orb / camp / vault chests are activity rewards — skip in NODE GUIDE.
-        if wanted == "chest" and _node_type_key(item) in _ACTIVITY_CHEST_TYPES:
+        if wanted == "chest" and is_activity_linked_chest(
+            item.get("name"),
+            item.get("id"),
+            item.get("source"),
+            item.get("subkind"),
+        ):
             return False
         return True
 
