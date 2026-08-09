@@ -1,4 +1,4 @@
-"""Top-bar status widgets for character vitals, game time, and Nightling Rift."""
+"""Top-bar status widgets for character vitals, currencies, game time, and Nightling Rift."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from ...config import (
     safe_int,
 )
 from ...controls import ShieldOverlayBar
+from ...currency_caps import enrich_currencies
 from ...telemetry import _sanitize_player_display_name
 from .data import Snapshot
 
@@ -499,16 +500,16 @@ class GameTimeStatusWidget(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("gameTimeStatus")
-        self.setFixedHeight(30)
+        self.setFixedHeight(22)
         self._signature: tuple[object, ...] | None = None
 
         root_layout = QtWidgets.QHBoxLayout(self)
-        root_layout.setContentsMargins(3, 0, 3, 0)
-        root_layout.setSpacing(5)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(4)
 
         self.icon = QtWidgets.QLabel("·")
         self.icon.setObjectName("gameTimeIcon")
-        self.icon.setFixedSize(30, 30)
+        self.icon.setFixedSize(18, 18)
         self.icon.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
 
         self.label = QtWidgets.QLabel("--:-- · —")
@@ -647,3 +648,151 @@ class RiftStatusWidget(QtWidgets.QWidget):
             return
         minutes, seconds = divmod(remaining_seconds, 60)
         self.countdown.setText(f"Opens in {minutes:02d}:{seconds:02d}")
+
+
+class CurrencyStatusWidget(QtWidgets.QWidget):
+    """Compact 2x2 purse strip: Gold | Craft / Demonic Souls | Nightblood."""
+
+    _CELLS: tuple[tuple[str, str], ...] = (
+        ("Gold", "currency_gold.png"),
+        ("CraftPoint", "currency_craft.png"),
+        ("DemonicSoul", "currency_demonic_soul.png"),
+        ("Nightblood", "currency_nightblood.png"),
+    )
+    _LABELS: dict[str, str] = {
+        "Gold": "Gold",
+        "CraftPoint": "Craft",
+        "DemonicSoul": "Demonic souls",
+        "Nightblood": "Nightblood",
+    }
+
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("currencyStatus")
+        self.setFixedHeight(36)
+        self._signature: tuple[object, ...] | None = None
+        self._amount_labels: dict[str, QtWidgets.QLabel] = {}
+
+        root = QtWidgets.QHBoxLayout(self)
+        root.setContentsMargins(4, 0, 4, 0)
+        root.setSpacing(4)
+
+        grid = QtWidgets.QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(1)
+
+        for index, (kind, asset_name) in enumerate(self._CELLS):
+            row, col = divmod(index, 2)
+            cell = QtWidgets.QWidget()
+            cell.setObjectName("currencyCell")
+            cell_layout = QtWidgets.QHBoxLayout(cell)
+            cell_layout.setContentsMargins(0, 0, 0, 0)
+            cell_layout.setSpacing(3)
+
+            icon = QtWidgets.QLabel()
+            icon.setObjectName("currencyIcon")
+            icon.setFixedSize(14, 14)
+            icon.setScaledContents(True)
+            icon_path = discover_project_asset(asset_name)
+            pixmap = QtGui.QPixmap(str(icon_path)) if icon_path else QtGui.QPixmap()
+            if not pixmap.isNull():
+                icon.setPixmap(pixmap)
+            else:
+                icon.setText("·")
+
+            amount = QtWidgets.QLabel("—")
+            amount.setObjectName("currencyAmount")
+            amount.setAlignment(
+                QtCore.Qt.AlignmentFlag.AlignLeft
+                | QtCore.Qt.AlignmentFlag.AlignVCenter
+            )
+            self._amount_labels[kind] = amount
+
+            cell_layout.addWidget(icon)
+            cell_layout.addWidget(amount)
+            grid.addWidget(cell, row, col * 2)
+
+            if col == 0:
+                sep = QtWidgets.QLabel("|")
+                sep.setObjectName("currencySeparator")
+                sep.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+                grid.addWidget(sep, row, 1)
+
+        root.addLayout(grid)
+        self.setToolTip("Currencies")
+
+    def update_from_state(self, state: dict | None) -> None:
+        player = state.get("player") if isinstance(state, dict) else None
+        amounts: dict[str, int | None] = {kind: None for kind, _ in self._CELLS}
+        maxima: dict[str, int | None] = {kind: None for kind, _ in self._CELLS}
+        raw_currencies: list[object] = []
+        counters = None
+        if isinstance(player, dict):
+            raw = player.get("currencies") or []
+            if isinstance(raw, list):
+                raw_currencies = raw
+            counters = player.get("currency_counters")
+            if not isinstance(counters, dict):
+                # Prefer enriched player counters; fall back to native bridge payload.
+                native = state.get("native_bridge") if isinstance(state, dict) else None
+                native_player = (
+                    native.get("player") if isinstance(native, dict) else None
+                )
+                if isinstance(native_player, dict) and isinstance(
+                    native_player.get("currency_counters"), dict
+                ):
+                    counters = native_player.get("currency_counters")
+        for entry in enrich_currencies(raw_currencies, counters):
+            kind = entry.get("kind")
+            if kind not in amounts:
+                continue
+            try:
+                amounts[str(kind)] = int(entry.get("amount") or 0)
+            except (TypeError, ValueError):
+                amounts[str(kind)] = None
+            raw_max = entry.get("max")
+            if raw_max is None:
+                maxima[str(kind)] = None
+            else:
+                try:
+                    maxima[str(kind)] = int(raw_max)
+                except (TypeError, ValueError):
+                    maxima[str(kind)] = None
+
+        signature = tuple(
+            (kind, amounts[kind], maxima[kind]) for kind, _ in self._CELLS
+        )
+        if signature == self._signature:
+            return
+        self._signature = signature
+
+        tip_lines: list[str] = []
+        for kind, _asset in self._CELLS:
+            label = self._amount_labels[kind]
+            value = amounts[kind]
+            maximum = maxima[kind]
+            if value is None:
+                label.setText("—")
+                capped = False
+            else:
+                label.setText(f"{value:,}")
+                capped = maximum is not None and value >= maximum
+            label.setProperty("capped", "true" if capped else "false")
+            style = label.style()
+            style.unpolish(label)
+            style.polish(label)
+
+            name = self._LABELS.get(kind, kind)
+            if value is None and maximum is None:
+                tip_lines.append(f"{name}: —")
+            elif maximum is None:
+                amount_text = "—" if value is None else f"{value:,}"
+                tip_lines.append(f"{name}: {amount_text} (no cap)")
+            else:
+                amount_text = "—" if value is None else f"{value:,}"
+                tip_lines.append(f"{name}: {amount_text} / {maximum:,}")
+        self.setToolTip("\n".join(tip_lines))
+
+    def clear(self) -> None:
+        self.update_from_state(None)

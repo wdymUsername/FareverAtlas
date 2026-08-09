@@ -59,8 +59,13 @@ mod windows_bridge {
     /// ent.Hero.player — flattened index (st.Player owning this hero).
     /// BaseState(17)+State(10)+Entity(39)+GameObject(17)+Unit(82) = 165.
     const HERO_PLAYER_FIELD_INDEX: usize = 165;
+    /// ent.Hero.loadout — flattened index (player+1, specialization+1).
+    const HERO_LOADOUT_FIELD_INDEX: usize = 167;
     /// ent.Hero.name — flattened index (display name on the hero object).
     const HERO_NAME_FIELD_INDEX: usize = 173;
+    const LOADOUT_TYPE_INDEX: usize = 1_369;
+    /// st.Loadout.currencies — BaseState(17) + declared currencies=7 → 24.
+    const LOADOUT_CURRENCIES_FIELD_INDEX: usize = 24;
     const GROUP_TYPE_INDEX: usize = 1_418;
     const PLAYER_GLOBAL_INDEX: usize = 889;
     const HERO_GLOBAL_INDEX: usize = 380;
@@ -154,8 +159,10 @@ mod windows_bridge {
     const PLAYER_NAME_FIELD_INDEX: usize = 29;
     const PLAYER_UID_FIELD_INDEX: usize = 28;
     const PLAYER_GROUP_FIELD_INDEX: usize = 37;
-    const PLAYER_PROGRESS_FIELD_INDEX: usize = 36;
-    const PLAYER_HERO_DATA_FIELD_INDEX: usize = 35;
+    // st.Player inherits BaseState(17)+State(10)=27. Declared: accountProgress=6,
+    // heroData=7, progress=8, stats=9, group=10 → flattened 33..37.
+    const PLAYER_PROGRESS_FIELD_INDEX: usize = 35;
+    const PLAYER_HERO_DATA_FIELD_INDEX: usize = 34;
     const PLAYER_HERO_FIELD_INDEX: usize = 43;
     const PLAYER_CONNECTED_FIELD_INDEX: usize = 30;
     const UNIT_ATTRIBUTES_FIELD_INDEX: usize = 133;
@@ -191,6 +198,8 @@ mod windows_bridge {
     const ARRAY_DYN_ARRAY_FIELD_INDEX: usize = 0;
     const GROUP_PLAYERS_FIELD_INDEX: usize = 28;
     const PROGRESS_TYPE_INDEX: usize = 1_415;
+    // st.player.Progress inherits BaseState(17); counters is declared field 2 → 19.
+    const PROGRESS_COUNTERS_FIELD_INDEX: usize = 19;
     const PROGRESS_ELEMENTS_FIELD_INDEX: usize = 21;
     const MAP_DATA_TYPE_INDEX: usize = 1_038;
     const MAP_DATA_MAP_FIELD_INDEX: usize = 4;
@@ -199,7 +208,20 @@ mod windows_bridge {
     const COMPLETION_PROXY_TYPE_INDEX: usize = 23_065;
     const COMPLETION_PROXY_COMPLETED_FIELD_INDEX: usize = 2;
     const HERO_DATA_TYPE_INDEX: usize = 1_365;
+    // Flattened indexes: BaseState(17)+DBState(4)=21 inherited, then HeroData
+    // declared fields (currencies=17 → 38, progress=23 → 44).
+    const HERO_DATA_CURRENCIES_FIELD_INDEX: usize = 38;
     const HERO_DATA_PROGRESS_FIELD_INDEX: usize = 44;
+    const HL_TYPE_KIND_I32: u32 = 3;
+    const HL_TYPE_KIND_F64: u32 = 6;
+    const HL_TYPE_KIND_OBJ: u32 = 11;
+    const HL_TYPE_KIND_VIRTUAL: u32 = 15;
+    const HL_VTYPE_FIELDS_OFFSET: usize = 0x00;
+    const HL_VTYPE_NFIELDS_OFFSET: usize = 0x08;
+    const HL_VFIELD_STRIDE: usize = 24;
+    const HL_VFIELD_NAME_OFFSET: usize = 0x00;
+    const HL_VFIELD_TYPE_OFFSET: usize = 0x08;
+    const HL_VVIRTUAL_DATA_OFFSET: usize = 24;
     const ARRAY_LENGTH_FIELD_INDEX: usize = 0;
     const ARRAY_STORAGE_FIELD_INDEX: usize = 1;
     const HERO_WIDGET_TYPE_INDEX: usize = 19_256;
@@ -487,11 +509,15 @@ mod windows_bridge {
         array_proxy_array_offset: usize,
         array_dyn_array_offset: usize,
         group_players_offset: usize,
+        progress_counters_offset: usize,
         progress_elements_offset: usize,
         map_data_map_offset: usize,
         string_map_handle_offset: usize,
         completion_proxy_completed_offset: usize,
+        hero_data_currencies_offset: usize,
         hero_data_progress_offset: usize,
+        hero_loadout_offset: usize,
+        loadout_currencies_offset: usize,
         hero_widget_hero_offset: usize,
         hero_widget_health_bar_offset: usize,
         health_bar_health_gauge_offset: usize,
@@ -2078,6 +2104,11 @@ mod windows_bridge {
             types_address + GROUP_TYPE_INDEX * 32,
             GROUP_PLAYERS_FIELD_INDEX,
         )?;
+        let progress_counters_offset = object_field_offset(
+            process,
+            types_address + PROGRESS_TYPE_INDEX * 32,
+            PROGRESS_COUNTERS_FIELD_INDEX,
+        )?;
         let progress_elements_offset = object_field_offset(
             process,
             types_address + PROGRESS_TYPE_INDEX * 32,
@@ -2098,10 +2129,25 @@ mod windows_bridge {
             types_address + COMPLETION_PROXY_TYPE_INDEX * 32,
             COMPLETION_PROXY_COMPLETED_FIELD_INDEX,
         )?;
+        let hero_data_currencies_offset = object_field_offset(
+            process,
+            types_address + HERO_DATA_TYPE_INDEX * 32,
+            HERO_DATA_CURRENCIES_FIELD_INDEX,
+        )?;
         let hero_data_progress_offset = object_field_offset(
             process,
             types_address + HERO_DATA_TYPE_INDEX * 32,
             HERO_DATA_PROGRESS_FIELD_INDEX,
+        )?;
+        let hero_loadout_offset = object_field_offset(
+            process,
+            types_address + HERO_TYPE_INDEX * 32,
+            HERO_LOADOUT_FIELD_INDEX,
+        )?;
+        let loadout_currencies_offset = object_field_offset(
+            process,
+            types_address + LOADOUT_TYPE_INDEX * 32,
+            LOADOUT_CURRENCIES_FIELD_INDEX,
         )?;
         let hero_widget_hero_offset = object_field_offset(
             process,
@@ -2249,11 +2295,15 @@ mod windows_bridge {
             array_proxy_array_offset,
             array_dyn_array_offset,
             group_players_offset,
+            progress_counters_offset,
             progress_elements_offset,
             map_data_map_offset,
             string_map_handle_offset,
             completion_proxy_completed_offset,
+            hero_data_currencies_offset,
             hero_data_progress_offset,
+            hero_loadout_offset,
+            loadout_currencies_offset,
             hero_widget_hero_offset,
             hero_widget_health_bar_offset,
             health_bar_health_gauge_offset,
@@ -2385,6 +2435,11 @@ mod windows_bridge {
         paused: bool,
     }
 
+    struct CurrencySample {
+        kind: String,
+        amount: i64,
+    }
+
     struct TelemetrySample {
         game_app: usize,
         player: usize,
@@ -2406,6 +2461,9 @@ mod windows_bridge {
         shield_gauge_available: bool,
         special_energy: f64,
         special_energy_regen: f64,
+        currencies: Vec<CurrencySample>,
+        /// Live Progress.counters used for tiered currency caps (e.g. souls).
+        currency_counters: Vec<(String, i64)>,
         x: f64,
         y: f64,
         z: f64,
@@ -2560,6 +2618,499 @@ mod windows_bridge {
         Err(format!("{label} exceeds the bounded string read"))
     }
 
+    struct VirtualField {
+        name: String,
+        kind: u32,
+        value_ptr: usize,
+    }
+
+    /// Decode an HVIRTUAL structural value's inline field table.
+    /// Soft-fails with an empty vec when the object is not a live virtual.
+    fn read_virtual_fields(
+        process: &OwnedHandle,
+        vobj: usize,
+    ) -> Result<Vec<VirtualField>, String> {
+        if vobj == 0 {
+            return Ok(Vec::new());
+        }
+        let type_address = read_u64_le(&read_process_bytes(process, vobj, 8)?, 0)? as usize;
+        if type_address == 0 {
+            return Ok(Vec::new());
+        }
+        let type_kind =
+            read_u32_le(&read_process_bytes(process, type_address, 4)?, 0)?;
+        if type_kind != HL_TYPE_KIND_VIRTUAL {
+            return Ok(Vec::new());
+        }
+        let tv = read_u64_le(
+            &read_process_bytes(process, type_address + 8, 8)?,
+            0,
+        )? as usize;
+        if tv == 0 {
+            return Ok(Vec::new());
+        }
+        let fields = read_u64_le(
+            &read_process_bytes(process, tv + HL_VTYPE_FIELDS_OFFSET, 8)?,
+            0,
+        )? as usize;
+        let nfields = i32::from_le_bytes(
+            read_process_bytes(process, tv + HL_VTYPE_NFIELDS_OFFSET, 4)?
+                .try_into()
+                .unwrap(),
+        );
+        if fields == 0 || !(1..=64).contains(&nfields) {
+            return Ok(Vec::new());
+        }
+        let mut out = Vec::with_capacity(nfields as usize);
+        for index in 0..nfields as usize {
+            let field = fields
+                .checked_add(index * HL_VFIELD_STRIDE)
+                .ok_or_else(|| "HVIRTUAL field address overflowed".to_owned())?;
+            let name_ptr = read_u64_le(
+                &read_process_bytes(process, field + HL_VFIELD_NAME_OFFSET, 8)?,
+                0,
+            )? as usize;
+            let field_type = read_u64_le(
+                &read_process_bytes(process, field + HL_VFIELD_TYPE_OFFSET, 8)?,
+                0,
+            )? as usize;
+            let kind = if field_type == 0 {
+                0
+            } else {
+                read_u32_le(&read_process_bytes(process, field_type, 4)?, 0).unwrap_or(0)
+            };
+            let value_ptr = read_u64_le(
+                &read_process_bytes(
+                    process,
+                    vobj + HL_VVIRTUAL_DATA_OFFSET + index * 8,
+                    8,
+                )?,
+                0,
+            )? as usize;
+            let name = if name_ptr == 0 {
+                String::new()
+            } else {
+                let bytes = read_process_bytes_partial(process, name_ptr, 64).unwrap_or_default();
+                decode_utf16_z(&bytes, "HVIRTUAL field name")
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default()
+            };
+            out.push(VirtualField {
+                name,
+                kind,
+                value_ptr,
+            });
+        }
+        Ok(out)
+    }
+
+    fn decode_currency_kind_string(
+        process: &OwnedHandle,
+        code: &CodeAnchor,
+        string_obj: usize,
+    ) -> Option<String> {
+        if string_obj == 0 {
+            return None;
+        }
+        if let Ok(value) =
+            read_hashlink_string(process, code.types_address, string_obj, "currency kind")
+        {
+            if !value.is_empty() {
+                return Some(value);
+            }
+        }
+        if let Ok(value) = read_hashlink_identifier(
+            process,
+            code.types_address,
+            string_obj,
+            "currency kind id",
+        ) {
+            if !value.is_empty() {
+                return Some(value);
+            }
+        }
+        None
+    }
+
+    fn decode_currency_entry(
+        process: &OwnedHandle,
+        code: &CodeAnchor,
+        elem: usize,
+    ) -> Option<CurrencySample> {
+        if elem == 0 {
+            return None;
+        }
+        // Loadout purse rows are hxbit.ObjProxy { amount:I32, kind:String }.
+        // HeroData purse rows (when present) are HVIRTUAL with the same names.
+        let type_address = object_type_address(process, elem)?;
+        let type_kind =
+            read_u32_le(&read_process_bytes(process, type_address, 4).ok()?, 0).ok()?;
+        if type_kind == HL_TYPE_KIND_OBJ {
+            // ObjProxy_Oamount_Int_kind_*: amount@2, kind@3 (after obj/bit).
+            let amount_off = object_field_offset(process, type_address, 2).ok()?;
+            let kind_off = object_field_offset(process, type_address, 3).ok()?;
+            let amount = i32::from_le_bytes(
+                read_process_bytes(process, elem + amount_off, 4)
+                    .ok()?
+                    .try_into()
+                    .ok()?,
+            ) as i64;
+            let kind_obj =
+                read_object_pointer_field(process, elem, kind_off).ok()?;
+            let kind = decode_currency_kind_string(process, code, kind_obj)?;
+            return Some(CurrencySample { kind, amount });
+        }
+
+        let fields = read_virtual_fields(process, elem).ok()?;
+        if fields.is_empty() {
+            return None;
+        }
+        let mut kind = String::new();
+        let mut amount: Option<i64> = None;
+        for field in fields {
+            if field.value_ptr == 0 || field.name.is_empty() {
+                continue;
+            }
+            let name = field.name.as_str();
+            if matches!(name, "kind" | "id" | "item" | "currency") {
+                let Ok(string_obj) = read_u64_le(
+                    &read_process_bytes(process, field.value_ptr, 8).unwrap_or_default(),
+                    0,
+                )
+                .map(|value| value as usize) else {
+                    continue;
+                };
+                if let Some(value) = decode_currency_kind_string(process, code, string_obj) {
+                    kind = value;
+                }
+            } else if matches!(name, "amount" | "count" | "value" | "nb") {
+                if field.kind == HL_TYPE_KIND_I32 || field.kind == 0 {
+                    if let Ok(bytes) = read_process_bytes(process, field.value_ptr, 4) {
+                        amount =
+                            Some(i32::from_le_bytes(bytes.try_into().unwrap_or([0; 4])) as i64);
+                    }
+                } else if field.kind == HL_TYPE_KIND_F64 {
+                    if let Ok(bytes) = read_process_bytes(process, field.value_ptr, 8) {
+                        if let Ok(value) = read_f64_le(&bytes, 0) {
+                            if value.is_finite() {
+                                amount = Some(value as i64);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if kind.is_empty() {
+            None
+        } else {
+            Some(CurrencySample {
+                kind,
+                amount: amount.unwrap_or(0),
+            })
+        }
+    }
+
+    fn object_type_address(process: &OwnedHandle, object: usize) -> Option<usize> {
+        if object == 0 {
+            return None;
+        }
+        read_u64_le(
+            &read_process_bytes(process, object, 8).unwrap_or_default(),
+            0,
+        )
+        .ok()
+        .map(|value| value as usize)
+    }
+
+    fn find_hero_data_on_player(
+        process: &OwnedHandle,
+        code: &CodeAnchor,
+        root: &PlayerRoot,
+        player: usize,
+    ) -> Option<usize> {
+        if player == 0 {
+            return None;
+        }
+        let expected_hd = code.types_address + HERO_DATA_TYPE_INDEX * 32;
+        for &offset in &[root.player_hero_data_offset, 0xe8usize] {
+            let Ok(candidate) = read_object_pointer_field(process, player, offset) else {
+                continue;
+            };
+            if candidate != 0 && object_type_address(process, candidate) == Some(expected_hd) {
+                return Some(candidate);
+            }
+        }
+        None
+    }
+
+    /// Resolve ArrayObj / ArrayProxyData / ArrayDyn down to an ArrayObj pointer.
+    fn resolve_currency_array_obj(
+        process: &OwnedHandle,
+        code: &CodeAnchor,
+        root: &PlayerRoot,
+        value: usize,
+    ) -> Option<usize> {
+        if value == 0 {
+            return None;
+        }
+        let expected_array = code.types_address + ARRAY_OBJ_TYPE_INDEX * 32;
+        let expected_proxy = code.types_address + ARRAY_PROXY_TYPE_INDEX * 32;
+        let expected_dyn = code.types_address + ARRAY_DYN_TYPE_INDEX * 32;
+        let mut current = value;
+        let mut current_ty = object_type_address(process, current)?;
+        if current_ty == expected_array {
+            return Some(current);
+        }
+        if current_ty == expected_proxy {
+            current =
+                read_object_pointer_field(process, current, root.array_proxy_array_offset).ok()?;
+            current_ty = object_type_address(process, current)?;
+        }
+        if current_ty == expected_dyn {
+            current =
+                read_object_pointer_field(process, current, root.array_dyn_array_offset).ok()?;
+            current_ty = object_type_address(process, current)?;
+        }
+        (current_ty == expected_array).then_some(current)
+    }
+
+    fn decode_currency_array_obj(
+        process: &OwnedHandle,
+        code: &CodeAnchor,
+        root: &PlayerRoot,
+        array: usize,
+    ) -> Vec<CurrencySample> {
+        let length_candidates = [root.array_length_offset, 0x08usize];
+        let storage_candidates = [root.array_storage_offset, 0x10usize];
+        for &length_off in &length_candidates {
+            let Ok(length_bytes) = read_process_bytes(process, array + length_off, 4) else {
+                continue;
+            };
+            let length = i32::from_le_bytes(length_bytes.try_into().unwrap_or([0; 4]));
+            if !(1..=256).contains(&length) {
+                continue;
+            }
+            for &storage_off in &storage_candidates {
+                let Ok(storage) = read_object_pointer_field(process, array, storage_off) else {
+                    continue;
+                };
+                if storage == 0 {
+                    continue;
+                }
+                let mut out = Vec::new();
+                for index in 0..length as usize {
+                    let Some(entry_addr) = storage.checked_add(24 + index * 8) else {
+                        break;
+                    };
+                    let Ok(elem_bytes) = read_process_bytes(process, entry_addr, 8) else {
+                        continue;
+                    };
+                    let Ok(elem) = read_u64_le(&elem_bytes, 0).map(|value| value as usize) else {
+                        continue;
+                    };
+                    if let Some(sample) = decode_currency_entry(process, code, elem) {
+                        out.push(sample);
+                    }
+                }
+                if !out.is_empty() {
+                    return out;
+                }
+            }
+        }
+        Vec::new()
+    }
+
+    fn read_currencies_from_array_field(
+        process: &OwnedHandle,
+        code: &CodeAnchor,
+        root: &PlayerRoot,
+        owner: usize,
+        field_offset: usize,
+    ) -> Vec<CurrencySample> {
+        let Ok(value) = read_object_pointer_field(process, owner, field_offset) else {
+            return Vec::new();
+        };
+        let Some(array) = resolve_currency_array_obj(process, code, root, value) else {
+            return Vec::new();
+        };
+        decode_currency_array_obj(process, code, root, array)
+    }
+
+    /// Purse currencies from `ent.Hero.loadout.currencies` (ArrayProxy of ObjProxy
+    /// rows), falling back to `st.player.HeroData.currencies` when present.
+    /// Soft-fails to an empty list — never fails the whole telemetry sample.
+    fn read_currencies(
+        process: &OwnedHandle,
+        code: &CodeAnchor,
+        root: &PlayerRoot,
+        player: usize,
+        hero: usize,
+    ) -> Vec<CurrencySample> {
+        // Primary: live purse on the hero loadout (HeroData is often null client-side).
+        if hero != 0 {
+            if let Ok(loadout) = read_object_pointer_field(process, hero, root.hero_loadout_offset)
+            {
+                if loadout != 0
+                    && object_type_address(process, loadout)
+                        == Some(code.types_address + LOADOUT_TYPE_INDEX * 32)
+                {
+                    let out = read_currencies_from_array_field(
+                        process,
+                        code,
+                        root,
+                        loadout,
+                        root.loadout_currencies_offset,
+                    );
+                    if !out.is_empty() {
+                        return out;
+                    }
+                }
+            }
+        }
+
+        // Fallback: Player.heroData.currencies when the DB blob is live.
+        if let Some(hero_data) = find_hero_data_on_player(process, code, root, player) {
+            let out = read_currencies_from_array_field(
+                process,
+                code,
+                root,
+                hero_data,
+                root.hero_data_currencies_offset,
+            );
+            if !out.is_empty() {
+                return out;
+            }
+            if root.hero_data_currencies_offset != 0x110 {
+                return read_currencies_from_array_field(process, code, root, hero_data, 0x110);
+            }
+        }
+        Vec::new()
+    }
+
+    fn read_player_progress(
+        process: &OwnedHandle,
+        code: &CodeAnchor,
+        root: &PlayerRoot,
+        player: usize,
+    ) -> Option<usize> {
+        let hero_data =
+            read_object_pointer_field(process, player, root.player_hero_data_offset).ok()?;
+        let progress = if hero_data != 0
+            && object_type_address(process, hero_data)
+                == Some(code.types_address + HERO_DATA_TYPE_INDEX * 32)
+        {
+            read_object_pointer_field(process, hero_data, root.hero_data_progress_offset).ok()?
+        } else {
+            read_object_pointer_field(process, player, root.player_progress_offset).ok()?
+        };
+        if progress == 0 {
+            return None;
+        }
+        if object_type_address(process, progress)
+            != Some(code.types_address + PROGRESS_TYPE_INDEX * 32)
+        {
+            return None;
+        }
+        Some(progress)
+    }
+
+    /// Soft-fail lookup of Progress.counters[key] as a boxed/plain i32.
+    fn read_progress_counter(
+        process: &OwnedHandle,
+        code: &CodeAnchor,
+        root: &PlayerRoot,
+        player: usize,
+        key: &str,
+    ) -> Option<i64> {
+        let progress = read_player_progress(process, code, root, player)?;
+        let counters =
+            read_object_pointer_field(process, progress, root.progress_counters_offset).ok()?;
+        if counters == 0
+            || object_type_address(process, counters)
+                != Some(code.types_address + STRING_MAP_TYPE_INDEX * 32)
+        {
+            return None;
+        }
+        let handle =
+            read_object_pointer_field(process, counters, root.string_map_handle_offset).ok()?;
+        if handle == 0 {
+            return None;
+        }
+        let header = read_process_bytes(process, handle, 64).ok()?;
+        let values = read_u64_le(&header, 24).ok()? as usize;
+        let nentries = read_u32_le(&header, 52).ok()? as usize;
+        let maxentries = read_u32_le(&header, 56).ok()? as usize;
+        if nentries > maxentries || maxentries > 100_000 || (maxentries > 0 && values == 0) {
+            return None;
+        }
+        const ENTRY_SIZE: usize = 16;
+        const CHUNK_ENTRIES: usize = 4096 / ENTRY_SIZE;
+        let mut index = 0usize;
+        while index < maxentries {
+            let chunk = (maxentries - index).min(CHUNK_ENTRIES);
+            let entries =
+                read_process_bytes(process, values + index * ENTRY_SIZE, chunk * ENTRY_SIZE).ok()?;
+            for local in 0..chunk {
+                let offset = local * ENTRY_SIZE;
+                let key_pointer = read_u64_le(&entries, offset).ok()? as usize;
+                let value_pointer = read_u64_le(&entries, offset + 8).ok()? as usize;
+                if key_pointer == 0 || value_pointer == 0 {
+                    continue;
+                }
+                let Ok(name) = read_bounded_utf16(process, key_pointer, "progress counter") else {
+                    continue;
+                };
+                let name = if name == key {
+                    name
+                } else if let Ok(string_name) =
+                    read_hashlink_string(process, code.types_address, key_pointer, "progress counter")
+                {
+                    string_name
+                } else {
+                    name
+                };
+                if name != key {
+                    continue;
+                }
+                // Counters are typically boxed i32 (vdynamic): type @0, payload @8.
+                let value_type = object_type_address(process, value_pointer)?;
+                let kind =
+                    read_u32_le(&read_process_bytes(process, value_type, 4).ok()?, 0).ok()?;
+                if kind == HL_TYPE_KIND_I32 {
+                    let bytes = read_process_bytes(process, value_pointer + 8, 4).ok()?;
+                    return Some(i32::from_le_bytes(bytes.try_into().ok()?) as i64);
+                }
+                // Fallback: plain i32 object field / direct payload.
+                if let Ok(bytes) = read_process_bytes(process, value_pointer + 8, 4) {
+                    return Some(i32::from_le_bytes(bytes.try_into().ok()?) as i64);
+                }
+                return None;
+            }
+            index += chunk;
+        }
+        None
+    }
+
+    fn read_currency_counters(
+        process: &OwnedHandle,
+        code: &CodeAnchor,
+        root: &PlayerRoot,
+        player: usize,
+    ) -> Vec<(String, i64)> {
+        // Only the counters needed for live currency caps.
+        const KEYS: &[&str] = &["DemonicSouls_CapacityIndex"];
+        let mut out = Vec::new();
+        for key in KEYS {
+            if let Some(value) = read_progress_counter(process, code, root, player, key) {
+                if (0..32).contains(&value) {
+                    out.push(((*key).to_owned(), value));
+                }
+            }
+        }
+        out
+    }
+
     fn read_completed_elements(
         process: &OwnedHandle,
         code: &CodeAnchor,
@@ -2628,35 +3179,44 @@ mod windows_bridge {
         if nentries > maxentries || maxentries > 100_000 || (maxentries > 0 && values == 0) {
             return Err("Progress.elements StringMap header failed sanity validation".to_owned());
         }
-        let entries = read_process_bytes(process, values, maxentries.saturating_mul(16))?;
+        // Process reads are capped at 4096 bytes; walk the map in chunks.
+        const ENTRY_SIZE: usize = 16;
+        const CHUNK_ENTRIES: usize = 4096 / ENTRY_SIZE;
         let expected_value_type = code.types_address + COMPLETION_PROXY_TYPE_INDEX * 32;
         let mut completed = Vec::new();
-        for index in 0..maxentries {
-            let offset = index * 16;
-            let key_pointer = read_u64_le(&entries, offset)? as usize;
-            let value_pointer = read_u64_le(&entries, offset + 8)? as usize;
-            if key_pointer == 0 || value_pointer == 0 {
-                continue;
-            }
-            let value_type =
-                read_u64_le(&read_process_bytes(process, value_pointer, 8)?, 0)? as usize;
-            if value_type != expected_value_type {
-                continue;
-            }
-            let value = read_f64_le(
-                &read_process_bytes(
-                    process,
-                    value_pointer + root.completion_proxy_completed_offset,
-                    8,
-                )?,
-                0,
-            )?;
-            if value >= 1.0 {
-                let key = read_bounded_utf16(process, key_pointer, "completed element key")?;
-                if !key.is_empty() {
-                    completed.push(key);
+        let mut index = 0usize;
+        while index < maxentries {
+            let chunk = (maxentries - index).min(CHUNK_ENTRIES);
+            let entries =
+                read_process_bytes(process, values + index * ENTRY_SIZE, chunk * ENTRY_SIZE)?;
+            for local in 0..chunk {
+                let offset = local * ENTRY_SIZE;
+                let key_pointer = read_u64_le(&entries, offset)? as usize;
+                let value_pointer = read_u64_le(&entries, offset + 8)? as usize;
+                if key_pointer == 0 || value_pointer == 0 {
+                    continue;
+                }
+                let value_type =
+                    read_u64_le(&read_process_bytes(process, value_pointer, 8)?, 0)? as usize;
+                if value_type != expected_value_type {
+                    continue;
+                }
+                let value = read_f64_le(
+                    &read_process_bytes(
+                        process,
+                        value_pointer + root.completion_proxy_completed_offset,
+                        8,
+                    )?,
+                    0,
+                )?;
+                if value >= 1.0 {
+                    let key = read_bounded_utf16(process, key_pointer, "completed element key")?;
+                    if !key.is_empty() {
+                        completed.push(key);
+                    }
                 }
             }
+            index += chunk;
         }
         completed.sort_unstable();
         completed.dedup();
@@ -3311,7 +3871,7 @@ mod windows_bridge {
 
     fn waiting_report(sequence: u64, timestamp_ms: u128, message: &str) -> String {
         format!(
-            "{{\"schema\":1,\"bridge_version\":\"0.22.0\",\"state\":\"waiting\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"message\":{}}}\n",
+            "{{\"schema\":1,\"bridge_version\":\"0.23.6\",\"state\":\"waiting\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"message\":{}}}\n",
             json_string(message)
         )
     }
@@ -3744,8 +4304,13 @@ mod windows_bridge {
         }
         party_gauge_cache.retain(|entry| active_party_heroes.contains(&entry.hero));
         if allow_hud_discovery {
-            *completed_elements_cache = read_completed_elements(process, code, root, player)?;
+            // Soft-fail: a large progress map must not drop the whole sample.
+            if let Ok(completed) = read_completed_elements(process, code, root, player) {
+                *completed_elements_cache = completed;
+            }
         }
+        let currencies = read_currencies(process, code, root, player, hero);
+        let currency_counters = read_currency_counters(process, code, root, player);
         let instance = read_instance_context(process, code, hero);
         let time_of_day = read_time_of_day(process, code, hero);
         let camera_yaw = read_camera_yaw(process, code, game_app, x, y);
@@ -3770,6 +4335,8 @@ mod windows_bridge {
             shield_gauge_available,
             special_energy,
             special_energy_regen,
+            currencies,
+            currency_counters,
             x,
             y,
             z,
@@ -4008,9 +4575,29 @@ mod windows_bridge {
                         } else {
                             "null".to_owned()
                         };
+                        let currencies_json = sample
+                            .currencies
+                            .iter()
+                            .map(|currency| {
+                                format!(
+                                    "{{\"kind\":{},\"amount\":{}}}",
+                                    json_string(&currency.kind),
+                                    currency.amount,
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        let currency_counters_json = sample
+                            .currency_counters
+                            .iter()
+                            .map(|(key, value)| {
+                                format!("{}:{}", json_string(key), value)
+                            })
+                            .collect::<Vec<_>>()
+                            .join(",");
                         (
                             format!(
-                                "{{\"schema\":1,\"bridge_version\":\"0.22.0\",\"state\":\"connected\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"game_app_address\":\"0x{:x}\",\"player_address\":\"0x{:x}\",\"hero_address\":\"0x{:x}\",\"player\":{{\"name\":{},\"uid\":{},\"class\":{},\"level\":{},\"in_combat\":{},\"vitality\":{},\"health\":{},\"max_health\":{},\"health_regen\":{},\"shield\":{},\"shield_ratio\":{},\"shield_capacity\":{},\"shield_gauge_visible\":{},\"raw_shield\":{},\"shield_gauge_available\":{},\"special_energy\":{},\"special_energy_regen\":{}}},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}},\"rotation_z\":{},\"camera_yaw\":{camera_yaw_json},\"party\":[{}],\"enemies\":[{}],\"players\":[{}],\"interactibles\":[{}],\"instance\":{instance_json},\"time_of_day\":{time_of_day_json},\"completed_elements\":[{}],\"dps\":{{\"mode\":\"observed_nearby\",\"fight_id\":{},\"current\":{},\"total\":{},\"elapsed\":{},\"in_combat\":{},\"damage_skills\":[{{\"skill\":\"Observed nearby damage\",\"total\":{},\"hits\":0,\"crits\":0,\"max\":0}}],\"healing_skills\":[]}}}}\n",
+                                "{{\"schema\":1,\"bridge_version\":\"0.23.6\",\"state\":\"connected\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"game_app_address\":\"0x{:x}\",\"player_address\":\"0x{:x}\",\"hero_address\":\"0x{:x}\",\"player\":{{\"name\":{},\"uid\":{},\"class\":{},\"level\":{},\"in_combat\":{},\"vitality\":{},\"health\":{},\"max_health\":{},\"health_regen\":{},\"shield\":{},\"shield_ratio\":{},\"shield_capacity\":{},\"shield_gauge_visible\":{},\"raw_shield\":{},\"shield_gauge_available\":{},\"special_energy\":{},\"special_energy_regen\":{},\"currencies\":[{currencies_json}],\"currency_counters\":{{{currency_counters_json}}}}},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}},\"rotation_z\":{},\"camera_yaw\":{camera_yaw_json},\"party\":[{}],\"enemies\":[{}],\"players\":[{}],\"interactibles\":[{}],\"instance\":{instance_json},\"time_of_day\":{time_of_day_json},\"completed_elements\":[{}],\"dps\":{{\"mode\":\"observed_nearby\",\"fight_id\":{},\"current\":{},\"total\":{},\"elapsed\":{},\"in_combat\":{},\"damage_skills\":[{{\"skill\":\"Observed nearby damage\",\"total\":{},\"hits\":0,\"crits\":0,\"max\":0}}],\"healing_skills\":[]}}}}\n",
                                 sample.game_app,
                                 sample.player,
                                 sample.hero,

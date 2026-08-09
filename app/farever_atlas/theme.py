@@ -950,17 +950,42 @@ QWidget#gameTimeStatus {
     background: transparent;
 }
 QLabel#gameTimeIcon {
-    color: #eef3f7;
+    color: #b8c4ce;
     background: transparent;
     border: none;
-    font-size: 20px;
+    font-size: 13px;
     font-weight: 600;
 }
 QLabel#gameTimeLabel {
-    color: #eef3f7;
+    color: #b8c4ce;
     font-size: 10px;
     font-weight: 600;
     letter-spacing: 0.4px;
+}
+QWidget#currencyStatus {
+    background: transparent;
+}
+QWidget#currencyCell {
+    background: transparent;
+}
+QLabel#currencyIcon {
+    background: transparent;
+    border: none;
+}
+QLabel#currencyAmount {
+    color: #eef3f7;
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+}
+QLabel#currencyAmount[capped="true"] {
+    color: #d45a5a;
+}
+QLabel#currencySeparator {
+    color: #596875;
+    font-size: 9px;
+    font-weight: 500;
+    padding: 0 1px;
 }
 QWidget#minimapSidebar {
     background: rgba(16, 23, 31, 218);
@@ -1240,36 +1265,67 @@ QToolButton:checked {
     background: #285f8b;
     border-color: #3979a9;
 }
-QWidget#mapControlsOverlay,
+QWidget#mapControlsOverlay {
+    background: transparent;
+    border: none;
+}
 QWidget#mapFowEditOverlay {
     background: rgba(16, 23, 31, 218);
     border: 1px solid #3a4856;
     border-radius: 7px;
 }
+QWidget#zoomPanel {
+    background: rgba(16, 23, 31, 218);
+    border: 1px solid #3a4856;
+    border-radius: 5px;
+}
+QFrame#zoomDivider {
+    background: #3a4856;
+    border: none;
+    max-height: 1px;
+    min-height: 1px;
+}
 QWidget#mapControlsOverlay QToolButton#zoomButton {
     min-width: 28px;
     max-width: 28px;
-    min-height: 26px;
-    max-height: 26px;
+    min-height: 28px;
+    max-height: 28px;
     padding: 0;
+    margin: 0;
     color: #8493a2;
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 1px;
     background: transparent;
+    border: none;
+    border-radius: 0;
 }
 QWidget#mapControlsOverlay QToolButton#zoomButton:hover {
     background: #263440;
+}
+QWidget#mapControlsOverlay QToolButton#zoomButton:disabled {
+    color: #687582;
+    background: transparent;
+}
+QWidget#mapControlsOverlay QToolButton#centerButton {
+    min-width: 28px;
+    max-width: 28px;
+    min-height: 28px;
+    max-height: 28px;
+    padding: 0;
+    margin: 0;
+    color: #8493a2;
+    background: rgba(16, 23, 31, 218);
+    border: 1px solid #3a4856;
+    border-radius: 5px;
+}
+QWidget#mapControlsOverlay QToolButton#centerButton:hover {
+    color: #e4ebf1;
+    background: #263440;
     border-color: #455769;
 }
-QLabel#zoomValue {
-    color: #8493a2;
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 1px;
+QWidget#mapControlsOverlay QToolButton#centerButton:disabled {
+    color: #687582;
+    background: rgba(16, 23, 31, 180);
+    border-color: #2c3845;
 }
-QWidget#mapControlsOverlay QToolButton#centerButton,
-QWidget#mapFowEditOverlay QToolButton#centerButton,
 QWidget#mapFowEditOverlay QToolButton#fowEditButton {
     min-height: 24px;
     max-height: 24px;
@@ -1283,22 +1339,16 @@ QWidget#mapFowEditOverlay QToolButton#fowEditButton {
     border: 1px solid #3a4856;
     border-radius: 4px;
 }
-QWidget#mapControlsOverlay QToolButton#centerButton:hover,
-QWidget#mapFowEditOverlay QToolButton#centerButton:hover,
 QWidget#mapFowEditOverlay QToolButton#fowEditButton:hover {
     color: #e4ebf1;
     background: #263440;
     border-color: #455769;
 }
-QWidget#mapControlsOverlay QToolButton#centerButton:checked,
-QWidget#mapFowEditOverlay QToolButton#centerButton:checked,
 QWidget#mapFowEditOverlay QToolButton#fowEditButton:checked {
     color: #ffffff;
     background: #285f8b;
     border-color: #3979a9;
 }
-QWidget#mapControlsOverlay QToolButton#centerButton:disabled,
-QWidget#mapFowEditOverlay QToolButton#centerButton:disabled,
 QWidget#mapFowEditOverlay QToolButton#fowEditButton:disabled {
     color: #687582;
     background: #151c24;
@@ -1483,22 +1533,38 @@ QWidget#minimapFooter {
     background: transparent;
 }
 QLabel#connectionStatus {
-    color: #e0b96d;
+    color: #8a7348;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
 }
 QLabel#connectionStatus[status="connected"] {
-    color: #74c991;
+    color: #3f7a52;
 }
 QLabel#connectionStatus[status="waiting"] {
-    color: #e0b96d;
+    color: #8a7348;
 }
 QLabel#connectionStatus[status="failure"] {
-    color: #ef806f;
+    color: #8f4a44;
 }
 QLabel#connectionStatus[status="offline"] {
-    color: #77838d;
+    color: #5a646e;
+}
+QLabel#viewModeStatus {
+    color: #8493a2;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
 }
 QLabel#positionStatus {
     color: #8f9caa;
+}
+QLabel#zoomValue {
+    color: #8493a2;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    min-width: 32px;
 }
 QLabel#characterOfflineLabel {
     color: #77838d;
