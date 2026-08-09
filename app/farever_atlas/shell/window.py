@@ -17,6 +17,7 @@ from ..config import (
     safe_float,
     safe_int,
 )
+from ..cull_limits import cull_setting
 from ..controls import FilterChipButton
 from ..pages.map.data import MapTexture, Snapshot
 from ..pages.map.fog import FOW_TIER_ORDER
@@ -2146,6 +2147,31 @@ class AtlasWindow(
         self.radar.show_critters = self.critters_filter.isChecked()
         self.radar.show_patrol_paths = bool(self.show_patrol_paths)
         self.radar.show_players = self.players_filter.isChecked()
+        self.radar.enemy_xy_m = float(cull_setting(self._settings, "map/cull/enemy_xy_m"))
+        self.radar.enemy_z_fade = float(
+            cull_setting(self._settings, "map/cull/enemy_z_m")
+        )
+        self.radar.critter_xy_m = float(
+            cull_setting(self._settings, "map/cull/critter_xy_m")
+        )
+        self.radar.critter_z_fade = float(
+            cull_setting(self._settings, "map/cull/critter_z_m")
+        )
+        self.radar.patrol_xy_m = float(
+            cull_setting(self._settings, "map/cull/patrol_xy_m")
+        )
+        self.radar.patrol_z_m = float(
+            cull_setting(self._settings, "map/cull/patrol_z_m")
+        )
+        self.radar.patrol_leash_m = float(
+            cull_setting(self._settings, "map/cull/patrol_leash_m")
+        )
+        loot_xy = float(cull_setting(self._settings, "map/cull/loot_xy_m"))
+        loot_z = float(cull_setting(self._settings, "map/cull/loot_z_m"))
+        self.radar.loot_live_range_m = loot_xy
+        self.radar.loot_live_z_cull_m = loot_z
+        self.LIVE_RANGE_M = loot_xy
+        self.LIVE_Z_CULL_M = loot_z
         self._update_enemies_filter_tooltip()
         self.radar.show_player_names = self._setting_bool(
             "map/show_player_names", False

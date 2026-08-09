@@ -9,6 +9,7 @@ from typing import Any
 from PySide6 import QtCore, QtWidgets
 
 from ...config import safe_float
+from ...cull_limits import DEFAULT_LOOT_XY_M, DEFAULT_LOOT_Z_M
 from ...display_names import (
     chest_label_from_id,
     format_gatherable_tooltip_name,
@@ -507,8 +508,6 @@ class GatherNavPanel(QtWidgets.QWidget):
 class GatherNavMixin:
     """Nearest-node collect routing driven by live interactibles + static POIs."""
 
-    LIVE_RANGE_M = 500.0
-    LIVE_Z_CULL_M = 160.0
     LIVE_MATCH_M = 12.0
     DEPLETED_GRACE_S = 0.75
 
@@ -523,6 +522,8 @@ class GatherNavMixin:
         self.gather_nav_depleted_positions: list[tuple[float, float]] = []
         self._gather_missing_since: float | None = None
         self._gather_missing_key: str | None = None
+        self.LIVE_RANGE_M = float(DEFAULT_LOOT_XY_M)
+        self.LIVE_Z_CULL_M = float(DEFAULT_LOOT_Z_M)
 
     def _gather_nav_panel(self) -> GatherNavPanel | None:
         panel = getattr(self, "gather_panel", None)
@@ -928,7 +929,7 @@ class GatherNavMixin:
             if not self._matches_gather_filters(poi):
                 continue
             poi_id = str(poi.get("id") or "").strip()
-            if kind == "red_orb" and _element_completed(poi_id, completed):
+            if kind in {"red_orb", "chest"} and _element_completed(poi_id, completed):
                 continue
             key = _static_key(poi)
             if key in self.gather_nav_skipped or key in self.gather_nav_depleted:
@@ -1168,6 +1169,13 @@ class GatherNavMixin:
                 return False
             completed = _completion_ids(self._gather_snapshot_state(snapshot))
             return _element_completed(poi_id, completed)
+        if kind == "chest":
+            poi_id = str(target.get("poi_id") or "").strip()
+            if poi_id:
+                completed = _completion_ids(self._gather_snapshot_state(snapshot))
+                if _element_completed(poi_id, completed):
+                    return True
+            # Live-only orphans (or progress not refreshed yet) fall through.
 
         live_id = str(target.get("live_id") or "")
         if not live_id:
