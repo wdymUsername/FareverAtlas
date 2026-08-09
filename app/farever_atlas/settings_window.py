@@ -91,6 +91,7 @@ def apply_settings_defaults(settings: QtCore.QSettings) -> None:
     settings.setValue("map/show_collectibles", False)
     settings.setValue("map/show_enemies", True)
     settings.setValue("map/show_critters", True)
+    settings.setValue("map/show_patrol_paths", True)
     settings.setValue("map/show_players", True)
     settings.setValue("map/show_player_names", False)
     settings.setValue("map/show_currencies", True)
@@ -245,6 +246,9 @@ class SettingsPanel(QtCore.QObject):
             )
             self.show_critters.setChecked(
                 _as_bool(self._settings.value("map/show_critters"), True)
+            )
+            self.show_patrol_paths.setChecked(
+                _as_bool(self._settings.value("map/show_patrol_paths"), True)
             )
             self.show_players.setChecked(
                 _as_bool(self._settings.value("map/show_players"), True)
@@ -515,6 +519,9 @@ class SettingsPanel(QtCore.QObject):
         self.show_critters = QtWidgets.QCheckBox()
         self._bind_bool(self.show_critters, "map/show_critters")
         default_form.addRow("Companion critters", self.show_critters)
+        self.show_patrol_paths = QtWidgets.QCheckBox()
+        self._bind_bool(self.show_patrol_paths, "map/show_patrol_paths")
+        default_form.addRow("Patrol paths", self.show_patrol_paths)
         self.show_players = QtWidgets.QCheckBox()
         self._bind_bool(self.show_players, "map/show_players")
         default_form.addRow("Nearby players", self.show_players)
