@@ -4,7 +4,7 @@ Read-only Windows telemetry helper for Farever Atlas (`farever-atlas-bridge`).
 
 It discovers `Farever.exe` inside the same Proton / Windows process space, fingerprints the supported build, attaches with query + VM-read rights only, and writes a live snapshot to `farever-telemetry.json`. Atlas polls that file while it is fresh.
 
-Current report version: **0.23.19** (`bridge_version` in the JSON). Release builds are a headless Windows PE (no console window).
+Current report version: **0.23.20** (`bridge_version` in the JSON). Release builds are a headless Windows PE (no console window).
 
 ## Safety boundary
 

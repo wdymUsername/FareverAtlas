@@ -40,6 +40,7 @@ mod windows_bridge {
     const PROCESS_QUERY_LIMITED_INFORMATION: Dword = 0x0000_1000;
     const FAREVER_READ_ACCESS: Dword = PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ;
 
+    const BRIDGE_VERSION: &str = env!("CARGO_PKG_VERSION");
     const SUPPORTED_PROFILE_NAME: &str = "farever-2026-07-20";
     const SUPPORTED_MACHINE: u16 = 0x8664;
     const SUPPORTED_PE_TIMESTAMP: u32 = 1_784_543_904;
@@ -4199,7 +4200,7 @@ mod windows_bridge {
 
     fn waiting_report(sequence: u64, timestamp_ms: u128, message: &str) -> String {
         format!(
-            "{{\"schema\":1,\"bridge_version\":\"0.23.19\",\"state\":\"waiting\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"message\":{}}}\n",
+            "{{\"schema\":1,\"bridge_version\":\"{BRIDGE_VERSION}\",\"state\":\"waiting\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"message\":{}}}\n",
             json_string(message)
         )
     }
@@ -4943,7 +4944,7 @@ mod windows_bridge {
                             .join(",");
                         (
                             format!(
-                                "{{\"schema\":1,\"bridge_version\":\"0.23.19\",\"state\":\"connected\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"game_app_address\":\"0x{:x}\",\"player_address\":\"0x{:x}\",\"hero_address\":\"0x{:x}\",\"player\":{{\"name\":{},\"uid\":{},\"class\":{},\"level\":{},\"in_combat\":{},\"vitality\":{},\"health\":{},\"max_health\":{},\"health_regen\":{},\"shield\":{},\"shield_ratio\":{},\"shield_capacity\":{},\"shield_gauge_visible\":{},\"raw_shield\":{},\"shield_gauge_available\":{},\"special_energy\":{},\"special_energy_regen\":{},\"currencies\":[{currencies_json}],\"currency_counters\":{{{currency_counters_json}}}}},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}},\"rotation_z\":{},\"camera_yaw\":{camera_yaw_json},\"party\":[{}],\"enemies\":[{}],\"critters\":[{}],\"players\":[{}],\"interactibles\":[{}],\"instance\":{instance_json},\"time_of_day\":{time_of_day_json},\"completed_elements\":[{}],\"dps\":{{\"mode\":\"observed_nearby\",\"fight_id\":{},\"current\":{},\"total\":{},\"elapsed\":{},\"in_combat\":{},\"damage_skills\":[{{\"skill\":\"Observed nearby damage\",\"total\":{},\"hits\":0,\"crits\":0,\"max\":0}}],\"healing_skills\":[]}}}}\n",
+                                "{{\"schema\":1,\"bridge_version\":\"{BRIDGE_VERSION}\",\"state\":\"connected\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"game_app_address\":\"0x{:x}\",\"player_address\":\"0x{:x}\",\"hero_address\":\"0x{:x}\",\"player\":{{\"name\":{},\"uid\":{},\"class\":{},\"level\":{},\"in_combat\":{},\"vitality\":{},\"health\":{},\"max_health\":{},\"health_regen\":{},\"shield\":{},\"shield_ratio\":{},\"shield_capacity\":{},\"shield_gauge_visible\":{},\"raw_shield\":{},\"shield_gauge_available\":{},\"special_energy\":{},\"special_energy_regen\":{},\"currencies\":[{currencies_json}],\"currency_counters\":{{{currency_counters_json}}}}},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}},\"rotation_z\":{},\"camera_yaw\":{camera_yaw_json},\"party\":[{}],\"enemies\":[{}],\"critters\":[{}],\"players\":[{}],\"interactibles\":[{}],\"instance\":{instance_json},\"time_of_day\":{time_of_day_json},\"completed_elements\":[{}],\"dps\":{{\"mode\":\"observed_nearby\",\"fight_id\":{},\"current\":{},\"total\":{},\"elapsed\":{},\"in_combat\":{},\"damage_skills\":[{{\"skill\":\"Observed nearby damage\",\"total\":{},\"hits\":0,\"crits\":0,\"max\":0}}],\"healing_skills\":[]}}}}\n",
                                 sample.game_app,
                                 sample.player,
                                 sample.hero,
@@ -5080,7 +5081,7 @@ mod windows_bridge {
             concat!(
                 "{{",
                 "\"schema\":1,",
-                "\"bridge_version\":\"0.9.0\",",
+                "\"bridge_version\":\"{}\",",
                 "\"access\":\"query+read-only\",",
                 "\"build_supported\":true,",
                 "\"build_profile\":{},",
@@ -5149,6 +5150,7 @@ mod windows_bridge {
                 "}}",
                 "}}"
             ),
+            BRIDGE_VERSION,
             json_string(SUPPORTED_PROFILE_NAME),
             process_id,
             json_string(&module.name),

@@ -1,6 +1,6 @@
 [package]
 name = "farever-atlas-bridge"
-version = "0.10.0"
+version = "0.23.20"
 edition = "2024"
 publish = false
 
