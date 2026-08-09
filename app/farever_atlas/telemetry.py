@@ -13,7 +13,14 @@ from PySide6 import QtCore
 from .config import ASSET_ROOT, PROJECT_ROOT, safe_float
 from .currency_caps import enrich_currencies
 from .pages.map.data import Snapshot
-from .unit_traits import is_critter_kind, is_spark_kind
+from .unit_traits import (
+    is_boss_kind,
+    is_critter_kind,
+    is_elite_kind,
+    is_miniboss_kind,
+    is_spark_kind,
+    is_unique_kind,
+)
 
 
 def _gatherable_size(name: str) -> str:
@@ -205,11 +212,19 @@ class DataHub(QtCore.QObject):
                 kind = None
             kind_text = kind or ""
             spark = bool(row.get("spark")) or is_spark_kind(kind_text)
+            elite = bool(row.get("elite")) or is_elite_kind(kind_text)
+            boss = bool(row.get("boss")) or is_boss_kind(kind_text)
+            miniboss = bool(row.get("miniboss")) or is_miniboss_kind(kind_text)
+            unique = bool(row.get("unique")) or is_unique_kind(kind_text)
             bucket.append(
                 {
                     "id": actor_id,
                     "kind": kind_text,
                     "spark": spark,
+                    "elite": elite,
+                    "boss": boss,
+                    "miniboss": miniboss,
+                    "unique": unique,
                     "x": position.get("x"),
                     "y": position.get("y"),
                     "z": position.get("z"),

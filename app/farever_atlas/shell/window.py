@@ -207,11 +207,15 @@ class AtlasWindow(
             "Sparkling critters get a gold halo"
         )
 
+
         self.players_filter = FilterChipButton(
-            "Players", color="#E8B84A", marker="diamond"
+            "Players", color="#5AAFE0", marker="dot"
         )
         self.players_filter.setChecked(self._setting_bool("map/show_players", True))
-        self.players_filter.setToolTip("Show or hide other players on the map")
+        self.players_filter.setToolTip(
+            "Show or hide other players on the map\n"
+            "Party members use the same circle in bright blue"
+        )
 
         self.poi_filters: dict[str, FilterChipButton] = {}
         poi_chip_colors = {

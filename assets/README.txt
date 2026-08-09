@@ -12,7 +12,7 @@ Supported files:
 - currency_demonic_soul.png
 - currency_nightblood.png
 - currency_caps.json (from data.cdb item.props.currency.max)
-- unit_traits.json (critter + Spark kind lists from CastleDB unit sheet)
+- unit_traits.json (critter / Spark / Elite / Boss / Miniboss / Unique kind lists from CastleDB unit sheet)
 - redOrb.webp
 - plant.webp
 - ore.webp
@@ -37,6 +37,11 @@ Wild critter spawn points (authored map spawners, not live entities) are in
 critter_spawns_W1_Siagarta.json. Rebuild from extracted res.map + data.cdb with:
 
   python tools/extract_critter_spawns.py
+
+Unit trait kind lists (companions, Spark rares, Elite / Boss / Miniboss /
+Unique specials) are in unit_traits.json. Rebuild from extracted data.cdb with:
+
+  python tools/extract_unit_traits.py
 
 UI fonts are prepared by `python -m farever_atlas.fonts` (also run by
 ./farever setup, farever.bat setup, and the Windows packaging scripts). That
