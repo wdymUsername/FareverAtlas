@@ -125,6 +125,7 @@ class AtlasWindow(
             else None
         )
         self._init_gather_nav_state()
+        self._init_proximity_alert_state()
         saved_gather_kind = str(
             self._settings.value("map/gather_nav_kind", "plant") or "plant"
         ).strip().lower()
@@ -819,6 +820,9 @@ class AtlasWindow(
         *,
         kind: str = "success",
         duration_ms: int = 2800,
+        action_label: str | None = None,
+        on_action=None,
+        on_dismiss=None,
     ) -> None:
         if not hasattr(self, "_toast_host"):
             return
@@ -826,6 +830,9 @@ class AtlasWindow(
             message,
             kind=kind,
             duration_ms=duration_ms,
+            action_label=action_label,
+            on_action=on_action,
+            on_dismiss=on_dismiss,
         )
 
 
@@ -2311,6 +2318,7 @@ class AtlasWindow(
         # out-of-range loot. Live interactibles overlay loot when in range.
         self.radar.set_snapshot(snapshot)
         self._gather_nav_tick(snapshot)
+        self._proximity_alert_tick(snapshot)
         self._update_dps_overlay(
             snapshot.state if isinstance(snapshot.state, dict) else {}
         )

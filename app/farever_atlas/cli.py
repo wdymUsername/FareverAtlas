@@ -102,11 +102,19 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Enable the Reload control for soft in-process UI reloads",
     )
+    parser.add_argument(
+        "--test-toast",
+        action="store_true",
+        help="With --dev, summon sample toasts after the window opens",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    if args.test_toast and not args.dev:
+        print("--test-toast requires --dev", file=sys.stderr)
+        return 2
     game_dir = args.game_dir.expanduser() if args.game_dir else discover_game_dir()
     app = QtWidgets.QApplication(sys.argv)
     app.setApplicationName("Farever Atlas")
@@ -152,8 +160,16 @@ def main() -> int:
         },
     )
     if args.dev:
-        print("Dev mode: use the Reload button (title bar) to soft-reload UI code.")
+        print(
+            "Dev mode: Reload (title bar) soft-reloads UI; "
+            "Toast summons sample notifications.",
+            flush=True,
+        )
     controller.show()
     hub.start()
+    if args.test_toast:
+        QtCore.QTimer.singleShot(
+            250, controller.map_window._summon_test_toasts
+        )
     app.aboutToQuit.connect(lambda: settings.sync())
     return app.exec()

@@ -107,6 +107,21 @@ QToolButton#reloadUiButton:pressed {
 QToolButton#reloadUiButton:disabled {
     opacity: 0.45;
 }
+QToolButton#testToastButton {
+    color: #9eb0be;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    padding: 0 6px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+}
+QToolButton#testToastButton:hover,
+QToolButton#testToastButton:pressed {
+    color: #e8f0f6;
+    background: #2a3845;
+}
 QToolButton#mainMenuButton::menu-indicator {
     image: none;
     width: 0;
@@ -2145,43 +2160,61 @@ QWidget#toastHost {
     border: none;
 }
 QFrame#toastCard {
-    background: #152029;
-    border: 1px solid #3a5160;
-    border-radius: 6px;
-    min-height: 36px;
+    background: rgba(18, 26, 34, 230);
+    border: 1px solid rgba(55, 72, 86, 140);
+    border-left: 2px solid #5a7384;
+    border-radius: 5px;
+    min-height: 34px;
 }
 QFrame#toastCard[toastKind="success"] {
-    border-color: #3d6b52;
-    background: #14241c;
+    border-left-color: #4a9a6a;
 }
 QFrame#toastCard[toastKind="warning"] {
-    border-color: #7a6230;
-    background: #241e12;
+    border-left-color: #c49a3c;
 }
 QFrame#toastCard[toastKind="error"] {
-    border-color: #7a3a3a;
-    background: #241414;
+    border-left-color: #c45a5f;
 }
 QFrame#toastCard[toastKind="info"] {
-    border-color: #3a5160;
-    background: #152029;
+    border-left-color: #4a8ab8;
 }
 QLabel#toastMessage {
-    color: #e8f0f6;
+    color: #d7e0e8;
     background: transparent;
     border: none;
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
+    padding: 0;
 }
 QToolButton#toastClose {
-    color: #8fa2ae;
+    color: #556878;
     background: transparent;
     border: none;
+    border-radius: 0;
     padding: 0;
-    font-size: 14px;
-    font-weight: 700;
+    margin: 0;
+    min-width: 12px;
+    max-width: 12px;
+    min-height: 12px;
+    max-height: 12px;
+    font-size: 10px;
+    font-weight: 400;
 }
 QToolButton#toastClose:hover {
+    color: #b8c6d0;
+    background: transparent;
+}
+QToolButton#toastAction {
+    color: #d7e0e8;
+    background: transparent;
+    border: 1px solid rgba(90, 114, 132, 120);
+    border-radius: 3px;
+    padding: 1px 8px;
+    font-size: 11px;
+    font-weight: 600;
+}
+QToolButton#toastAction:hover {
     color: #eef4f8;
+    border-color: rgba(130, 156, 176, 160);
 }
 """
