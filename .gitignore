@@ -20,6 +20,7 @@ custom_waypoints_export.json
 # Runtime bridge output
 native_bridge/farever-process.json
 native_bridge/farever-telemetry.json
+native_bridge/farever-telemetry.profile.txt
 native_bridge/bridge.log
 
 # Generated build output and release packages

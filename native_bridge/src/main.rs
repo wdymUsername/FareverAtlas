@@ -610,6 +610,61 @@ mod windows_bridge {
         unsafe { GetLastError() }
     }
 
+    /// Read an object array's pointer table in as few crossings as possible.
+    ///
+    /// Walking the table a pointer at a time costs a ReadProcessMemory call per
+    /// slot, and at roughly 13 us a crossing that dominated every sweep - most
+    /// slots are discarded immediately afterwards, so the crossing bought
+    /// nothing. One block fetches 512 pointers instead.
+    ///
+    /// A slot that cannot be read becomes a null pointer rather than ending the
+    /// walk, which is what the per-slot version did by skipping to the next
+    /// index: callers already treat null as "not a unit". That keeps an
+    /// unreadable page near the end of the array from hiding the units before
+    /// it.
+    fn read_array_pointers(process: &OwnedHandle, storage: usize, length: usize) -> Vec<usize> {
+        const ARRAY_HEADER_BYTES: usize = 24;
+        const BLOCK_BYTES: usize = 4096;
+        let mut pointers = Vec::with_capacity(length);
+        let mut index = 0;
+        while index < length {
+            let Some(address) = storage.checked_add(ARRAY_HEADER_BYTES + index * 8) else {
+                break;
+            };
+            let wanted = ((length - index) * 8).min(BLOCK_BYTES);
+            let usable = match read_process_bytes_partial(process, address, wanted) {
+                // Wine truncates a read that runs into an unmapped page, so a
+                // short block is normal rather than a failure.
+                Ok(block) => {
+                    let count = block.len() / 8;
+                    for slot in 0..count {
+                        let start = slot * 8;
+                        pointers.push(u64::from_le_bytes(
+                            block[start..start + 8]
+                                .try_into()
+                                .expect("eight bytes of an eight byte slice"),
+                        ) as usize);
+                    }
+                    count
+                }
+                Err(_) => 0,
+            };
+            if usable == 0 {
+                pointers.push(0);
+                index += 1;
+            } else {
+                index += usable;
+            }
+        }
+        pointers
+    }
+
+    /// Cross-process reads issued, for sizing what a sweep really costs.
+    ///
+    /// Every read is a ReadProcessMemory syscall through Wine, so this count
+    /// tracks a sweep's cost far better than the number of units it returns.
+    static PROCESS_READS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
     fn read_process_bytes(
         process: &OwnedHandle,
         address: usize,
@@ -635,6 +690,7 @@ mod windows_bridge {
         if size == 0 || size > 4096 {
             return Err(format!("refusing invalid process read size {size}"));
         }
+        PROCESS_READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut buffer = vec![0_u8; size];
         let mut bytes_read = 0_usize;
         let succeeded = unsafe {
@@ -1205,6 +1261,24 @@ mod windows_bridge {
         Ok(read_u64_le(&read_process_bytes(process, address, 8)?, 0)? as usize)
     }
 
+    thread_local! {
+        /// Whether one type derives from another, keyed by the pair.
+        ///
+        /// Answering it costs two crossings per level of the hierarchy and the
+        /// question is asked of every unit in every array of every sweep, which
+        /// made it the single largest cost in the loop. Type objects neither
+        /// move nor change parent while the game runs, so each pair only has to
+        /// be walked once; afterwards the check costs the one read that fetches
+        /// the object's own type.
+        static TYPE_ANCESTRY: std::cell::RefCell<HashMap<(usize, usize), bool>> =
+            std::cell::RefCell::new(HashMap::new());
+    }
+
+    /// Forget the cached hierarchy, for when the addresses it keys on go stale.
+    fn forget_type_ancestry() {
+        TYPE_ANCESTRY.with(|cache| cache.borrow_mut().clear());
+    }
+
     fn object_is_a(
         process: &OwnedHandle,
         object_address: usize,
@@ -1213,34 +1287,46 @@ mod windows_bridge {
         let Ok(bytes) = read_process_bytes(process, object_address, 8) else {
             return false;
         };
-        let Ok(mut current_type) = read_u64_le(&bytes, 0).map(|value| value as usize) else {
+        let Ok(object_type) = read_u64_le(&bytes, 0).map(|value| value as usize) else {
             return false;
         };
+        let key = (object_type, expected_type_address);
+        if let Some(known) = TYPE_ANCESTRY.with(|cache| cache.borrow().get(&key).copied()) {
+            return known;
+        }
+        // Only a walk that reached a conclusion is worth keeping. Caching a
+        // failed read would make one unlucky crossing permanent.
+        let Some(derives) = type_derives_from(process, object_type, expected_type_address) else {
+            return false;
+        };
+        TYPE_ANCESTRY.with(|cache| cache.borrow_mut().insert(key, derives));
+        derives
+    }
+
+    /// Walk a type's ancestry, or `None` if the process could not be read.
+    fn type_derives_from(
+        process: &OwnedHandle,
+        object_type: usize,
+        expected_type_address: usize,
+    ) -> Option<bool> {
+        let mut current_type = object_type;
         for _ in 0..32 {
             if current_type == expected_type_address {
-                return true;
+                return Some(true);
             }
-            let Ok(type_bytes) = read_process_bytes(process, current_type, 16) else {
-                return false;
-            };
+            let type_bytes = read_process_bytes(process, current_type, 16).ok()?;
             if read_u32_le(&type_bytes, 0).ok() != Some(11) {
-                return false;
+                return Some(false);
             }
-            let Ok(metadata) = read_u64_le(&type_bytes, 8).map(|value| value as usize) else {
-                return false;
-            };
-            let Ok(super_bytes) = read_process_bytes(process, metadata + 0x18, 8) else {
-                return false;
-            };
-            let Ok(parent) = read_u64_le(&super_bytes, 0).map(|value| value as usize) else {
-                return false;
-            };
+            let metadata = read_u64_le(&type_bytes, 8).map(|value| value as usize).ok()?;
+            let super_bytes = read_process_bytes(process, metadata + 0x18, 8).ok()?;
+            let parent = read_u64_le(&super_bytes, 0).map(|value| value as usize).ok()?;
             if parent == 0 || parent == current_type {
-                return false;
+                return Some(false);
             }
             current_type = parent;
         }
-        false
+        Some(false)
     }
 
     fn read_live_foe_health(
@@ -1277,11 +1363,7 @@ mod windows_bridge {
         }
         let foe_type = code.types_address + FOE_TYPE_INDEX * 32;
         let mut foes = Vec::new();
-        for index in 0..length as usize {
-            let entry = storage
-                .checked_add(24 + index * 8)
-                .ok_or_else(|| "GameLayer.units entry address overflowed".to_owned())?;
-            let unit = read_u64_le(&read_process_bytes(process, entry, 8)?, 0)? as usize;
+        for unit in read_array_pointers(process, storage, length as usize) {
             if unit == 0 || !object_is_a(process, unit, foe_type) {
                 continue;
             }
@@ -1563,19 +1645,10 @@ mod windows_bridge {
         let foe_type = code.types_address + FOE_TYPE_INDEX * 32;
         let radius_sq = ENEMY_SWEEP_RADIUS * ENEMY_SWEEP_RADIUS;
         let mut enemies = Vec::new();
-        for index in 0..length as usize {
+        for unit in read_array_pointers(process, storage, length as usize) {
             if enemies.len() >= ENEMY_SWEEP_MAX {
                 break;
             }
-            let Some(entry) = storage.checked_add(24 + index * 8) else {
-                continue;
-            };
-            let Ok(entry_bytes) = read_process_bytes(process, entry, 8) else {
-                continue;
-            };
-            let Ok(unit) = read_u64_le(&entry_bytes, 0).map(|value| value as usize) else {
-                continue;
-            };
             if unit == 0 || unit == hero || !object_is_a(process, unit, foe_type) {
                 continue;
             }
@@ -1746,19 +1819,10 @@ mod windows_bridge {
         if storage == 0 {
             return;
         }
-        for index in 0..length as usize {
+        for unit in read_array_pointers(process, storage, length as usize) {
             if critters.len() >= CRITTER_SWEEP_MAX {
                 break;
             }
-            let Some(entry) = storage.checked_add(24 + index * 8) else {
-                continue;
-            };
-            let Ok(entry_bytes) = read_process_bytes(process, entry, 8) else {
-                continue;
-            };
-            let Ok(unit) = read_u64_le(&entry_bytes, 0).map(|value| value as usize) else {
-                continue;
-            };
             if unit == 0 || unit == local_hero || !seen.insert(unit) {
                 continue;
             }
@@ -1928,19 +1992,10 @@ mod windows_bridge {
         if storage == 0 {
             return Ok(());
         }
-        for index in 0..length as usize {
+        for unit in read_array_pointers(process, storage, length as usize) {
             if players.len() >= PLAYER_SWEEP_MAX {
                 break;
             }
-            let Some(entry) = storage.checked_add(24 + index * 8) else {
-                continue;
-            };
-            let Ok(entry_bytes) = read_process_bytes(process, entry, 8) else {
-                continue;
-            };
-            let Ok(unit) = read_u64_le(&entry_bytes, 0).map(|value| value as usize) else {
-                continue;
-            };
             if unit == 0 || unit == local_hero || !object_is_a(process, unit, hero_type) {
                 continue;
             }
@@ -2145,19 +2200,10 @@ mod windows_bridge {
         let chest_type = code.types_address + CHEST_TYPE_INDEX * 32;
         let radius_sq = INTERACTIBLE_SWEEP_RADIUS * INTERACTIBLE_SWEEP_RADIUS;
         let mut samples = Vec::new();
-        for index in 0..length as usize {
+        for object in read_array_pointers(process, storage, length as usize) {
             if samples.len() >= INTERACTIBLE_SWEEP_MAX {
                 break;
             }
-            let Some(entry) = storage.checked_add(24 + index * 8) else {
-                continue;
-            };
-            let Ok(entry_bytes) = read_process_bytes(process, entry, 8) else {
-                continue;
-            };
-            let Ok(object) = read_u64_le(&entry_bytes, 0).map(|value| value as usize) else {
-                continue;
-            };
             if object == 0 {
                 continue;
             }
@@ -4985,10 +5031,158 @@ mod windows_bridge {
         })
     }
 
+    /// Replace the report in one step.
+    ///
+    /// The reader polls several times per write, so truncating in place would
+    /// eventually be caught half written and cost that sample. Writing a sibling
+    /// and renaming means every read sees either the whole old file or the whole
+    /// new one; on Windows `rename` maps to `MoveFileEx` with replace semantics.
+    fn publish_report(path: &Path, contents: &str) -> Result<(), String> {
+        let mut name = path
+            .file_name()
+            .map(|value| value.to_os_string())
+            .unwrap_or_default();
+        name.push(".tmp");
+        let temp = path.with_file_name(name);
+        std::fs::write(&temp, contents)
+            .map_err(|error| format!("could not write {}: {error}", temp.display()))?;
+        std::fs::rename(&temp, path)
+            .map_err(|error| format!("could not replace {}: {error}", path.display()))
+    }
+
+    /// Encode enemies or critters, which the report carries in the same shape.
+    fn encode_units(units: &[EnemySample]) -> String {
+        units
+            .iter()
+            .map(|unit| {
+                format!(
+                    "{{\"id\":\"0x{:x}\",\"kind\":{},\"spark\":{},\"elite\":{},\"boss\":{},\"miniboss\":{},\"unique\":{},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}}}}",
+                    unit.address,
+                    json_string(&unit.kind),
+                    if unit.spark { "true" } else { "false" },
+                    if unit.elite { "true" } else { "false" },
+                    if unit.boss { "true" } else { "false" },
+                    if unit.miniboss { "true" } else { "false" },
+                    if unit.unique { "true" } else { "false" },
+                    unit.x,
+                    unit.y,
+                    unit.z,
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    /// Per-phase timings for a loop that cannot keep its cadence.
+    ///
+    /// The loop only writes as fast as the game's memory can be read, so when
+    /// the real rate falls short of the requested interval this says which
+    /// sweep is responsible. Enabled with `FAREVER_BRIDGE_PROFILE=1` and
+    /// written beside the telemetry output, because Proton swallows stderr.
+    struct PhaseProfile {
+        enabled: bool,
+        totals: [u128; PhaseProfile::PHASES],
+        iterations: u32,
+        started: Instant,
+    }
+
+    impl PhaseProfile {
+        const PHASES: usize = 7;
+        const NAMES: [&'static str; PhaseProfile::PHASES] = [
+            "player+party",
+            "foe_health",
+            "enemies",
+            "critters",
+            "players",
+            "interactibles",
+            "write",
+        ];
+        const WINDOW: u32 = 20;
+
+        fn new() -> Self {
+            Self {
+                enabled: std::env::var_os("FAREVER_BRIDGE_PROFILE").is_some(),
+                totals: [0; PhaseProfile::PHASES],
+                iterations: 0,
+                started: Instant::now(),
+            }
+        }
+
+        fn add(&mut self, phase: usize, started: Instant) {
+            if self.enabled {
+                self.totals[phase] += started.elapsed().as_micros();
+            }
+        }
+
+        fn finish_iteration(&mut self, path: &Path) {
+            if !self.enabled {
+                return;
+            }
+            self.iterations += 1;
+            if self.iterations < PhaseProfile::WINDOW {
+                return;
+            }
+            let elapsed = self.started.elapsed().as_secs_f64();
+            let mut text = format!(
+                "{} iterations in {elapsed:.2}s = {:.2} Hz\nmean per iteration:\n",
+                self.iterations,
+                f64::from(self.iterations) / elapsed,
+            );
+            let mut accounted = 0.0;
+            for (name, total) in PhaseProfile::NAMES.iter().zip(self.totals.iter()) {
+                let mean_ms = *total as f64 / 1000.0 / f64::from(self.iterations);
+                accounted += mean_ms;
+                text.push_str(&format!("  {name:<14} {mean_ms:8.1} ms\n"));
+            }
+            let reads = PROCESS_READS.swap(0, std::sync::atomic::Ordering::Relaxed);
+            text.push_str(&format!(
+                "  {:<14} {:8.0} reads\n",
+                "memory reads",
+                reads as f64 / f64::from(self.iterations),
+            ));
+            // Whatever is left is building the JSON string and the sleep.
+            let wall_ms = elapsed * 1000.0 / f64::from(self.iterations);
+            text.push_str(&format!(
+                "  {:<14} {:8.1} ms\n  {:<14} {wall_ms:8.1} ms\n",
+                "unaccounted",
+                wall_ms - accounted,
+                "iteration",
+            ));
+            let _ = std::fs::write(path.with_extension("profile.txt"), text);
+            self.totals = [0; PhaseProfile::PHASES];
+            self.iterations = 0;
+            self.started = Instant::now();
+        }
+    }
+
+    /// Hold the loop to a fixed cadence.
+    ///
+    /// Sleeping the whole interval after the work makes the real period the
+    /// interval plus however long reading process memory took, so the rate
+    /// drifts with entity count and a reader polling at a similar rate aliases
+    /// against it. Missed deadlines are dropped rather than accumulated, so a
+    /// slow sample cannot leave the loop owing time and firing back to back.
+    fn sleep_until_next_tick(next: &mut Instant, interval: Duration) {
+        *next += interval;
+        let now = Instant::now();
+        match next.checked_duration_since(now) {
+            Some(remaining) => std::thread::sleep(remaining),
+            None => *next = now,
+        }
+    }
+
     pub fn watch(path: &Path, interval_ms: u64) -> Result<(), String> {
         if !(50..=5_000).contains(&interval_ms) {
             return Err("watch interval must be between 50 and 5000 ms".to_owned());
         }
+        let interval = Duration::from_millis(interval_ms);
+        let mut next_tick = Instant::now();
+        let mut profile = PhaseProfile::new();
+        // Each sweep's last result, reused on the iterations it does not run.
+        let mut enemies_json = String::new();
+        let mut critters_json = String::new();
+        let mut players_json = String::new();
+        let mut interactibles_json = String::new();
         let mut attached: Option<(OwnedHandle, CodeAnchor)> = None;
         let mut sequence = 0_u64;
         let mut hud_health_gauge = None;
@@ -5014,6 +5208,9 @@ mod windows_bridge {
                 match attach_for_watch() {
                     Ok(pair) => {
                         attached = Some(pair);
+                        // Cached type addresses belong to the process we just
+                        // left, and a restarted game lays its types out afresh.
+                        forget_type_ancestry();
                         hud_health_gauge = None;
                         hud_shield_gauge = None;
                         party_gauge_cache.clear();
@@ -5025,11 +5222,8 @@ mod windows_bridge {
                         consecutive_sample_failures = 0;
                     }
                     Err(error) => {
-                        std::fs::write(path, waiting_report(sequence, timestamp_ms, &error))
-                            .map_err(|write_error| {
-                                format!("could not write {}: {write_error}", path.display())
-                            })?;
-                        std::thread::sleep(Duration::from_millis(interval_ms));
+                        publish_report(path, &waiting_report(sequence, timestamp_ms, &error))?;
+                        sleep_until_next_tick(&mut next_tick, interval);
                         continue;
                     }
                 }
@@ -5039,7 +5233,8 @@ mod windows_bridge {
                 let (process, code) = attached
                     .as_ref()
                     .expect("attach succeeded or loop continued");
-                match sample_telemetry(
+                let sample_started = Instant::now();
+                let sampled = sample_telemetry(
                     process,
                     code,
                     &mut hud_health_gauge,
@@ -5048,7 +5243,9 @@ mod windows_bridge {
                     &mut party_gauge_cache,
                     &mut completed_elements_cache,
                     &mut completed_activities_cache,
-                ) {
+                );
+                profile.add(0, sample_started);
+                match sampled {
                     Ok(mut sample) => {
                         consecutive_sample_failures = 0;
                         // Drop sticky name when the live uid changes (character swap).
@@ -5079,6 +5276,7 @@ mod windows_bridge {
                         let now = Instant::now();
                         let foes = read_live_foe_health(process, code, sample.hero)
                             .unwrap_or_default();
+                        profile.add(1, now);
                         observed_dps.update(&foes, sample.in_combat, now);
                         let dps_elapsed = observed_dps.elapsed(now);
                         let dps_rate = if dps_elapsed > 0.0 {
@@ -5086,37 +5284,105 @@ mod windows_bridge {
                         } else {
                             0.0
                         };
-                        let enemies = read_nearby_enemies(
-                            process,
-                            code,
-                            sample.hero,
-                            sample.x,
-                            sample.y,
-                            sample.z,
-                        )
-                        .unwrap_or_default();
-                        let critters = read_layer_critters(process, code, sample.hero)
+                        // Sweeping the whole world every iteration is what sets the
+                        // sample rate: reading the player's own pose costs about
+                        // 4 ms, the sweeps around 250 ms, and the pose could not be
+                        // published until they finished. That put every position
+                        // 260 ms apart, further than the reader can carry a sample
+                        // forward, so the marker ran out of prediction and sat still
+                        // until the next one landed.
+                        //
+                        // Each sweep is refreshed on its own turn instead, and the
+                        // rest of the report is filled from the last result. One
+                        // sweep per iteration keeps the pose interval to roughly the
+                        // interval plus the sweep due, and no category goes more than
+                        // a full rotation without a refresh. The first iteration
+                        // takes every turn at once so nothing starts out empty.
+                        let first_sample = sequence == 1;
+                        let turn = sequence % 4;
+                        if first_sample || turn == 0 {
+                            let started = Instant::now();
+                            let enemies = read_nearby_enemies(
+                                process,
+                                code,
+                                sample.hero,
+                                sample.x,
+                                sample.y,
+                                sample.z,
+                            )
                             .unwrap_or_default();
-                        let layer_players = read_layer_players(
-                            process,
-                            code,
-                            sample.hero,
-                            sample.player,
-                            &sample.party_heroes,
-                            sample.x,
-                            sample.y,
-                            sample.z,
-                        )
-                        .unwrap_or_default();
-                        let interactibles = read_nearby_interactibles(
-                            process,
-                            code,
-                            sample.hero,
-                            sample.x,
-                            sample.y,
-                            sample.z,
-                        )
-                        .unwrap_or_default();
+                            profile.add(2, started);
+                            enemies_json = encode_units(&enemies);
+                        }
+                        if first_sample || turn == 1 {
+                            let started = Instant::now();
+                            let critters = read_layer_critters(process, code, sample.hero)
+                                .unwrap_or_default();
+                            profile.add(3, started);
+                            critters_json = encode_units(&critters);
+                        }
+                        if first_sample || turn == 2 {
+                            let started = Instant::now();
+                            let layer_players = read_layer_players(
+                                process,
+                                code,
+                                sample.hero,
+                                sample.player,
+                                &sample.party_heroes,
+                                sample.x,
+                                sample.y,
+                                sample.z,
+                            )
+                            .unwrap_or_default();
+                            profile.add(4, started);
+                            players_json = layer_players
+                                .iter()
+                                .map(|other| {
+                                    format!(
+                                        "{{\"id\":\"0x{:x}\",\"name\":{},\"uid\":{},\"class\":{},\"level\":{},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}},\"heading\":{},\"distance\":{}}}",
+                                        other.address,
+                                        json_string(&other.name),
+                                        json_string(&other.uid),
+                                        json_string(&other.class_name),
+                                        other.level,
+                                        other.x,
+                                        other.y,
+                                        other.z,
+                                        other.rotation,
+                                        other.distance,
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                                .join(",");
+                        }
+                        if first_sample || turn == 3 {
+                            let started = Instant::now();
+                            let interactibles = read_nearby_interactibles(
+                                process,
+                                code,
+                                sample.hero,
+                                sample.x,
+                                sample.y,
+                                sample.z,
+                            )
+                            .unwrap_or_default();
+                            profile.add(5, started);
+                            interactibles_json = interactibles
+                                .iter()
+                                .map(|item| {
+                                    format!(
+                                        "{{\"id\":\"0x{:x}\",\"kind\":{},\"name\":{},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}}}}",
+                                        item.address,
+                                        json_string(item.category),
+                                        json_string(&item.name),
+                                        item.x,
+                                        item.y,
+                                        item.z,
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                                .join(",");
+                        }
                         let party_json = sample
                             .party
                             .iter()
@@ -5136,78 +5402,6 @@ mod windows_bridge {
                                     member.z,
                                     member.rotation,
                                     member.distance,
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .join(",");
-                        let enemies_json = enemies
-                            .iter()
-                            .map(|enemy| {
-                                format!(
-                                    "{{\"id\":\"0x{:x}\",\"kind\":{},\"spark\":{},\"elite\":{},\"boss\":{},\"miniboss\":{},\"unique\":{},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}}}}",
-                                    enemy.address,
-                                    json_string(&enemy.kind),
-                                    if enemy.spark { "true" } else { "false" },
-                                    if enemy.elite { "true" } else { "false" },
-                                    if enemy.boss { "true" } else { "false" },
-                                    if enemy.miniboss { "true" } else { "false" },
-                                    if enemy.unique { "true" } else { "false" },
-                                    enemy.x,
-                                    enemy.y,
-                                    enemy.z,
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .join(",");
-                        let critters_json = critters
-                            .iter()
-                            .map(|critter| {
-                                format!(
-                                    "{{\"id\":\"0x{:x}\",\"kind\":{},\"spark\":{},\"elite\":{},\"boss\":{},\"miniboss\":{},\"unique\":{},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}}}}",
-                                    critter.address,
-                                    json_string(&critter.kind),
-                                    if critter.spark { "true" } else { "false" },
-                                    if critter.elite { "true" } else { "false" },
-                                    if critter.boss { "true" } else { "false" },
-                                    if critter.miniboss { "true" } else { "false" },
-                                    if critter.unique { "true" } else { "false" },
-                                    critter.x,
-                                    critter.y,
-                                    critter.z,
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .join(",");
-                        let players_json = layer_players
-                            .iter()
-                            .map(|other| {
-                                format!(
-                                    "{{\"id\":\"0x{:x}\",\"name\":{},\"uid\":{},\"class\":{},\"level\":{},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}},\"heading\":{},\"distance\":{}}}",
-                                    other.address,
-                                    json_string(&other.name),
-                                    json_string(&other.uid),
-                                    json_string(&other.class_name),
-                                    other.level,
-                                    other.x,
-                                    other.y,
-                                    other.z,
-                                    other.rotation,
-                                    other.distance,
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .join(",");
-                        let interactibles_json = interactibles
-                            .iter()
-                            .map(|item| {
-                                format!(
-                                    "{{\"id\":\"0x{:x}\",\"kind\":{},\"name\":{},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}}}}",
-                                    item.address,
-                                    json_string(item.category),
-                                    json_string(&item.name),
-                                    item.x,
-                                    item.y,
-                                    item.z,
                                 )
                             })
                             .collect::<Vec<_>>()
@@ -5330,9 +5524,11 @@ mod windows_bridge {
             if drop_attach {
                 attached = None;
             }
-            std::fs::write(path, report)
-                .map_err(|error| format!("could not write {}: {error}", path.display()))?;
-            std::thread::sleep(Duration::from_millis(interval_ms));
+            let write_started = Instant::now();
+            publish_report(path, &report)?;
+            profile.add(6, write_started);
+            profile.finish_iteration(path);
+            sleep_until_next_tick(&mut next_tick, interval);
         }
     }
 

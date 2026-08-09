@@ -21,6 +21,10 @@ from ...config import (
     safe_float,
 )
 
+# Two halvings cover the widest zoom; beyond that the map is smaller than the
+# viewport and further shrinking would cost detail for nothing.
+MAX_MAP_MIP_LEVEL = 3
+
 
 @dataclass(frozen=True)
 class Snapshot:
@@ -245,6 +249,9 @@ class MapTexture:
     activity_icon_atlas_source: str = "unavailable"
     loose_kind_icons: dict[str, QtGui.QImage] = field(default_factory=dict)
     loose_kind_icon_sources: dict[str, str] = field(default_factory=dict)
+    # Half-size copies of `image`, keyed by halving count. Zoomed-out views
+    # otherwise resample the full 31-megapixel source on every frame.
+    _mip_levels: dict[int, QtGui.QImage] = field(default_factory=dict, repr=False)
 
     def ensure_dynamic_calibration(
         self,
@@ -317,6 +324,59 @@ class MapTexture:
         painter.end()
         return view
 
+    def _mip_level_for(self, pixels_per_metre: float) -> int:
+        """How many halvings the source can take before it starts to blur.
+
+        `draw_aligned_image` scales its source rect by the image-to-base size
+        ratio, so a halved copy substitutes for the original transparently.
+        """
+        calibration = self.calibration
+        if calibration is None or not calibration.valid() or self.image.isNull():
+            return 0
+        if not math.isfinite(pixels_per_metre) or pixels_per_metre <= 1e-9:
+            return 0
+        logical_w = (
+            self.logical_width if self.logical_width > 1.0 else float(self.image.width())
+        )
+        if logical_w <= 1.0:
+            return 0
+        image_px_per_metre = (
+            abs(calibration.scale_x) * float(self.image.width()) / logical_w
+        )
+        if image_px_per_metre <= 1e-9:
+            return 0
+        downscale = image_px_per_metre / pixels_per_metre
+        if downscale < 2.0:
+            return 0
+        return min(int(math.log2(downscale)), MAX_MAP_MIP_LEVEL)
+
+    def _mip_image(self, pixels_per_metre: float) -> QtGui.QImage:
+        level = self._mip_level_for(pixels_per_metre)
+        if level <= 0:
+            return self.image
+        cached = self._mip_levels.get(level)
+        if cached is not None:
+            return cached
+        # Halve repeatedly from the nearest level we already have; averaging
+        # down in steps keeps the result sharper than one big smooth scale.
+        source = self.image
+        start = 0
+        for have in sorted(self._mip_levels):
+            if have <= level:
+                source, start = self._mip_levels[have], have
+        for step in range(start + 1, level + 1):
+            source = source.scaled(
+                max(1, source.width() // 2),
+                max(1, source.height() // 2),
+                QtCore.Qt.AspectRatioMode.IgnoreAspectRatio,
+                QtCore.Qt.TransformationMode.SmoothTransformation,
+            )
+            self._mip_levels[step] = source
+        # Only the level in use is worth its memory - a full chain off a
+        # 31-megapixel source costs tens of megabytes to save one zoom step.
+        self._mip_levels = {level: source}
+        return source
+
     def draw_view(
         self,
         painter: QtGui.QPainter,
@@ -328,7 +388,7 @@ class MapTexture:
         """Blit the calibrated map crop directly into painter (no temp image)."""
         return self.draw_aligned_image(
             painter,
-            self.image,
+            self._mip_image(pixels_per_metre),
             target_rect=target_rect,
             view_center=view_center,
             pixels_per_metre=pixels_per_metre,

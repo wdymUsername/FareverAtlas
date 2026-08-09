@@ -102,6 +102,8 @@ class FogOfWar:
         default=None, repr=False, compare=False
     )
     _world_path_generation: int = field(default=0, repr=False, compare=False)
+    _any_layer_key: int | None = field(default=None, repr=False, compare=False)
+    _any_layer_value: bool = field(default=False, repr=False, compare=False)
     _soft_fog_image: QtGui.QImage | None = field(default=None, repr=False, compare=False)
     _soft_fog_cache_key: tuple[Any, ...] | None = field(
         default=None, repr=False, compare=False
@@ -209,7 +211,14 @@ class FogOfWar:
         return self._layer(tier).transform
 
     def any_layer_enabled(self) -> bool:
-        return any(self.layer_enabled(tier) for tier in FOW_LAYER_ORDER)
+        # Every marker hit-tests through here, and the per-tier lookup
+        # canonicalises strings. Layer edits bump the generation counter.
+        if self._any_layer_key != self._world_path_generation:
+            self._any_layer_value = any(
+                self.layer_enabled(tier) for tier in FOW_LAYER_ORDER
+            )
+            self._any_layer_key = self._world_path_generation
+        return self._any_layer_value
 
     def enabled_layers(self) -> tuple[str, ...]:
         return tuple(tier for tier in FOW_LAYER_ORDER if self.layer_enabled(tier))
