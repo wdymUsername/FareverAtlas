@@ -1838,6 +1838,8 @@ class RadarWidget(QtWidgets.QWidget):
             color = QtGui.QColor(_ELITE_FILL)
         elif rank == "spark" or spark:
             color = QtGui.QColor(_SPARK_RING)
+        elif rank == "critter":
+            color = QtGui.QColor(_CRITTER_FILL)
         else:
             color = QtGui.QColor(_ENEMY_FILL)
         color.setAlpha(150)
