@@ -41,9 +41,10 @@ from .fog import FogOfWar
 from .fow_layers import canonical_fow_layer
 from .gather_nav import _element_completed
 
-# Live Orb/Camp chests report Element.kind as bare "Chest"; match nearby activity.
+# Live Orb/Camp/FightStone loot often reports as bare "Chest" (or name
+# "FightStone"); match nearby activity anchors when ids lack type tokens.
 _ACTIVITY_CHEST_PROXIMITY_M = 120.0
-_ACTIVITY_CHEST_SUBKINDS = frozenset({"chestorb", "worldcamp"})
+_ACTIVITY_CHEST_SUBKINDS = frozenset({"chestorb", "worldcamp", "fightstone"})
 
 # Built once: rebuilding these per marker cost ~7.6k QColor allocations a frame.
 _POI_COLORS: dict[str, QtGui.QColor] = {
@@ -282,8 +283,9 @@ class RadarWidget(QtWidgets.QWidget):
         self._prepared_filters: tuple[Any, ...] | None = None
         self._sprite_filters: tuple[Any, ...] | None = None
         self._prepared_pois: list[tuple[Any, ...]] = []
-        # World positions of ChestOrb / WorldCamp activities — used to hide live
-        # Orb/Camp chests (Element.kind is often just "Chest") when Activities is off.
+        # World positions of ChestOrb / WorldCamp / FightStone activities — used
+        # to hide live activity loot (bare "Chest" / "FightStone") when Activities
+        # is off.
         self._activity_chest_anchors: list[tuple[float, float]] = []
         self._activity_chest_anchors_source: list[Any] | None = None
         self._poi_grid: dict[tuple[int, int], list[int]] = {}
@@ -2119,7 +2121,7 @@ class RadarWidget(QtWidgets.QWidget):
         return ""
 
     def _ensure_activity_chest_anchors(self) -> None:
-        """Cache ChestOrb / WorldCamp world positions for live chest gating.
+        """Cache ChestOrb / WorldCamp / FightStone world positions for live gating.
 
         Kept separate from ``_ensure_prepared_pois`` so the live loot pass never
         clears the marker sprite cache mid-paint (Wayland SEGV risk).
@@ -2135,7 +2137,8 @@ class RadarWidget(QtWidgets.QWidget):
             subkind = str(poi.get("subkind") or "").strip().lower()
             compact_sub = re.sub(r"[^a-z0-9]", "", subkind)
             if compact_sub not in _ACTIVITY_CHEST_SUBKINDS and not any(
-                key in compact_sub for key in ("chestorb", "worldcamp", "vault")
+                key in compact_sub
+                for key in ("chestorb", "worldcamp", "vault", "fightstone")
             ):
                 continue
             ax = safe_float(poi.get("x"), math.nan)
@@ -2273,7 +2276,7 @@ class RadarWidget(QtWidgets.QWidget):
         return False
 
     def _is_activity_gated_chest(self, item: dict[str, Any]) -> bool:
-        """Vault/Orb/Camp chests, including live bare 'Chest' near an activity."""
+        """Vault/Orb/Camp/FightStone loot, including live bare 'Chest' near one."""
         if is_activity_linked_chest(
             item.get("name"),
             item.get("id"),
@@ -3650,7 +3653,7 @@ class RadarWidget(QtWidgets.QWidget):
                 if kind == "chest" and self._is_activity_gated_chest(poi):
                     if "activity" not in enabled_poi_kinds:
                         continue
-                    # Orb/Camp sites already have an activity marker at the chest.
+                    # Orb/Camp/FightStone sites already have an activity marker.
                     # Vault / nearby world chests still draw under Activities.
                     if is_orb_or_camp_chest(
                         poi.get("name"),
@@ -3676,6 +3679,18 @@ class RadarWidget(QtWidgets.QWidget):
                 point = self._world_to_screen(poi, center, pixels_per_metre, view_center)
                 draw_kind = "ore" if kind == "gatherable" else kind
                 size = self._node_size_label(poi)
+                # Live feed keeps opened world/recipe chests as interactibles;
+                # progress is in completed_elements (name is the stable POI id).
+                if kind == "chest" and _element_completed(
+                    str(poi.get("name") or ""), completed_element_ids
+                ):
+                    pixmap, sprite_half_w, sprite_half_h = self._marker_sprite(
+                        draw_kind, "", size, muted=True
+                    )
+                    self._blit_marker_sprite(
+                        painter, point, pixmap, sprite_half_w, sprite_half_h
+                    )
+                    continue
                 self._draw_poi_marker(painter, point, draw_kind, "", size=size)
                 if node_z_indicators:
                     self._draw_z_indicator(
