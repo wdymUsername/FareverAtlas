@@ -196,7 +196,13 @@ class AtlasWindow(
             "Enemies", color="#FF5348", marker="diamond"
         )
         self.enemies_filter.setChecked(self._setting_bool("map/show_enemies", True))
-        self.enemies_filter.setToolTip("Show or hide nearby enemies on the map")
+        self.show_patrol_paths = self._setting_bool("map/show_patrol_paths", True)
+        self.enemies_filter.setContextMenuPolicy(
+            QtCore.Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        self.enemies_filter.customContextMenuRequested.connect(
+            self._toggle_patrol_paths_mode
+        )
 
         self.critters_filter = FilterChipButton(
             "Critters", color="#6BE06B", marker="diamond"
@@ -207,17 +213,6 @@ class AtlasWindow(
             "Sparkling critters get a gold halo"
         )
 
-        self.patrol_paths_filter = FilterChipButton(
-            "Patrols", color="#B45CFF", marker="diamond"
-        )
-        self.patrol_paths_filter.setChecked(
-            self._setting_bool("map/show_patrol_paths", True)
-        )
-        self.patrol_paths_filter.setToolTip(
-            "Show authored patrol paths for nearby unique / elite / spark units\n"
-            "Only drawn while a matching live enemy or critter is in range"
-        )
-
         self.players_filter = FilterChipButton(
             "Players", color="#5AAFE0", marker="dot"
         )
@@ -226,7 +221,6 @@ class AtlasWindow(
             "Show or hide other players on the map\n"
             "Party members use the same circle in bright blue"
         )
-
         self.poi_filters: dict[str, FilterChipButton] = {}
         poi_chip_colors = {
             "obelisk": "#9b6fd4",
@@ -583,7 +577,6 @@ class AtlasWindow(
 
         self.enemies_filter.toggled.connect(self._controls_changed)
         self.critters_filter.toggled.connect(self._controls_changed)
-        self.patrol_paths_filter.toggled.connect(self._controls_changed)
         self.players_filter.toggled.connect(self._controls_changed)
         for button in self.poi_filters.values():
             button.toggled.connect(self._poi_filter_changed)
@@ -2006,11 +1999,7 @@ class AtlasWindow(
             self._setting_bool("map/show_critters", True)
         )
         self.critters_filter.blockSignals(False)
-        self.patrol_paths_filter.blockSignals(True)
-        self.patrol_paths_filter.setChecked(
-            self._setting_bool("map/show_patrol_paths", True)
-        )
-        self.patrol_paths_filter.blockSignals(False)
+        self.show_patrol_paths = self._setting_bool("map/show_patrol_paths", True)
         self.players_filter.blockSignals(True)
         self.players_filter.setChecked(
             self._setting_bool("map/show_players", True)
@@ -2155,8 +2144,9 @@ class AtlasWindow(
         )
         self.radar.show_enemies = self.enemies_filter.isChecked()
         self.radar.show_critters = self.critters_filter.isChecked()
-        self.radar.show_patrol_paths = self.patrol_paths_filter.isChecked()
+        self.radar.show_patrol_paths = bool(self.show_patrol_paths)
         self.radar.show_players = self.players_filter.isChecked()
+        self._update_enemies_filter_tooltip()
         self.radar.show_player_names = self._setting_bool(
             "map/show_player_names", False
         )

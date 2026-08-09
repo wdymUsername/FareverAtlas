@@ -104,16 +104,14 @@ class FilterSidebarMixin:
             page_layout.addStretch(1)
             return page
 
+        actors_hint = QtWidgets.QLabel("right-click Enemies toggles patrol paths")
+        actors_hint.setObjectName("sidebarFilterHint")
+        actors_hint.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         actors_page = _chip_grid_page(
-            [
-                self.enemies_filter,
-                self.critters_filter,
-                self.patrol_paths_filter,
-                self.players_filter,
-            ]
+            [self.enemies_filter, self.critters_filter, self.players_filter],
+            footer=actors_hint,
         )
         self.sidebar_filter_stack.addWidget(actors_page)
-
         poi_page = _chip_grid_page(
             [self.poi_filters[kind] for kind, _label in self.POI_FILTERS]
         )
@@ -607,6 +605,27 @@ class FilterSidebarMixin:
             return
         self.loot_icon_modes[kind] = not bool(self.loot_icon_modes.get(kind, True))
         self._loot_icon_mode_changed(kind, self.loot_icon_modes[kind])
+
+    def _toggle_patrol_paths_mode(
+        self, _position: QtCore.QPoint | None = None
+    ) -> None:
+        self.show_patrol_paths = not bool(getattr(self, "show_patrol_paths", True))
+        self._update_enemies_filter_tooltip()
+        self._controls_changed()
+
+    def _update_enemies_filter_tooltip(self) -> None:
+        button = getattr(self, "enemies_filter", None)
+        if button is None:
+            return
+        base = "Show or hide nearby enemies on the map"
+        if bool(getattr(self, "show_patrol_paths", True)):
+            button.setToolTip(
+                f"{base}\nPatrol paths ON · Right-click to hide paths"
+            )
+        else:
+            button.setToolTip(
+                f"{base}\nPatrol paths OFF · Right-click to show paths"
+            )
 
     def _update_loot_mode_button(self, kind: str) -> None:
         button = self.loot_filters.get(kind)

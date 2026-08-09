@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from typing import Any
 
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -15,6 +16,13 @@ from ...config import (
     safe_int,
 )
 from ...critter_spawns import critter_spawns
+from ...display_names import (
+    format_gatherable_tooltip_name,
+    format_unit_tooltip_name,
+    is_activity_linked_chest,
+    split_ident,
+    unit_level,
+)
 from ...patrol_paths import patrol_paths_by_kind
 from .data import MapTexture, Snapshot
 from .fog import FogOfWar
@@ -26,6 +34,10 @@ _PATROL_LIVE_RANGE_M = 500.0
 _PATROL_LIVE_Z_M = 120.0
 # Max distance from a live unit to a path sample (or spawner) to claim it.
 _PATROL_LEASH_M = 65.0
+
+# Live Orb/Camp chests report Element.kind as bare "Chest"; match nearby activity.
+_ACTIVITY_CHEST_PROXIMITY_M = 120.0
+_ACTIVITY_CHEST_SUBKINDS = frozenset({"chestorb", "worldcamp"})
 
 # Built once: rebuilding these per marker cost ~7.6k QColor allocations a frame.
 _POI_COLORS: dict[str, QtGui.QColor] = {
@@ -184,6 +196,10 @@ class RadarWidget(QtWidgets.QWidget):
         self._prepared_source: list[Any] | None = None
         self._prepared_filters: tuple[Any, ...] | None = None
         self._prepared_pois: list[tuple[Any, ...]] = []
+        # World positions of ChestOrb / WorldCamp activities — used to hide live
+        # Orb/Camp chests (Element.kind is often just "Chest") when Activities is off.
+        self._activity_chest_anchors: list[tuple[float, float]] = []
+        self._activity_chest_anchors_source: list[Any] | None = None
         self._poi_grid: dict[tuple[int, int], list[int]] = {}
         self._poi_grid_origin: tuple[float, float] = (0.0, 0.0)
         self._player_arrow_icon_cache: QtGui.QImage | None = None
@@ -1428,7 +1444,32 @@ class RadarWidget(QtWidgets.QWidget):
             painter.drawPolyline(poly)
 
     @staticmethod
+    def _enemy_type_label(enemy: dict[str, Any], *, name: str = "") -> str:
+        role = str(enemy.get("role") or "").strip().lower()
+        rank = RadarWidget._enemy_rank(enemy)
+        if rank == "boss":
+            label = "Boss"
+        elif rank == "miniboss":
+            label = "Miniboss"
+        elif rank == "unique":
+            label = "Unique"
+        elif rank == "elite":
+            label = "Elite"
+        elif role == "critter":
+            label = "Critter"
+        else:
+            label = "Enemy"
+        if (
+            bool(enemy.get("spark"))
+            and "spark" not in label.lower()
+            and "spark" not in name.lower()
+        ):
+            return f"{label} · Sparkling"
+        return label
+
+    @staticmethod
     def _enemy_display_name(enemy: dict[str, Any]) -> str:
+        """Single-line label: ``Name · Type`` (used by tooltips / debug)."""
         kind = str(enemy.get("kind") or "").strip()
         role = str(enemy.get("role") or "").strip().lower()
         if role == "critter_spawn":
@@ -1436,31 +1477,29 @@ class RadarWidget(QtWidgets.QWidget):
             if not label and kind:
                 label = kind
             if not label:
-                label = "Critter spawn"
-            else:
-                label = " ".join(part for part in label.replace("_", " ").split() if part)
-            tag = "Critter spawn"
+                return "Critter spawn · Spawn"
+            pretty = split_ident(label)
             if bool(enemy.get("spark")):
-                tag = f"{tag} · Spark pool"
-            return f"{label} ({tag})"
-        if not kind:
-            base = "Critter" if role == "critter" else "Enemy"
-        else:
-            # Creature ids arrive as HashLink identifiers like Crimson_Z2W_Sword_2.
-            base = " ".join(part for part in kind.replace("_", " ").split() if part)
-        tag = "Critter" if role == "critter" else "Enemy"
-        rank = RadarWidget._enemy_rank(enemy)
-        if rank == "boss":
-            tag = "Boss"
-        elif rank == "miniboss":
-            tag = "Miniboss"
-        elif rank == "unique":
-            tag = "Unique"
-        elif rank == "elite":
-            tag = "Elite"
-        if bool(enemy.get("spark")) and "sparkl" not in base.lower():
-            tag = f"{tag} · Sparkling"
-        return f"{base} ({tag})" if kind else tag
+                return f"{pretty} · Spark pool"
+            return f"{pretty} · Spawn"
+        name = format_unit_tooltip_name(kind) if kind else (
+            "Critter" if role == "critter" else "Enemy"
+        )
+        return f"{name} · {RadarWidget._enemy_type_label(enemy, name=name)}"
+
+    @staticmethod
+    def _enemy_tooltip(enemy: dict[str, Any], distance: float) -> str:
+        """Hover text: name · type, then level, then distance."""
+        kind = str(enemy.get("kind") or "").strip()
+        role = str(enemy.get("role") or "").strip().lower()
+        lines = [RadarWidget._enemy_display_name(enemy)]
+        if role != "critter_spawn":
+            level = unit_level(kind)
+            if level is not None:
+                lines.append(f"level {level}")
+        if math.isfinite(distance):
+            lines.append(f"{distance:.1f} m")
+        return "\n".join(lines)
 
     @staticmethod
     def _draw_critter_diamond(
@@ -1519,6 +1558,33 @@ class RadarWidget(QtWidgets.QWidget):
             return "large"
         return ""
 
+    def _ensure_activity_chest_anchors(self) -> None:
+        """Cache ChestOrb / WorldCamp world positions for live chest gating.
+
+        Kept separate from ``_ensure_prepared_pois`` so the live loot pass never
+        clears the marker sprite cache mid-paint (Wayland SEGV risk).
+        """
+        if self._activity_chest_anchors_source is self.pois:
+            return
+        anchors: list[tuple[float, float]] = []
+        for poi in self.pois:
+            if not isinstance(poi, dict):
+                continue
+            if str(poi.get("kind") or "").strip().lower() != "activity":
+                continue
+            subkind = str(poi.get("subkind") or "").strip().lower()
+            compact_sub = re.sub(r"[^a-z0-9]", "", subkind)
+            if compact_sub not in _ACTIVITY_CHEST_SUBKINDS and not any(
+                key in compact_sub for key in ("chestorb", "worldcamp", "vault")
+            ):
+                continue
+            ax = safe_float(poi.get("x"), math.nan)
+            ay = safe_float(poi.get("y"), math.nan)
+            if math.isfinite(ax) and math.isfinite(ay):
+                anchors.append((ax, ay))
+        self._activity_chest_anchors = anchors
+        self._activity_chest_anchors_source = self.pois
+
     def _ensure_prepared_pois(self) -> None:
         """Parse the static POI file into flat tuples once per POI/filter change.
 
@@ -1537,6 +1603,7 @@ class RadarWidget(QtWidgets.QWidget):
         self._prepared_source = self.pois
         self._prepared_filters = filters
         self._marker_sprite_cache.clear()
+        self._ensure_activity_chest_anchors()
 
         enabled_poi_kinds = {
             kind for kind, enabled in self.poi_kind_visibility.items() if enabled
@@ -1556,13 +1623,23 @@ class RadarWidget(QtWidgets.QWidget):
             kind = str(poi.get("kind", "")).strip().lower()
             is_collectible = kind in _COLLECTIBLE_KINDS
             if is_collectible:
-                visible = (
-                    gatherable_visible
-                    if kind == "gatherable"
-                    else kind in enabled_loot_kinds
-                )
-                if not visible:
-                    continue
+                if kind == "chest" and is_activity_linked_chest(
+                    poi.get("name"),
+                    poi.get("id"),
+                    poi.get("source"),
+                    poi.get("subkind"),
+                ):
+                    # Vault / Orb / Camp chests belong to Activities, not Chests.
+                    if "activity" not in enabled_poi_kinds:
+                        continue
+                else:
+                    visible = (
+                        gatherable_visible
+                        if kind == "gatherable"
+                        else kind in enabled_loot_kinds
+                    )
+                    if not visible:
+                        continue
             elif kind in self.poi_kind_visibility:
                 if kind not in enabled_poi_kinds:
                     continue
@@ -1607,6 +1684,34 @@ class RadarWidget(QtWidgets.QWidget):
             self._poi_grid_origin = (origin_x, origin_y)
         self._poi_grid = grid
 
+    def _near_activity_chest_anchor(self, x: float, y: float) -> bool:
+        if not (math.isfinite(x) and math.isfinite(y)):
+            return False
+        radius_sq = _ACTIVITY_CHEST_PROXIMITY_M * _ACTIVITY_CHEST_PROXIMITY_M
+        for ax, ay in self._activity_chest_anchors:
+            dx = x - ax
+            dy = y - ay
+            if dx * dx + dy * dy <= radius_sq:
+                return True
+        return False
+
+    def _is_activity_gated_chest(self, item: dict[str, Any]) -> bool:
+        """Vault/Orb/Camp chests, including live bare 'Chest' near an activity."""
+        if is_activity_linked_chest(
+            item.get("name"),
+            item.get("id"),
+            item.get("source"),
+            item.get("subkind"),
+        ):
+            return True
+        name = str(item.get("name") or "").strip()
+        if re.sub(r"[^a-z0-9]", "", name.lower()) != "chest":
+            return False
+        return self._near_activity_chest_anchor(
+            safe_float(item.get("x"), math.nan),
+            safe_float(item.get("y"), math.nan),
+        )
+
     def _prepared_poi_candidates(
         self, center_x: float, center_y: float, half_w: float, half_h: float
     ) -> Any:
@@ -1644,16 +1749,15 @@ class RadarWidget(QtWidgets.QWidget):
     def _interactible_display_name(cls, item: dict[str, Any]) -> str:
         name = str(item.get("name") or "").strip()
         kind = str(item.get("kind") or "").strip()
-        parts = [
-            part
-            for part in name.replace("_", " ").split()
-            if part and part.lower() != "generic"
-        ]
-        pretty = " ".join(parts) if parts else (kind.title() if kind else "Node")
         size = cls._node_size_label(item)
-        if size and size not in pretty.lower():
-            pretty = f"{pretty} ({size.title()})"
-        return pretty
+        return format_gatherable_tooltip_name(
+            name or None,
+            kind=kind or None,
+            size=size or None,
+            fallback=name or None,
+            source=str(item.get("source") or "") or None,
+            item_id=str(item.get("id") or "") or None,
+        )
 
     def _view_half_extents(
         self,
@@ -2058,10 +2162,7 @@ class RadarWidget(QtWidgets.QWidget):
                     safe_float(enemy.get("x")) - safe_float(player.get("x")),
                     safe_float(enemy.get("y")) - safe_float(player.get("y")),
                 )
-                tooltip = (
-                    f"{self._enemy_display_name(enemy)}\n"
-                    f"{distance:.1f} m"
-                )
+                tooltip = self._enemy_tooltip(enemy, distance)
                 QtWidgets.QToolTip.showText(
                     event.globalPosition().toPoint(), tooltip, self
                 )
@@ -2794,6 +2895,15 @@ class RadarWidget(QtWidgets.QWidget):
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # noqa: N802
         del event
+        # Rebuild marker sprites / POI caches before opening a painter. Clearing
+        # QPixmap caches mid-paint races Wayland's SHM flush (SEGV in
+        # QPaintDevice::devicePixelRatio).
+        local_instance = self._local_instance_mode()
+        if not local_instance:
+            self._ensure_prepared_pois()
+        else:
+            self._ensure_activity_chest_anchors()
+
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform)
@@ -2817,7 +2927,6 @@ class RadarWidget(QtWidgets.QWidget):
         self._player_hits = []
 
         map_drawn = False
-        local_instance = self._local_instance_mode()
         draw_texture = (
             self.show_texture and self.map_texture is not None and not local_instance
         )
@@ -2935,12 +3044,17 @@ class RadarWidget(QtWidgets.QWidget):
         )
         if not isinstance(live_nodes, list):
             live_nodes = []
-        if enabled_loot_kinds:
+        if enabled_loot_kinds or "activity" in enabled_poi_kinds:
             for poi in live_nodes:
                 if not isinstance(poi, dict):
                     continue
                 kind = str(poi.get("kind", "")).strip().lower()
-                if kind not in _COLLECTIBLE_KINDS or not _loot_kind_visible(kind):
+                if kind not in _COLLECTIBLE_KINDS:
+                    continue
+                if kind == "chest" and self._is_activity_gated_chest(poi):
+                    if "activity" not in enabled_poi_kinds:
+                        continue
+                elif not _loot_kind_visible(kind):
                     continue
                 if not self._world_in_view(
                     poi,
@@ -2988,9 +3102,7 @@ class RadarWidget(QtWidgets.QWidget):
         # markers so a failed sweep does not blank the map).
         if (enabled_poi_kinds or enabled_loot_kinds) and not local_instance:
             live_feed_active = bool(live_nodes)
-            # Kind filtering and field parsing are cached; everything below is
-            # position- or telemetry-dependent and has to run every frame.
-            self._ensure_prepared_pois()
+            # Kind filtering / sprites prepared before QPainter opened.
             prepared = self._prepared_pois
             cull_x = safe_float(view_center.get("x"))
             cull_y = safe_float(view_center.get("y"))
