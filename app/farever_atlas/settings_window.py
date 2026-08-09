@@ -92,6 +92,9 @@ def apply_settings_defaults(settings: QtCore.QSettings) -> None:
     settings.setValue("map/show_enemies", True)
     settings.setValue("map/show_players", True)
     settings.setValue("map/show_player_names", False)
+    settings.setValue("map/show_currencies", True)
+    settings.setValue("map/show_game_time", True)
+    settings.setValue("map/show_rift_timer", True)
     settings.setValue("map/show_dps_overlay", True)
     settings.setValue("party/show_empty_slots", True)
     settings.setValue("party/slot_count", PARTY_SLOT_COUNT)
@@ -244,6 +247,15 @@ class SettingsPanel(QtCore.QObject):
             )
             self.show_player_names.setChecked(
                 _as_bool(self._settings.value("map/show_player_names"), False)
+            )
+            self.show_currencies.setChecked(
+                _as_bool(self._settings.value("map/show_currencies"), True)
+            )
+            self.show_game_time.setChecked(
+                _as_bool(self._settings.value("map/show_game_time"), True)
+            )
+            self.show_rift_timer.setChecked(
+                _as_bool(self._settings.value("map/show_rift_timer"), True)
             )
 
             self.show_empty_slots.setChecked(
@@ -421,6 +433,20 @@ class SettingsPanel(QtCore.QObject):
         self._bind_bool(self.show_route, "map/show_route_line")
         form.addRow("Waypoint route line", self.show_route)
         layout.addWidget(display)
+
+        status_bar, status_form = self._group("Status bar")
+        self.show_currencies = QtWidgets.QCheckBox()
+        self._bind_bool(self.show_currencies, "map/show_currencies")
+        status_form.addRow("Currencies", self.show_currencies)
+
+        self.show_game_time = QtWidgets.QCheckBox()
+        self._bind_bool(self.show_game_time, "map/show_game_time")
+        status_form.addRow("Time of day", self.show_game_time)
+
+        self.show_rift_timer = QtWidgets.QCheckBox()
+        self._bind_bool(self.show_rift_timer, "map/show_rift_timer")
+        status_form.addRow("Rift timer", self.show_rift_timer)
+        layout.addWidget(status_bar)
 
         fog, fog_form = self._group("Fog of war")
         self.fog_enabled = QtWidgets.QCheckBox()

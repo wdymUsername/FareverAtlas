@@ -11,6 +11,7 @@ from typing import Any
 from PySide6 import QtCore
 
 from .config import ASSET_ROOT, PROJECT_ROOT, safe_float
+from .currency_caps import enrich_currencies
 from .pages.map.data import Snapshot
 
 
@@ -343,6 +344,12 @@ class DataHub(QtCore.QObject):
                 "energy": native_player.get("special_energy"),
                 "hp_regen": native_player.get("health_regen"),
                 "energy_regen": native_player.get("special_energy_regen"),
+                "currencies": enrich_currencies(
+                    native_player.get("currencies") or [],
+                    native_player.get("currency_counters")
+                    if isinstance(native_player.get("currency_counters"), dict)
+                    else None,
+                ),
                 "x": position.get("x"),
                 "y": position.get("y"),
                 "z": position.get("z"),

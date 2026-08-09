@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import html
 import math
 from pathlib import Path
 from typing import Any
@@ -31,6 +30,7 @@ from ..pages.map.page import MapPage, MapPageMixin
 from ..pages.map.radar import RadarWidget
 from ..pages.map.status import (
     CharacterStatusWidget,
+    CurrencyStatusWidget,
     GameTimeStatusWidget,
     PartyMemberStatusWidget,
     RiftStatusWidget,
@@ -144,6 +144,7 @@ class AtlasWindow(
         self.waypoint_manager_overlay: WaypointManagerOverlay | None = None
         self.latest_snapshot = Snapshot({}, [], False, "Waiting for bridge output", None)
         self._connection_signature: tuple[object, ...] | None = None
+        self._view_mode_signature: tuple[object, ...] | None = None
         self._diagnostic_text: str | None = None
         self._party_status_signature: tuple[object, ...] | None = None
         cached_x = safe_float(self._settings.value("cache/player_x"), math.nan)
@@ -265,10 +266,18 @@ class AtlasWindow(
         )
 
         self.recenter = QtWidgets.QToolButton()
-        self.recenter.setText("Recenter")
+        self.recenter.setText("")
+        self.recenter.setObjectName("centerButton")
         self.recenter.setEnabled(False)
         self.recenter.setVisible(True)
         self.recenter.setToolTip("Return to player-follow mode")
+        self.recenter.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.recenter.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.recenter.setFixedSize(28, 28)
+        self.recenter.setIconSize(QtCore.QSize(16, 16))
+        recenter_icon = QtGui.QIcon(str(ASSET_ROOT / "map_recenter.svg"))
+        if not recenter_icon.isNull():
+            self.recenter.setIcon(recenter_icon)
 
         self.character_status = CharacterStatusWidget()
         toolbar_layout.addWidget(
@@ -292,9 +301,9 @@ class AtlasWindow(
         )
         toolbar_layout.addStretch(1)
 
-        self.game_time_status = GameTimeStatusWidget()
+        self.currency_status = CurrencyStatusWidget()
         toolbar_layout.addWidget(
-            self.game_time_status,
+            self.currency_status,
             0,
             QtCore.Qt.AlignmentFlag.AlignVCenter,
         )
@@ -306,11 +315,6 @@ class AtlasWindow(
             QtCore.Qt.AlignmentFlag.AlignVCenter,
         )
 
-        self.zoom_out = QtWidgets.QToolButton()
-        self.zoom_out.setText("−")
-        self.zoom_out.setToolTip("Zoom out")
-        self.zoom_out.setObjectName("zoomButton")
-
         saved_radius = safe_int(self._settings.value("map/zoom_radius", 200), 200)
         self.zoom_index = min(
             range(len(self.ZOOM_LEVELS)),
@@ -318,24 +322,28 @@ class AtlasWindow(
         )
 
         self.zoom_in = QtWidgets.QToolButton()
-        self.zoom_in.setText("+")
+        self.zoom_in.setText("")
         self.zoom_in.setToolTip("Zoom in")
         self.zoom_in.setObjectName("zoomButton")
+        self.zoom_in.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.zoom_in.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.zoom_in.setFixedSize(28, 28)
+        self.zoom_in.setIconSize(QtCore.QSize(14, 14))
+        zoom_in_icon = QtGui.QIcon(str(ASSET_ROOT / "level_plus.svg"))
+        if not zoom_in_icon.isNull():
+            self.zoom_in.setIcon(zoom_in_icon)
 
-        self.zoom_label = QtWidgets.QLabel()
-        self.zoom_label.setObjectName("zoomValue")
-        self.zoom_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        self.zoom_label.setFixedWidth(54)
-
-        # Match the recenter row to the exact width of the zoom row:
-        # 28 + 54 + 28 pixels, plus two 2-pixel gaps. This prevents the
-        # floating panel from widening when Recenter becomes visible.
-        self.map_control_inner_width = 114
-        self.recenter.setFixedHeight(26)
-        self.recenter.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding,
-            QtWidgets.QSizePolicy.Policy.Fixed,
-        )
+        self.zoom_out = QtWidgets.QToolButton()
+        self.zoom_out.setText("")
+        self.zoom_out.setToolTip("Zoom out")
+        self.zoom_out.setObjectName("zoomButton")
+        self.zoom_out.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.zoom_out.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.zoom_out.setFixedSize(28, 28)
+        self.zoom_out.setIconSize(QtCore.QSize(14, 14))
+        zoom_out_icon = QtGui.QIcon(str(ASSET_ROOT / "level_minus.svg"))
+        if not zoom_out_icon.isNull():
+            self.zoom_out.setIcon(zoom_out_icon)
 
         self.radar = RadarWidget(map_texture)
         self.radar.setObjectName("minimapCanvas")
@@ -355,63 +363,87 @@ class AtlasWindow(
             QtCore.Qt.WidgetAttribute.WA_NoMousePropagation, True
         )
         map_controls_layout = QtWidgets.QVBoxLayout(self.map_controls_overlay)
-        map_controls_layout.setContentsMargins(5, 4, 5, 4)
-        map_controls_layout.setSpacing(3)
+        map_controls_layout.setContentsMargins(0, 0, 0, 0)
+        map_controls_layout.setSpacing(8)
+        map_controls_layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
 
-        self.recenter_container = QtWidgets.QWidget()
-        self.recenter_container.setObjectName("recenterContainer")
-        self.recenter_container.setMinimumHeight(0)
-        self.recenter_container.setMaximumHeight(0)
-        recenter_layout = QtWidgets.QVBoxLayout(self.recenter_container)
-        recenter_layout.setContentsMargins(0, 0, 0, 0)
-        recenter_layout.setSpacing(0)
-        self.recenter.setObjectName("centerButton")
-        recenter_layout.addWidget(self.recenter)
-        map_controls_layout.addWidget(self.recenter_container)
-
-        self.recenter_animation = QtCore.QPropertyAnimation(
-            self.recenter_container, b"maximumHeight", self
+        map_controls_layout.addWidget(
+            self.recenter, 0, QtCore.Qt.AlignmentFlag.AlignRight
         )
-        self.recenter_animation.setDuration(160)
-        self.recenter_animation.valueChanged.connect(self._overlay_animation_step)
 
-        zoom_row = QtWidgets.QHBoxLayout()
-        zoom_row.setContentsMargins(0, 0, 0, 0)
-        zoom_row.setSpacing(2)
-        zoom_row.addWidget(self.zoom_out)
-        zoom_row.addWidget(self.zoom_label)
-        zoom_row.addWidget(self.zoom_in)
-        map_controls_layout.addLayout(zoom_row)
-        self.map_controls_overlay.setFixedWidth(self.map_control_inner_width + 10)
+        self.zoom_panel = QtWidgets.QWidget()
+        self.zoom_panel.setObjectName("zoomPanel")
+        zoom_panel_layout = QtWidgets.QVBoxLayout(self.zoom_panel)
+        zoom_panel_layout.setContentsMargins(0, 0, 0, 0)
+        zoom_panel_layout.setSpacing(0)
+        zoom_panel_layout.addWidget(self.zoom_in)
+        self.zoom_divider = QtWidgets.QFrame()
+        self.zoom_divider.setObjectName("zoomDivider")
+        self.zoom_divider.setFrameShape(QtWidgets.QFrame.Shape.HLine)
+        self.zoom_divider.setFixedHeight(1)
+        zoom_panel_layout.addWidget(self.zoom_divider)
+        zoom_panel_layout.addWidget(self.zoom_out)
+        map_controls_layout.addWidget(
+            self.zoom_panel, 0, QtCore.Qt.AlignmentFlag.AlignRight
+        )
+
         self.map_controls_overlay.adjustSize()
         self.map_controls_overlay.raise_()
 
         if self.dev_mode:
             self._init_map_fow_edit_overlay()
 
-        # Compact map-help control. The old canvas-wide tooltip was intrusive and
-        # obscured the map, so controls are now shown explicitly on demand.
-        self.map_help_button = QtWidgets.QToolButton(self.radar)
-        self.map_help_button.setObjectName("mapHelpButton")
-        self.map_help_button.setText("")
-        self.help_icon_normal = QtGui.QIcon(
-            str(ASSET_ROOT / "help.svg")
-        )
-        self.help_icon_hover = QtGui.QIcon(
-            str(ASSET_ROOT / "help_hover.svg")
-        )
-        self.map_help_button.setIcon(self.help_icon_normal)
-        self.map_help_button.setIconSize(QtCore.QSize(18, 18))
-        self.map_help_button.setCheckable(True)
-        self.map_help_button.setFixedSize(19, 21)
-        self.map_help_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        self.map_help_button.setToolTip("Show map controls")
-        self.map_help_button.setAttribute(
-            QtCore.Qt.WidgetAttribute.WA_NoMousePropagation, True
-        )
-        self.map_help_button.installEventFilter(self)
         self._build_window_controls()
 
+        self._init_dps_overlay()
+
+
+        self.radar.installEventFilter(self)
+
+        self._init_planner_page()
+        self._init_codex_page()
+        self._init_players_page()
+
+        self.pages = {
+            MapPage.PAGE_ID: MapPage(self.map_toolbar, self.map_body),
+            PlannerPage.PAGE_ID: PlannerPage(self.planner_toolbar, self.planner_body),
+            CodexPage.PAGE_ID: CodexPage(self.codex_toolbar, self.codex_body),
+            PlayersPage.PAGE_ID: PlayersPage(
+                self.players_toolbar, self.players_body
+            ),
+        }
+        self.page_order = (
+            MapPage.PAGE_ID,
+            PlannerPage.PAGE_ID,
+            CodexPage.PAGE_ID,
+            PlayersPage.PAGE_ID,
+        )
+
+        for page_id in self.page_order:
+            page = self.pages[page_id]
+            self.context_stack.addWidget(page.context_bar)
+            self.page_stack.addWidget(page.body)
+
+        footer = build_footer()
+        self.footer = footer
+        self.game_time_status = footer.findChild(
+            GameTimeStatusWidget, "gameTimeStatus"
+        )
+        self.connection = footer.findChild(QtWidgets.QLabel, "connectionStatus")
+        self.view_mode = footer.findChild(QtWidgets.QLabel, "viewModeStatus")
+        self.position = footer.findChild(QtWidgets.QLabel, "positionStatus")
+        self.zoom_label = footer.findChild(QtWidgets.QLabel, "zoomValue")
+        self.map_help_button = footer.findChild(
+            QtWidgets.QToolButton, "mapHelpButton"
+        )
+        self.help_icon_normal = QtGui.QIcon(str(ASSET_ROOT / "help.svg"))
+        self.help_icon_hover = QtGui.QIcon(str(ASSET_ROOT / "help_hover.svg"))
+        self.map_help_button.setIcon(self.help_icon_normal)
+        self.map_help_button.setIconSize(QtCore.QSize(18, 18))
+        self.map_help_button.installEventFilter(self)
+
+        # Compact map-help popup. The button lives in the footer beside coords;
+        # the panel floats above it when opened.
         self.map_help_panel = QtWidgets.QFrame(self)
         self.map_help_panel.setObjectName("mapHelpPanel")
         self.map_help_panel.setAttribute(
@@ -458,40 +490,6 @@ class AtlasWindow(
         help_layout.setColumnStretch(1, 1)
         self.map_help_panel.adjustSize()
         self.map_help_panel.hide()
-        self.map_help_button.raise_()
-
-        self._init_dps_overlay()
-
-
-        self.radar.installEventFilter(self)
-
-        self._init_planner_page()
-        self._init_codex_page()
-        self._init_players_page()
-
-        self.pages = {
-            MapPage.PAGE_ID: MapPage(self.map_toolbar, self.map_body),
-            PlannerPage.PAGE_ID: PlannerPage(self.planner_toolbar, self.planner_body),
-            CodexPage.PAGE_ID: CodexPage(self.codex_toolbar, self.codex_body),
-            PlayersPage.PAGE_ID: PlayersPage(
-                self.players_toolbar, self.players_body
-            ),
-        }
-        self.page_order = (
-            MapPage.PAGE_ID,
-            PlannerPage.PAGE_ID,
-            CodexPage.PAGE_ID,
-            PlayersPage.PAGE_ID,
-        )
-
-        for page_id in self.page_order:
-            page = self.pages[page_id]
-            self.context_stack.addWidget(page.context_bar)
-            self.page_stack.addWidget(page.body)
-
-        footer = build_footer()
-        self.connection = footer.findChild(QtWidgets.QLabel, "connectionStatus")
-        self.position = footer.findChild(QtWidgets.QLabel, "positionStatus")
 
         root_layout.addWidget(self.context_stack)
         root_layout.addWidget(self.page_stack, 1)
@@ -652,7 +650,8 @@ class AtlasWindow(
             self.character_status.update_waiting()
         else:
             self.character_status.update_offline()
-        self.game_time_status.clear()
+        if self.game_time_status is not None:
+            self.game_time_status.clear()
         self._update_players_page(
             {},
             online=self.online_mode,
@@ -679,8 +678,22 @@ class AtlasWindow(
             self.planner_page_button.setChecked(planner_active)
             self.codex_page_button.setChecked(page == CodexPage.PAGE_ID)
             self.players_page_button.setChecked(page == PlayersPage.PAGE_ID)
+        if hasattr(self, "game_time_status") and self.game_time_status is not None:
+            show_time = map_active and self._setting_bool(
+                "map/show_game_time", True
+            )
+            self.game_time_status.setVisible(show_time)
+        if hasattr(self, "view_mode") and self.view_mode is not None:
+            if not map_active:
+                self.view_mode.setVisible(False)
+            else:
+                self.view_mode.setVisible(bool(self.view_mode.text()))
         if hasattr(self, "position"):
             self.position.setVisible(map_active)
+        if hasattr(self, "zoom_label"):
+            self.zoom_label.setVisible(map_active)
+        if hasattr(self, "map_help_button"):
+            self.map_help_button.setVisible(map_active)
         if not planner_active and hasattr(
             self, "planner_build_load_overlay"
         ):
@@ -1363,9 +1376,15 @@ class AtlasWindow(
                 self.gather_sidebar.raise_()
 
         self.map_controls_overlay.adjustSize()
-        x = max(margin, self.radar.width() - self.map_controls_overlay.width() - margin)
-        y = max(margin, self.radar.height() - self.map_controls_overlay.height() - margin)
-        self.map_controls_overlay.move(x, y)
+        controls_x = max(
+            margin,
+            self.radar.width() - self.map_controls_overlay.width() - margin,
+        )
+        controls_y = max(
+            margin,
+            self.radar.height() - self.map_controls_overlay.height() - margin,
+        )
+        self.map_controls_overlay.move(controls_x, controls_y)
         self.map_controls_overlay.raise_()
 
         if hasattr(self, "map_fow_edit_overlay"):
@@ -1405,56 +1424,27 @@ class AtlasWindow(
                 self.map_fow_edit_overlay.raise_()
 
         if hasattr(self, "map_help_button") and hasattr(self, "map_help_panel"):
-            help_x = (
-                self.map_controls_overlay.x()
-                + self.map_controls_overlay.width()
-                - self.map_help_button.width()
-            )
-            help_y = max(
-                margin,
-                self.map_controls_overlay.y() - self.map_help_button.height() - 4,
-            )
-            if hasattr(self, "map_fow_edit_overlay") or hasattr(self, "fow_tools_fab"):
-                if getattr(self, "fow_tools_collapsed", True) and hasattr(
-                    self, "fow_tools_fab"
-                ):
-                    fow_bottom = (
-                        self.fow_tools_fab.y() + self.fow_tools_fab.height()
-                    )
-                elif hasattr(self, "map_fow_edit_overlay"):
-                    fow_bottom = (
-                        self.map_fow_edit_overlay.y()
-                        + self.map_fow_edit_overlay.height()
-                    )
-                else:
-                    fow_bottom = margin
-                help_y = max(help_y, fow_bottom + 4)
-            self.map_help_button.move(help_x, help_y)
-            self.map_help_button.raise_()
             self.map_help_panel.adjustSize()
-            button_bottom_left = self.map_help_button.mapToGlobal(
-                QtCore.QPoint(0, self.map_help_button.height())
-            )
-            anchor = self.mapFromGlobal(button_bottom_left)
+            button_top_left = self.map_help_button.mapToGlobal(QtCore.QPoint(0, 0))
+            anchor = self.mapFromGlobal(button_top_left)
             panel_x = max(
                 margin,
                 min(
-                    anchor.x() + self.map_help_button.width()
+                    anchor.x()
+                    + self.map_help_button.width()
                     - self.map_help_panel.width(),
                     self.width() - self.map_help_panel.width() - margin,
                 ),
             )
-            below_y = anchor.y() + 3
-            if below_y + self.map_help_panel.height() <= self.height() - margin:
+            # Footer button: prefer opening the panel upward.
+            above_y = anchor.y() - self.map_help_panel.height() - 3
+            below_y = anchor.y() + self.map_help_button.height() + 3
+            if above_y >= margin:
+                panel_y = above_y
+            elif below_y + self.map_help_panel.height() <= self.height() - margin:
                 panel_y = below_y
             else:
-                button_top = self.mapFromGlobal(
-                    self.map_help_button.mapToGlobal(QtCore.QPoint(0, 0))
-                ).y()
-                panel_y = max(
-                    margin,
-                    button_top - self.map_help_panel.height() - 3,
-                )
+                panel_y = max(margin, above_y)
             self.map_help_panel.move(panel_x, panel_y)
             if self.map_help_panel.isVisible():
                 self.map_help_panel.raise_()
@@ -1964,24 +1954,6 @@ class AtlasWindow(
 
     def _pan_state_changed(self, panned: bool) -> None:
         self.recenter.setEnabled(panned or self.radar.is_following())
-        self.recenter_animation.stop()
-
-        current_height = max(0, self.recenter_container.height())
-        show_recenter = panned or self.radar.is_following()
-        target_height = 26 if show_recenter else 0
-        if current_height == target_height:
-            self.recenter_container.setMaximumHeight(target_height)
-            self._position_map_overlays()
-            return
-
-        self.recenter_animation.setStartValue(current_height)
-        self.recenter_animation.setEndValue(target_height)
-        self.recenter_animation.setEasingCurve(
-            QtCore.QEasingCurve.Type.OutCubic
-            if show_recenter
-            else QtCore.QEasingCurve.Type.InCubic
-        )
-        self.recenter_animation.start()
 
     def _apply_user_settings(self) -> None:
         always_on_top = self._setting_bool("app/always_on_top", False)
@@ -2036,6 +2008,18 @@ class AtlasWindow(
         elif not dps_enabled:
             self.dps_overlay.hide()
             self.dps_collapsed_button.hide()
+
+        self.currency_status.setVisible(
+            self._setting_bool("map/show_currencies", True)
+        )
+        map_active = getattr(self, "_active_page_id", None) == MapPage.PAGE_ID
+        if self.game_time_status is not None:
+            self.game_time_status.setVisible(
+                map_active and self._setting_bool("map/show_game_time", True)
+            )
+        self.rift_status.setVisible(
+            self._setting_bool("map/show_rift_timer", True)
+        )
 
         self._party_status_signature = None
         self._controls_changed()
@@ -2147,11 +2131,15 @@ class AtlasWindow(
             active_id=self.active_custom_waypoint_id,
         )
         self.radar.set_zoom_radius(float(radius))
-        self.zoom_label.setText(zoom_label)
-        self.zoom_label.setToolTip(
+        zoom_tip = (
             f"Scale reference: ±{radius} m across "
             f"{int(self.radar.ZOOM_REFERENCE_HEIGHT_PX)} px height"
         )
+        if hasattr(self, "zoom_label") and self.zoom_label is not None:
+            self.zoom_label.setText(zoom_label)
+            self.zoom_label.setToolTip(zoom_tip)
+        self.zoom_in.setToolTip(f"Zoom in\n{zoom_tip}")
+        self.zoom_out.setToolTip(f"Zoom out\n{zoom_tip}")
         self.zoom_out.setEnabled(self.zoom_index < len(self.ZOOM_LEVELS) - 1)
         self.zoom_in.setEnabled(self.zoom_index > 0)
         # Keep the legacy aggregate value for downgrade compatibility while
@@ -2364,43 +2352,43 @@ class AtlasWindow(
             connection_state,
             snapshot.message if connection_state == "failure" else "",
             waiting_seconds,
-            self.radar.is_panned(),
-            self.radar.is_following(),
-            self.radar.follow_target_name(),
-            len(snapshot.pois),
         )
         if connection_signature != self._connection_signature:
             self._connection_signature = connection_signature
             if connection_state == "offline":
-                self.connection.setText(f"● Offline{poi_suffix}")
+                self.connection.setText("● Offline")
             elif connection_state == "connected":
-                if self.radar.is_following():
-                    follow_name = self.radar.follow_target_name() or "player"
-                    view_suffix = f" · Following {follow_name}"
-                elif self.radar.is_panned():
-                    view_suffix = " · Free view"
-                else:
-                    view_suffix = ""
-                self.connection.setText(
-                    f"● Connected{view_suffix}{poi_suffix}"
-                )
+                self.connection.setText("● Connected")
             elif connection_state == "failure":
-                detail = html.escape(snapshot.message)
-                self.connection.setText(f"● FAILURE · {detail}")
+                self.connection.setText("● Failure")
             else:
                 timer = (
                     f" ({waiting_seconds}s)"
                     if waiting_seconds is not None
                     else ""
                 )
-                self.connection.setText(
-                    f'● Waiting{timer} &nbsp;'
-                    '<span style="color:#4d5963">FOCUS THE GAME WINDOW</span>'
-                )
+                self.connection.setText(f"● Waiting{timer}")
             self.connection.setProperty("status", connection_state)
             style = self.connection.style()
             style.unpolish(self.connection)
             style.polish(self.connection)
+
+        following = self.radar.is_following()
+        follow_name = self.radar.follow_target_name() if following else ""
+        panned = self.radar.is_panned()
+        view_signature = (following, follow_name, panned)
+        if view_signature != self._view_mode_signature:
+            self._view_mode_signature = view_signature
+            if following:
+                self.view_mode.setText(
+                    f"Following {follow_name or 'player'}"
+                )
+            elif panned:
+                self.view_mode.setText("Free view")
+            else:
+                self.view_mode.setText("")
+            map_active = getattr(self, "_active_page_id", None) == MapPage.PAGE_ID
+            self.view_mode.setVisible(map_active and bool(self.view_mode.text()))
 
         player = snapshot.state.get("player", {}) if isinstance(snapshot.state, dict) else {}
         if not isinstance(player, dict):
@@ -2429,13 +2417,19 @@ class AtlasWindow(
         if self.online_mode and snapshot.connected:
             self.character_status.update_snapshot(snapshot)
             state = snapshot.state if isinstance(snapshot.state, dict) else {}
-            self.game_time_status.update_from_state(state)
+            self.currency_status.update_from_state(state)
+            if self.game_time_status is not None:
+                self.game_time_status.update_from_state(state)
         elif self.online_mode:
             self.character_status.update_waiting()
-            self.game_time_status.clear()
+            self.currency_status.clear()
+            if self.game_time_status is not None:
+                self.game_time_status.clear()
         else:
             self.character_status.update_offline()
-            self.game_time_status.clear()
+            self.currency_status.clear()
+            if self.game_time_status is not None:
+                self.game_time_status.clear()
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # noqa: N802
         super().closeEvent(event)

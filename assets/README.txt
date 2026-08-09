@@ -6,6 +6,11 @@ Supported files:
 - pois_W1_Siagarta.json
 - activities.png
 - rift_icon_128.png
+- currency_gold.png
+- currency_craft.png
+- currency_demonic_soul.png
+- currency_nightblood.png
+- currency_caps.json (from data.cdb item.props.currency.max)
 - redOrb.webp
 - plant.webp
 - ore.webp
