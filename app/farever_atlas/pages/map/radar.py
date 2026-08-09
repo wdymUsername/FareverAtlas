@@ -38,6 +38,18 @@ _CRITTER_SPAWN_FILL = QtGui.QColor(107, 224, 107, 95)
 _CRITTER_EDGE = QtGui.QColor("#0d1a0d")
 _SPARK_RING = QtGui.QColor("#FFE68A")
 _SPARK_SCALE = 1.45
+_ENEMY_FILL = QtGui.QColor("#FF5348")
+_ENEMY_EDGE = QtGui.QColor("#190d0d")
+_ELITE_FILL = QtGui.QColor("#E4B84A")
+_UNIQUE_FILL = QtGui.QColor("#B45CFF")
+_BOSS_FILL = QtGui.QColor("#7A3DB8")
+_BOSS_SCALE = 1.55
+_UNIQUE_SCALE = 1.25
+_ELITE_SCALE = 1.45
+_PLAYER_DOT_RADIUS = 4.2
+_PLAYER_DOT_EDGE = QtGui.QColor("#081018")
+_OTHER_PLAYER_FILL = QtGui.QColor("#5AAFE0")  # blue-leaning cyan
+_PARTY_FILL = QtGui.QColor("#1E9BFF")  # very bright blue
 # Activity markers keep distinct hues by subkind (icons still win when present).
 _ACTIVITY_COLORS: dict[str, QtGui.QColor] = {
     "worldelite": QtGui.QColor("#e4b84a"),
@@ -122,8 +134,6 @@ class RadarWidget(QtWidgets.QWidget):
         self.enemy_z_fade = 30.0
         # Same elevation fade for companion critter markers.
         self.critter_z_fade = 30.0
-        # Same elevation fade for non-party player markers.
-        self.player_z_fade = 30.0
         # Metres of |Δz| before a marker gets an up/down chevron.
         self.z_indicator_threshold = 2.0
         self.active_custom_waypoint_id: int | None = None
@@ -267,6 +277,10 @@ class RadarWidget(QtWidgets.QWidget):
                 str(enemy.get("id") or ""),
                 str(enemy.get("kind") or ""),
                 bool(enemy.get("spark")),
+                bool(enemy.get("elite")),
+                bool(enemy.get("boss")),
+                bool(enemy.get("miniboss")),
+                bool(enemy.get("unique")),
                 safe_float(enemy.get("x"), 0.0),
                 safe_float(enemy.get("y"), 0.0),
                 safe_float(enemy.get("z"), 0.0),
@@ -280,6 +294,10 @@ class RadarWidget(QtWidgets.QWidget):
                 str(critter.get("id") or ""),
                 str(critter.get("kind") or ""),
                 bool(critter.get("spark")),
+                bool(critter.get("elite")),
+                bool(critter.get("boss")),
+                bool(critter.get("miniboss")),
+                bool(critter.get("unique")),
                 safe_float(critter.get("x"), 0.0),
                 safe_float(critter.get("y"), 0.0),
                 safe_float(critter.get("z"), 0.0),
@@ -1170,6 +1188,41 @@ class RadarWidget(QtWidgets.QWidget):
         return dict(best) if best is not None else None
 
     @staticmethod
+    def _draw_player_dot(
+        painter: QtGui.QPainter,
+        point: QtCore.QPointF,
+        fill: QtGui.QColor,
+        *,
+        radius: float = _PLAYER_DOT_RADIUS,
+    ) -> None:
+        painter.setPen(QtGui.QPen(_PLAYER_DOT_EDGE, 1.0))
+        painter.setBrush(fill)
+        painter.drawEllipse(point, radius, radius)
+
+    @staticmethod
+    def _enemy_rank(enemy: dict[str, Any]) -> str:
+        """Highest CastleDB rank for map styling / hover tags."""
+        if bool(enemy.get("boss")):
+            return "boss"
+        if bool(enemy.get("miniboss")):
+            return "miniboss"
+        if bool(enemy.get("unique")):
+            return "unique"
+        if bool(enemy.get("elite")):
+            return "elite"
+        return ""
+
+    @staticmethod
+    def _enemy_rank_style(rank: str) -> tuple[QtGui.QColor, float]:
+        if rank in ("boss", "miniboss"):
+            return QtGui.QColor(_BOSS_FILL), _BOSS_SCALE
+        if rank == "unique":
+            return QtGui.QColor(_UNIQUE_FILL), _UNIQUE_SCALE
+        if rank == "elite":
+            return QtGui.QColor(_ELITE_FILL), _ELITE_SCALE
+        return QtGui.QColor(_ENEMY_FILL), 1.0
+
+    @staticmethod
     def _enemy_display_name(enemy: dict[str, Any]) -> str:
         kind = str(enemy.get("kind") or "").strip()
         role = str(enemy.get("role") or "").strip().lower()
@@ -1191,6 +1244,15 @@ class RadarWidget(QtWidgets.QWidget):
             # Creature ids arrive as HashLink identifiers like Crimson_Z2W_Sword_2.
             base = " ".join(part for part in kind.replace("_", " ").split() if part)
         tag = "Critter" if role == "critter" else "Enemy"
+        rank = RadarWidget._enemy_rank(enemy)
+        if rank == "boss":
+            tag = "Boss"
+        elif rank == "miniboss":
+            tag = "Miniboss"
+        elif rank == "unique":
+            tag = "Unique"
+        elif rank == "elite":
+            tag = "Elite"
         if bool(enemy.get("spark")) and "sparkl" not in base.lower():
             tag = f"{tag} · Sparkling"
         return f"{base} ({tag})" if kind else tag
@@ -2884,6 +2946,7 @@ class RadarWidget(QtWidgets.QWidget):
                     painter, point, waypoint, is_active
                 )
 
+
         enemies = self.state.get("enemies", []) if isinstance(self.state, dict) else []
         if self.show_enemies and isinstance(enemies, list):
             for enemy in enemies:
@@ -2910,14 +2973,15 @@ class RadarWidget(QtWidgets.QWidget):
                     and math.isfinite(player_z)
                     and abs(enemy_z - player_z) > self.enemy_z_fade
                 )
-                fill = QtGui.QColor("#FF5348")
+                rank = self._enemy_rank(enemy)
+                fill, rank_scale = self._enemy_rank_style(rank)
                 if far:
                     fill.setAlpha(110)
                 spark = bool(enemy.get("spark"))
-                size = 3.6 * (_SPARK_SCALE if spark else 1.0)
+                size = 3.6 * rank_scale * (_SPARK_SCALE if spark else 1.0)
                 if spark:
                     self._draw_spark_halo(
-                        painter, point, 3.6, alpha=fill.alpha()
+                        painter, point, 3.6 * rank_scale, alpha=fill.alpha()
                     )
                 diamond = QtGui.QPolygonF(
                     [
@@ -2927,13 +2991,15 @@ class RadarWidget(QtWidgets.QWidget):
                         point + QtCore.QPointF(-size, 0),
                     ]
                 )
-                painter.setPen(QtGui.QPen(QtGui.QColor("#190d0d"), 1.0))
+                painter.setPen(QtGui.QPen(_ENEMY_EDGE, 1.0))
                 painter.setBrush(fill)
                 painter.drawPolygon(diamond)
                 self._draw_z_indicator(
                     painter, point, enemy_z, player_z, gap=4.8, color=fill
                 )
-                hit = self._enemy_hit_radius * (_SPARK_SCALE if spark else 1.0)
+                hit = self._enemy_hit_radius * rank_scale * (
+                    _SPARK_SCALE if spark else 1.0
+                )
                 payload = dict(enemy)
                 payload["role"] = "enemy"
                 self._enemy_hits.append(
@@ -3077,28 +3143,9 @@ class RadarWidget(QtWidgets.QWidget):
                     other, center, pixels_per_metre, view_center
                 )
                 other_z = safe_float(other.get("z"), player_z)
-                far = (
-                    math.isfinite(other_z)
-                    and math.isfinite(player_z)
-                    and abs(other_z - player_z) > self.player_z_fade
-                )
-                # Amber diamond: distinct from red enemy diamonds and class-colored
-                # party arrows.
-                fill = QtGui.QColor("#E8B84A")
-                if far:
-                    fill.setAlpha(120)
-                size = 4.2
-                diamond = QtGui.QPolygonF(
-                    [
-                        point + QtCore.QPointF(0, -size),
-                        point + QtCore.QPointF(size, 0),
-                        point + QtCore.QPointF(0, size),
-                        point + QtCore.QPointF(-size, 0),
-                    ]
-                )
-                painter.setPen(QtGui.QPen(QtGui.QColor("#1a1408"), 1.0))
-                painter.setBrush(fill)
-                painter.drawPolygon(diamond)
+                # Full-opacity cyan always — Z distance is only the up/down tick.
+                fill = QtGui.QColor(_OTHER_PLAYER_FILL)
+                self._draw_player_dot(painter, point, fill)
                 self._draw_z_indicator(
                     painter, point, other_z, player_z, gap=5.5, color=fill
                 )
@@ -3157,36 +3204,21 @@ class RadarWidget(QtWidgets.QWidget):
                 continue
 
             point = self._world_to_screen(member, center, pixels_per_metre, view_center)
-            class_color = {
-                "mage": "#7aa2f7",
-                "priest": "#d9b7ff",
-                "rogue": "#79d7a5",
-                "warrior": "#f0a36b",
-            }.get(str(member.get("class") or "").strip().lower(), "#67b7ff")
+            fill = QtGui.QColor(_PARTY_FILL)
 
             painter.save()
             if not hero_valid:
                 painter.setOpacity(0.35)
 
-            # Use the same Farever heading correction as the local-player
-            # marker, with a slightly smaller arrow for party members.
-            heading = safe_float(member.get("heading")) + (math.pi / 2.0)
-            forward_x, forward_y = math.sin(heading), -math.cos(heading)
-            side_x, side_y = -forward_y, forward_x
-            tip = point + QtCore.QPointF(forward_x * 9.0, forward_y * 9.0)
-            base = point - QtCore.QPointF(forward_x * 5.0, forward_y * 5.0)
-            left = base + QtCore.QPointF(side_x * 5.0, side_y * 5.0)
-            right = base - QtCore.QPointF(side_x * 5.0, side_y * 5.0)
-            painter.setPen(QtGui.QPen(QtGui.QColor("#081016"), 1.5))
-            painter.setBrush(QtGui.QColor(class_color))
-            painter.drawPolygon(QtGui.QPolygonF([tip, left, right]))
+            # Same circle as other players; bright blue marks party membership.
+            self._draw_player_dot(painter, point, fill)
             self._draw_z_indicator(
                 painter,
                 point,
                 safe_float(member.get("z"), math.nan),
                 player_z,
                 gap=8.0,
-                color=QtGui.QColor(class_color),
+                color=fill,
             )
 
             hp = safe_float(member.get("hp"), math.nan)
@@ -3202,7 +3234,10 @@ class RadarWidget(QtWidgets.QWidget):
                 hp_color = QtGui.QColor("#70d88b" if hp_ratio > 0.35 else "#ef6b6b")
                 painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
                 painter.setPen(QtGui.QPen(QtGui.QColor("#26333f"), 2.0))
-                hp_ring = QtCore.QRectF(point.x() - 10, point.y() - 10, 20, 20)
+                ring = _PLAYER_DOT_RADIUS + 5.5
+                hp_ring = QtCore.QRectF(
+                    point.x() - ring, point.y() - ring, ring * 2.0, ring * 2.0
+                )
                 painter.drawEllipse(hp_ring)
                 painter.setPen(QtGui.QPen(hp_color, 2.0))
                 painter.drawArc(hp_ring, 90 * 16, round(-360 * 16 * hp_ratio))

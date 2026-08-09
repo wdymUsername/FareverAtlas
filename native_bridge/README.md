@@ -50,8 +50,8 @@ Discovery, fingerprinting, and HashLink metadata traversal happen once per attac
 | `position`, `rotation_z` | local hero transform |
 | `camera_yaw` | world camera yaw when readable, else `null` |
 | `party` | up to 3 other group members (name, class, vitals, position, distance) |
-| `enemies` | nearby non-summon combat `ent.Foe` markers (id, kind, spark, position; ~500 m / 120 z cull, max 150). Companion critters are excluded. |
-| `critters` | Wild Critter-kind `ent.Foe` markers from `unit_traits` (id, kind, spark, position; full layer like `players` — units + entities, no range cull, max 120). Player-owned companion pets (`Foe.summonOwner`) are excluded. `spark` marks CastleDB Spark variants. |
+| `enemies` | nearby non-summon combat `ent.Foe` markers (id, kind, spark, elite, boss, miniboss, unique, position; ~500 m / 120 z cull, max 150). Companion critters are excluded. Rank flags come from CastleDB `unit.flags` kind lists in `unit_traits`. |
+| `critters` | Wild Critter-kind `ent.Foe` markers from `unit_traits` (id, kind, spark, elite, boss, miniboss, unique, position; full layer like `players` — units + entities, no range cull, max 120). Player-owned companion pets (`Foe.summonOwner`) are excluded. `spark` marks CastleDB Spark variants; rank flags are schema-symmetric (usually false for companions). |
 | `players` | other layer heroes outside the party (uncapped distance; display/sort only; max 400) |
 | `interactibles` | nearby gatherables / chests (`kind`: ore, plant, chest, gatherable; ~500 m / 160 z cull, max 200) |
 | `instance` | coarse map bucket (`world` / `rift` / `dungeon` / `instance` / `unknown`) plus `map_id` and flags |

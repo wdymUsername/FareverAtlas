@@ -1,7 +1,8 @@
-"""Companion / Spark kind lists from CastleDB `unit` traits.
+"""CastleDB `unit` trait kind lists for map classification.
 
-Mirrors `usefull/BrudrbearFareverMeter/analysis_out/unit_traits.json`.
-Critters are `ent.Foe` at runtime; classify by kind id, not HL class.
+Source: ``assets/unit_traits.json`` (rebuild with ``tools/extract_unit_traits.py``).
+Critters / specials / Spark rares are still ``ent.Foe`` at runtime; classify by
+kind id, not HashLink class.
 """
 
 from __future__ import annotations
@@ -14,27 +15,43 @@ from .config import ASSET_ROOT
 
 _TRAITS_FILE = ASSET_ROOT / "unit_traits.json"
 
+_TraitSets = tuple[
+    frozenset[str],
+    frozenset[str],
+    frozenset[str],
+    frozenset[str],
+    frozenset[str],
+    frozenset[str],
+]
+
+
+def _kind_set(payload: dict[str, Any], key: str) -> frozenset[str]:
+    raw = payload.get(key) or []
+    return frozenset(str(item) for item in raw if isinstance(item, str) and item)
+
 
 @lru_cache(maxsize=1)
-def _load_traits() -> tuple[frozenset[str], frozenset[str]]:
+def _load_traits() -> _TraitSets:
     path = _TRAITS_FILE
     if not path.is_file():
-        return frozenset(), frozenset()
+        empty: frozenset[str] = frozenset()
+        return empty, empty, empty, empty, empty, empty
     try:
         payload: Any = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, UnicodeError):
-        return frozenset(), frozenset()
+        empty = frozenset()
+        return empty, empty, empty, empty, empty, empty
     if not isinstance(payload, dict):
-        return frozenset(), frozenset()
-    critter = payload.get("critter") or []
-    spark = payload.get("spark") or []
-    critter_kinds = frozenset(
-        str(item) for item in critter if isinstance(item, str) and item
+        empty = frozenset()
+        return empty, empty, empty, empty, empty, empty
+    return (
+        _kind_set(payload, "critter"),
+        _kind_set(payload, "spark"),
+        _kind_set(payload, "elite"),
+        _kind_set(payload, "boss"),
+        _kind_set(payload, "miniboss"),
+        _kind_set(payload, "unique"),
     )
-    spark_kinds = frozenset(
-        str(item) for item in spark if isinstance(item, str) and item
-    )
-    return critter_kinds, spark_kinds
 
 
 def critter_kinds() -> frozenset[str]:
@@ -43,6 +60,22 @@ def critter_kinds() -> frozenset[str]:
 
 def spark_kinds() -> frozenset[str]:
     return _load_traits()[1]
+
+
+def elite_kinds() -> frozenset[str]:
+    return _load_traits()[2]
+
+
+def boss_kinds() -> frozenset[str]:
+    return _load_traits()[3]
+
+
+def miniboss_kinds() -> frozenset[str]:
+    return _load_traits()[4]
+
+
+def unique_kinds() -> frozenset[str]:
+    return _load_traits()[5]
 
 
 def is_critter_kind(kind: str | None) -> bool:
@@ -55,3 +88,27 @@ def is_spark_kind(kind: str | None) -> bool:
     if not kind:
         return False
     return kind in spark_kinds()
+
+
+def is_elite_kind(kind: str | None) -> bool:
+    if not kind:
+        return False
+    return kind in elite_kinds()
+
+
+def is_boss_kind(kind: str | None) -> bool:
+    if not kind:
+        return False
+    return kind in boss_kinds()
+
+
+def is_miniboss_kind(kind: str | None) -> bool:
+    if not kind:
+        return False
+    return kind in miniboss_kinds()
+
+
+def is_unique_kind(kind: str | None) -> bool:
+    if not kind:
+        return False
+    return kind in unique_kinds()
