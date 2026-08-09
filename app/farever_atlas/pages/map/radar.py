@@ -51,6 +51,7 @@ _POI_COLORS: dict[str, QtGui.QColor] = {
     "red_orb": QtGui.QColor("#e35b62"),
     "plant": QtGui.QColor("#63c174"),
     "ore": QtGui.QColor("#aeb6c2"),
+    "critter": QtGui.QColor("#6BE06B"),
     "merchant": QtGui.QColor("#a67c52"),
     "dungeon": QtGui.QColor("#5a3480"),
     "activity": QtGui.QColor("#5ba6e6"),
@@ -3296,13 +3297,23 @@ class RadarWidget(QtWidgets.QWidget):
                     QtGui.QPen(route_color, 1.8, QtCore.Qt.PenStyle.DashLine)
                 )
                 painter.drawLine(player_point_for_route, destination_point)
-                self._draw_poi_marker(
-                    painter,
-                    destination_point,
-                    str(gather_target.get("kind") or "plant"),
-                    "",
-                    size=str(gather_target.get("size") or ""),
-                )
+                gather_kind = str(gather_target.get("kind") or "plant").strip().lower()
+                if gather_kind == "critter":
+                    self._draw_critter_diamond(
+                        painter,
+                        destination_point,
+                        4.0,
+                        QtGui.QColor(_CRITTER_FILL),
+                        spark=False,
+                    )
+                else:
+                    self._draw_poi_marker(
+                        painter,
+                        destination_point,
+                        gather_kind,
+                        "",
+                        size=str(gather_target.get("size") or ""),
+                    )
 
         active_waypoint: dict[str, Any] | None = None
         if self.show_custom_waypoints:

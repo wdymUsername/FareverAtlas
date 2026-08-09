@@ -6,12 +6,17 @@ from .custom_waypoints import CustomWaypointMixin
 from .dps_overlay import DpsOverlayMixin
 from .filter_sidebar import FilterSidebarMixin
 from .gather_nav import GatherNavMixin
+from .proximity_alerts import ProximityAlertsMixin
 
 
 class MapPageMixin(
-    FilterSidebarMixin, CustomWaypointMixin, GatherNavMixin, DpsOverlayMixin
+    FilterSidebarMixin,
+    CustomWaypointMixin,
+    GatherNavMixin,
+    ProximityAlertsMixin,
+    DpsOverlayMixin,
 ):
-    """Map filters, waypoints, gather nav, and DPS overlay behavior."""
+    """Map filters, waypoints, gather nav, proximity alerts, and DPS overlay."""
 
 
 class MapPage:

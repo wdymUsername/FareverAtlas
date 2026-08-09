@@ -20,6 +20,50 @@ _CUSTOM_WAYPOINT_LIST_MAX_ROWS = 12
 _CUSTOM_WAYPOINT_ROW_HEIGHT = 22
 _CUSTOM_WAYPOINT_ROW_SPACING = 2
 
+# Collapse NODE GUIDE after this long with no interaction on the panel.
+_GATHER_SIDEBAR_IDLE_MS = 60_000
+
+
+class _GatherSidebarIdleWatcher(QtCore.QObject):
+    """Reset the NODE GUIDE idle timer on interaction inside the panel."""
+
+    def __init__(self, owner: object) -> None:
+        super().__init__(owner)  # type: ignore[arg-type]
+        self._owner = owner
+        self._installed = False
+
+    def set_active(self, active: bool) -> None:
+        app = QtWidgets.QApplication.instance()
+        if app is None:
+            return
+        if active and not self._installed:
+            app.installEventFilter(self)
+            self._installed = True
+        elif not active and self._installed:
+            app.removeEventFilter(self)
+            self._installed = False
+
+    def eventFilter(self, watched: QtCore.QObject, event: QtCore.QEvent) -> bool:  # noqa: N802
+        if event.type() not in {
+            QtCore.QEvent.Type.MouseButtonPress,
+            QtCore.QEvent.Type.MouseButtonDblClick,
+            QtCore.QEvent.Type.Wheel,
+            QtCore.QEvent.Type.KeyPress,
+        }:
+            return False
+        sidebar = getattr(self._owner, "gather_sidebar", None)
+        if not isinstance(sidebar, QtWidgets.QWidget):
+            return False
+        if getattr(self._owner, "gather_sidebar_collapsed", True):
+            return False
+        if not isinstance(watched, QtWidgets.QWidget):
+            return False
+        if watched is sidebar or sidebar.isAncestorOf(watched):
+            bump = getattr(self._owner, "_bump_gather_sidebar_idle", None)
+            if callable(bump):
+                bump()
+        return False
+
 
 class FilterSidebarMixin:
     """Floating WAYPOINTS filter panel with segment pages + GATHER overlay."""
@@ -338,6 +382,41 @@ class FilterSidebarMixin:
         )
         self.gather_sidebar_close.clicked.connect(self._close_gather_sidebar)
 
+        self._gather_sidebar_idle = QtCore.QTimer(self)
+        self._gather_sidebar_idle.setSingleShot(True)
+        self._gather_sidebar_idle.setInterval(_GATHER_SIDEBAR_IDLE_MS)
+        self._gather_sidebar_idle.timeout.connect(self._on_gather_sidebar_idle)
+        self._gather_sidebar_idle_watcher = _GatherSidebarIdleWatcher(self)
+
+    def _bump_gather_sidebar_idle(self) -> None:
+        if getattr(self, "gather_sidebar_collapsed", True):
+            return
+        if getattr(self, "gather_nav_enabled", False):
+            self._stop_gather_sidebar_idle_timer_only()
+            return
+        timer = getattr(self, "_gather_sidebar_idle", None)
+        if timer is None:
+            return
+        timer.start(_GATHER_SIDEBAR_IDLE_MS)
+
+    def _stop_gather_sidebar_idle_timer_only(self) -> None:
+        timer = getattr(self, "_gather_sidebar_idle", None)
+        if timer is not None:
+            timer.stop()
+
+    def _stop_gather_sidebar_idle(self) -> None:
+        self._stop_gather_sidebar_idle_timer_only()
+        watcher = getattr(self, "_gather_sidebar_idle_watcher", None)
+        if watcher is not None:
+            watcher.set_active(False)
+
+    def _on_gather_sidebar_idle(self) -> None:
+        if getattr(self, "gather_sidebar_collapsed", True):
+            return
+        if getattr(self, "gather_nav_enabled", False):
+            return
+        self._set_gather_sidebar_collapsed(True)
+
     def _on_gather_sidebar_icon_clicked(self) -> None:
         if self.gather_sidebar_collapsed:
             self._set_gather_sidebar_collapsed(False)
@@ -565,6 +644,7 @@ class FilterSidebarMixin:
     ) -> None:
         self.gather_sidebar_collapsed = bool(collapsed)
         if self.gather_sidebar_collapsed:
+            self._stop_gather_sidebar_idle()
             self.gather_fab.show()
             self.gather_fab.raise_()
             self.gather_sidebar.hide()
@@ -592,6 +672,10 @@ class FilterSidebarMixin:
             else:
                 self._set_gather_sidebar_body_height(target_height)
                 self._position_map_overlays()
+            watcher = getattr(self, "_gather_sidebar_idle_watcher", None)
+            if watcher is not None:
+                watcher.set_active(True)
+            self._bump_gather_sidebar_idle()
 
         if persist:
             self._settings.setValue(

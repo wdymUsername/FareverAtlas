@@ -13,6 +13,7 @@ from ...cull_limits import DEFAULT_LOOT_XY_M, DEFAULT_LOOT_Z_M
 from ...display_names import (
     chest_label_from_id,
     format_gatherable_tooltip_name,
+    format_unit_tooltip_name,
     is_activity_linked_chest,
 )
 from ...toast import notify
@@ -593,12 +594,16 @@ class GatherNavMixin:
             self._ensure_gather_loot_filter_visible()
             if hasattr(self, "_set_gather_sidebar_collapsed"):
                 self._set_gather_sidebar_collapsed(False)
+            if hasattr(self, "_stop_gather_sidebar_idle_timer_only"):
+                self._stop_gather_sidebar_idle_timer_only()
             notify(self, "NODE GUIDE started")
             self._gather_nav_retarget(force=True)
         else:
             self._clear_gather_nav_target()
             notify(self, "NODE GUIDE stopped")
             self._refresh_gather_nav_panel()
+            if hasattr(self, "_bump_gather_sidebar_idle"):
+                self._bump_gather_sidebar_idle()
 
     def _on_gather_nav_filters_changed(self) -> None:
         panel = self._gather_nav_panel()
@@ -663,6 +668,8 @@ class GatherNavMixin:
         if panel is not None:
             panel.set_enabled_checked(False)
         self._refresh_gather_nav_panel()
+        if hasattr(self, "_bump_gather_sidebar_idle"):
+            self._bump_gather_sidebar_idle()
 
     def _gather_nav_tick(self, snapshot: Any = None) -> None:
         if not self.gather_nav_enabled:
@@ -670,8 +677,14 @@ class GatherNavMixin:
             return
         self._revive_depleted_from_live(snapshot)
         if self._gather_target_collected(snapshot):
-            self._mark_gather_depleted(self.gather_nav_target, snapshot)
+            target = self.gather_nav_target
+            forced_critter = self._is_forced_critter_target(target)
+            if not forced_critter:
+                self._mark_gather_depleted(self.gather_nav_target, snapshot)
             self._clear_gather_nav_target()
+            if forced_critter:
+                self._stop_forced_critter_nav()
+                return
             self._gather_nav_retarget(force=True, snapshot=snapshot)
             return
         if self.gather_nav_target is None:
@@ -680,6 +693,90 @@ class GatherNavMixin:
         self._sync_gather_target_live(snapshot)
         self._push_gather_target_to_radar()
         self._refresh_gather_nav_panel()
+
+    @staticmethod
+    def _is_forced_critter_target(target: dict[str, Any] | None) -> bool:
+        if not isinstance(target, dict):
+            return False
+        kind = str(target.get("kind") or "").strip().lower()
+        return bool(target.get("forced")) and kind == "critter"
+
+    def _stop_forced_critter_nav(self) -> None:
+        """Disable NODE GUIDE after a force-pinned critter is collected."""
+        self.gather_nav_enabled = False
+        self._clear_gather_nav_target()
+        panel = self._gather_nav_panel()
+        if panel is not None:
+            panel.set_enabled_checked(False)
+        self._refresh_gather_nav_panel()
+        if hasattr(self, "_bump_gather_sidebar_idle"):
+            self._bump_gather_sidebar_idle()
+
+    def force_navigate_to_critter(self, critter: dict[str, Any]) -> None:
+        """Open NODE GUIDE and pin a specific live wild critter."""
+        if not isinstance(critter, dict):
+            return
+        live_id = str(critter.get("id") or "").strip()
+        if not live_id:
+            return
+        x = safe_float(critter.get("x"), math.nan)
+        y = safe_float(critter.get("y"), math.nan)
+        z = safe_float(critter.get("z"), 0.0)
+        if not (math.isfinite(x) and math.isfinite(y)):
+            return
+
+        # Destination is exclusive with custom waypoint routing.
+        if getattr(self, "active_custom_waypoint_id", None) is not None:
+            self._set_active_custom_waypoint(None)
+
+        self.gather_nav_enabled = True
+        if hasattr(self, "_stop_gather_sidebar_idle_timer_only"):
+            self._stop_gather_sidebar_idle_timer_only()
+        self._gather_missing_since = None
+        self._gather_missing_key = None
+        if hasattr(self, "_set_gather_sidebar_collapsed"):
+            self._set_gather_sidebar_collapsed(False)
+        panel = self._gather_nav_panel()
+        if panel is not None:
+            panel.set_enabled_checked(True)
+
+        unit_kind = str(critter.get("kind") or "").strip()
+        name = (
+            format_unit_tooltip_name(unit_kind) if unit_kind else "Critter"
+        )
+        player = self._gather_player_position()
+        distance = (
+            math.hypot(
+                x - safe_float(player.get("x")),
+                y - safe_float(player.get("y")),
+            )
+            if player is not None
+            else math.nan
+        )
+        self.gather_nav_target = {
+            "key": f"critter:{live_id}",
+            "kind": "critter",
+            "name": name,
+            "x": x,
+            "y": y,
+            "z": z,
+            "poi_id": None,
+            "live_id": live_id,
+            "distance": distance,
+            "source": "live",
+            "forced": True,
+            "size": "",
+        }
+        self._push_gather_target_to_radar()
+        self._refresh_gather_nav_panel()
+        notify(self, f"Navigating to {name}", kind="info")
+
+    def _gather_critters(self, snapshot: Any = None) -> list[dict[str, Any]]:
+        state = self._gather_snapshot_state(snapshot)
+        nodes = state.get("critters", [])
+        if not isinstance(nodes, list):
+            return []
+        return [item for item in nodes if isinstance(item, dict)]
 
     def _gather_player_position(self) -> dict[str, float] | None:
         getter = getattr(self, "_current_player_position", None)
@@ -1085,6 +1182,31 @@ class GatherNavMixin:
         if target is None or player is None:
             return
         kind = str(target.get("kind") or self.gather_nav_kind).strip().lower()
+        if kind == "critter" or self._is_forced_critter_target(target):
+            live_id = str(target.get("live_id") or "")
+            if live_id:
+                for live in self._gather_critters(snapshot):
+                    if str(live.get("id") or "") != live_id:
+                        continue
+                    target["x"] = safe_float(live.get("x"), target.get("x"))
+                    target["y"] = safe_float(live.get("y"), target.get("y"))
+                    target["z"] = safe_float(live.get("z"), target.get("z"))
+                    unit_kind = str(live.get("kind") or "")
+                    if unit_kind:
+                        target["name"] = format_unit_tooltip_name(unit_kind)
+                    target["distance"] = math.hypot(
+                        safe_float(target.get("x")) - safe_float(player.get("x")),
+                        safe_float(target.get("y")) - safe_float(player.get("y")),
+                    )
+                    target["source"] = "live"
+                    self._gather_missing_since = None
+                    self._gather_missing_key = None
+                    return
+            target["distance"] = math.hypot(
+                safe_float(target.get("x")) - safe_float(player.get("x")),
+                safe_float(target.get("y")) - safe_float(player.get("y")),
+            )
+            return
         if kind in _STATIC_GATHER_KINDS:
             target["distance"] = math.hypot(
                 safe_float(target.get("x")) - safe_float(player.get("x")),
@@ -1163,6 +1285,25 @@ class GatherNavMixin:
         if target is None:
             return False
         kind = str(target.get("kind") or self.gather_nav_kind).strip().lower()
+        if kind == "critter" or self._is_forced_critter_target(target):
+            live_id = str(target.get("live_id") or "")
+            if not live_id:
+                return False
+            for live in self._gather_critters(snapshot):
+                if str(live.get("id") or "") == live_id:
+                    self._gather_missing_since = None
+                    self._gather_missing_key = None
+                    return False
+            key = f"critter-gone:{live_id}"
+            now = time.monotonic()
+            if self._gather_missing_key != key:
+                self._gather_missing_key = key
+                self._gather_missing_since = now
+                return False
+            return (
+                self._gather_missing_since is not None
+                and now - self._gather_missing_since >= self.DEPLETED_GRACE_S
+            )
         if kind == "red_orb":
             poi_id = str(target.get("poi_id") or "").strip()
             if not poi_id:

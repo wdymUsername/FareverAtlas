@@ -133,6 +133,7 @@ class TitleBarMixin:
     def _build_preview_menu(self) -> None:
         """Build the button that opens the in-window navigation surface."""
         self.reload_ui_button: QtWidgets.QToolButton | None = None
+        self.test_toast_button: QtWidgets.QToolButton | None = None
         if getattr(self, "dev_mode", False):
             self.reload_ui_button = QtWidgets.QToolButton(self.app_title_bar)
             self.reload_ui_button.setObjectName("reloadUiButton")
@@ -150,6 +151,14 @@ class TitleBarMixin:
             self.reload_ui_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
             self.reload_ui_button.installEventFilter(self)
             self.reload_ui_button.clicked.connect(self._request_ui_reload)
+
+            self.test_toast_button = QtWidgets.QToolButton(self.app_title_bar)
+            self.test_toast_button.setObjectName("testToastButton")
+            self.test_toast_button.setText("Toast")
+            self.test_toast_button.setFixedSize(46, 27)
+            self.test_toast_button.setToolTip("Summon sample toasts (dev)")
+            self.test_toast_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+            self.test_toast_button.clicked.connect(self._summon_test_toasts)
 
         self.main_menu_button = QtWidgets.QToolButton(self.app_title_bar)
         self.main_menu_button.setObjectName("mainMenuButton")
@@ -175,6 +184,26 @@ class TitleBarMixin:
             button.setToolTip("Reloading…")
         self.uiReloadRequested.emit()
 
+    def _summon_test_toasts(self) -> None:
+        """Dev helper: push one toast of each kind under the north cardinal."""
+        show = getattr(self, "show_toast", None)
+        if not callable(show):
+            return
+        samples = (
+            ("info", "Critter spotted nearby!", "Navigate"),
+            ("warning", "Elite enemy spotted nearby!", None),
+            ("success", "UI reloaded (sample)", None),
+            ("error", "Bridge disconnect (sample)", None),
+        )
+        for kind, message, action in samples:
+            show(
+                message,
+                kind=kind,
+                duration_ms=8_000,
+                action_label=action,
+                on_action=(lambda: None) if action else None,
+            )
+
     def _build_window_controls(self) -> None:
         controls = QtWidgets.QWidget()
         controls.setObjectName("windowControls")
@@ -182,6 +211,8 @@ class TitleBarMixin:
         controls_layout.setContentsMargins(2, 0, 0, 0)
         controls_layout.setSpacing(0)
 
+        if self.test_toast_button is not None:
+            controls_layout.addWidget(self.test_toast_button)
         if self.reload_ui_button is not None:
             controls_layout.addWidget(self.reload_ui_button)
         controls_layout.addWidget(self.main_menu_button)
