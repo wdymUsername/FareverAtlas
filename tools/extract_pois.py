@@ -7,6 +7,8 @@ farever-minimap / game data). Prefab export issues this tool corrects:
   - Orb/Camp chests exported with parent-local offsets instead of world XYZ
   - Activity markers that sit on the activity root instead of the gameplay
     spot players actually go to (chest / fight stone / race start / …)
+  - Trail activity Z left under the playable ledge (TimerCollect / Ascension /
+    MountRush start orbs often sit tens–hundreds of metres below nearby loot)
   - Missing Orb/Camp/Vault chest rows that exist in map prefabs
 
 Activity snap targets (first matching child under the activity node):
@@ -65,6 +67,13 @@ _ACTIVITY_ANCHOR_SOURCES: dict[str, tuple[str, ...]] = {
     "ascension": ("Gameplay/Elements/Activities/Ascension_Start.prefab",),
     "mountrush": ("Gameplay/Elements/Activities/MountRush_Start.prefab",),
 }
+
+# Start-orb trails often author Z under the walkable deck; lift to nearby loot.
+_SURFACE_SNAP_SUBKINDS = frozenset({"timercollectrun", "ascension", "mountrush"})
+_SURFACE_SNAP_XY_M = 40.0
+_SURFACE_SNAP_MIN_UP_M = 30.0
+_SURFACE_SNAP_TOP_BAND_M = 25.0
+_SURFACE_KINDS = frozenset({"plant", "ore", "chest", "red_orb"})
 
 
 def round4(value: float) -> float:
@@ -247,6 +256,50 @@ def pick_activity_anchor(
     return root
 
 
+def _surface_samples(pois: list[dict[str, Any]]) -> list[tuple[float, float, float]]:
+    """World XYZ of solid loot markers used as playable-floor probes."""
+    samples: list[tuple[float, float, float]] = []
+    for poi in pois:
+        if str(poi.get("kind") or "").strip().lower() not in _SURFACE_KINDS:
+            continue
+        try:
+            x = float(poi["x"])
+            y = float(poi["y"])
+            z = float(poi["z"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(z)):
+            continue
+        samples.append((x, y, z))
+    return samples
+
+
+def _snap_trail_z_up(
+    x: float, y: float, z: float, samples: list[tuple[float, float, float]]
+) -> float:
+    """Lift trail-start Z to the highest nearby loot deck when authored under it.
+
+    TimerCollect / Ascension / MountRush start orbs are often left far below the
+    walkable ledge (Autumn Run: prefab z=-65, live plants/enemies at ~280).
+    When loot within ``_SURFACE_SNAP_XY_M`` sits more than
+    ``_SURFACE_SNAP_MIN_UP_M`` above the authored Z, snap to the median of the
+    top band (values within ``_SURFACE_SNAP_TOP_BAND_M`` of the max). Authored Z
+    already above nearby loot is left alone (multi-level cliffs).
+    """
+    elevated = [
+        sz
+        for sx, sy, sz in samples
+        if math.hypot(sx - x, sy - y) <= _SURFACE_SNAP_XY_M
+        and sz > z + _SURFACE_SNAP_MIN_UP_M
+    ]
+    if not elevated:
+        return z
+    top = max(elevated)
+    band = [sz for sz in elevated if top - sz <= _SURFACE_SNAP_TOP_BAND_M]
+    band.sort()
+    return round4(band[len(band) // 2])
+
+
 def main() -> int:
     if not PREFAB_DIR.is_dir():
         print(f"missing prefab dir: {PREFAB_DIR}", file=sys.stderr)
@@ -261,8 +314,10 @@ def main() -> int:
         return 1
 
     by_id, activity_roots, activity_children = collect_prefab_data()
+    surface = _surface_samples(pois)
     fixed = 0
     snapped = 0
+    z_lifted = 0
     matched = 0
     added = 0
     unmatched: list[str] = []
@@ -305,15 +360,37 @@ def main() -> int:
         # Activity rows are markers, not prefab instances — keep source empty.
         source_cleared = bool(poi.get("source"))
         poi["source"] = ""
+
+        z_lifted_here = False
+        if sub in _SURFACE_SNAP_SUBKINDS:
+            z_before = float(poi.get("z") or 0.0)
+            lifted = _snap_trail_z_up(
+                float(poi["x"]), float(poi["y"]), z_before, surface
+            )
+            if abs(lifted - z_before) > _EPS:
+                poi["z"] = lifted
+                print(
+                    f"z-lift {aid} ({poi.get('name')}): z {z_before} -> {lifted} "
+                    f"(surface within {_SURFACE_SNAP_XY_M:.0f}m)"
+                )
+                z_lifted += 1
+                z_lifted_here = True
+                moved = True
+
         if not moved and not source_cleared:
             continue
-        via = anchor.get("id") or (anchor.get("source") or "").rsplit("/", 1)[-1] or "root"
+        via = (
+            anchor.get("id")
+            or (anchor.get("source") or "").rsplit("/", 1)[-1]
+            or "root"
+        )
         label = "snap" if sub in _ACTIVITY_ANCHOR_SOURCES else "fix"
-        if moved:
+        if moved and not z_lifted_here:
             print(
                 f"{label} {aid} ({poi.get('name')}): {old} -> "
-                f"({anchor['x']}, {anchor['y']}, {anchor['z']}) via {via}"
+                f"({poi.get('x')}, {poi.get('y')}, {poi.get('z')}) via {via}"
             )
+        if moved:
             if label == "snap":
                 snapped += 1
             else:
@@ -356,13 +433,14 @@ def main() -> int:
     if changed:
         print(
             f"wrote {OUT_PATH.relative_to(ROOT)}: matched={matched} fixed={fixed} "
-            f"snapped={snapped} added={added} unmatched_ids={len(unmatched)} "
+            f"snapped={snapped} z_lifted={z_lifted} added={added} "
+            f"unmatched_ids={len(unmatched)} "
             f"prefab_ids={len(by_id)}"
         )
     else:
         print(
             f"rewrote ship form {OUT_PATH.relative_to(ROOT)}: matched={matched} "
-            f"fixed=0 snapped=0 added=0 unmatched_ids={len(unmatched)} "
+            f"fixed=0 snapped=0 z_lifted=0 added=0 unmatched_ids={len(unmatched)} "
             f"prefab_ids={len(by_id)}"
         )
     return 0

@@ -2345,6 +2345,21 @@ class RadarWidget(QtWidgets.QWidget):
             item_id=str(item.get("id") or "") or None,
         )
 
+    @staticmethod
+    def _activity_display_name(item: dict[str, Any]) -> str:
+        """Single-line label: ``Name · Type`` for activity markers."""
+        name = str(item.get("name") or "").strip() or "Activity"
+        subkind = str(item.get("subkind") or "").strip()
+        type_label = split_ident(subkind) if subkind else "Activity"
+        return f"{name} · {type_label}"
+
+    @staticmethod
+    def _activity_tooltip(item: dict[str, Any], distance: float) -> str:
+        lines = [RadarWidget._activity_display_name(item)]
+        if math.isfinite(distance):
+            lines.append(f"{distance:.1f} m")
+        return "\n".join(lines)
+
     def _view_half_extents(
         self,
         viewport: QtCore.QRectF,
@@ -2760,11 +2775,15 @@ class RadarWidget(QtWidgets.QWidget):
                     safe_float(interactible.get("x")) - safe_float(player.get("x")),
                     safe_float(interactible.get("y")) - safe_float(player.get("y")),
                 )
-                kind = str(interactible.get("kind") or "").strip().title() or "Node"
-                tooltip = (
-                    f"{self._interactible_display_name(interactible)}\n"
-                    f"{kind} · {distance:.1f} m"
-                )
+                kind_raw = str(interactible.get("kind") or "").strip()
+                if kind_raw.lower() == "activity":
+                    tooltip = self._activity_tooltip(interactible, distance)
+                else:
+                    kind = kind_raw.title() or "Node"
+                    tooltip = (
+                        f"{self._interactible_display_name(interactible)}\n"
+                        f"{kind} · {distance:.1f} m"
+                    )
                 QtWidgets.QToolTip.showText(
                     event.globalPosition().toPoint(), tooltip, self
                 )
@@ -3822,14 +3841,15 @@ class RadarWidget(QtWidgets.QWidget):
                             player_z,
                             gap=6.0 if size == "large" else 5.0,
                         )
-                if (
+                register_hit = kind == "activity" or (
                     is_collectible
                     and kind != "red_orb"
                     and not (
                         kind == "chest"
                         and _element_completed(poi_id, completed_element_ids)
                     )
-                ):
+                )
+                if register_hit:
                     hit = hit_base
                     if size == "large":
                         hit += 3.0
