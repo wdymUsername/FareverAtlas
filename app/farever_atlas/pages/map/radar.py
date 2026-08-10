@@ -1556,6 +1556,9 @@ class RadarWidget(QtWidgets.QWidget):
             id(self.map_texture),
             getattr(self.map_texture, "label", ""),
             bool(fog.enabled),
+            bool(fog.show_outlines),
+            bool(fog.show_layer_outlines),
+            bool(fog.feather_enabled),
             fog.accessible_tiers,
             fog.world_path_generation,
         )

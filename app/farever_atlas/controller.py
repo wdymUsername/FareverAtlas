@@ -51,6 +51,9 @@ class Controller(QtCore.QObject):
         hub.updated.connect(self.combat_window.update_snapshot)
         self.map_window.onlineModeChanged.connect(hub.set_online)
         self.map_window.combatMeterRequested.connect(self.show_combat_meter)
+        self.map_window.main_navigation_overlay.settingsChanged.connect(
+            self.combat_window.apply_settings_preferences
+        )
         if dev_mode:
             self.map_window.uiReloadRequested.connect(self.reload_ui)
         hub.set_online(self.map_window.online_mode)

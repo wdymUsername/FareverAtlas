@@ -53,7 +53,7 @@ from ..waypoints import (
     WaypointManagerOverlay,
     WaypointStore,
 )
-from ..window_base import PersistentWindow
+from ..window_base import PersistentWindow, apply_always_on_top
 from .footer import build_footer
 from .navigation import MainNavigationOverlay
 from .title_bar import TitleBarMixin
@@ -2043,13 +2043,7 @@ class AtlasWindow(
 
     def _apply_user_settings(self) -> None:
         always_on_top = self._setting_bool("app/always_on_top", False)
-        if bool(self.windowFlags() & QtCore.Qt.WindowType.WindowStaysOnTopHint) != always_on_top:
-            was_visible = self.isVisible()
-            self.setWindowFlag(
-                QtCore.Qt.WindowType.WindowStaysOnTopHint, always_on_top
-            )
-            if was_visible:
-                self.show()
+        apply_always_on_top(self, always_on_top)
 
         saved_radius = safe_int(self._settings.value("map/zoom_radius", 200), 200)
         self.zoom_index = min(
@@ -2100,6 +2094,7 @@ class AtlasWindow(
         elif not dps_enabled:
             self.dps_overlay.hide()
             self.dps_collapsed_button.hide()
+        self._apply_dps_overlay_chrome()
 
         self.currency_status.setVisible(
             self._setting_bool("map/show_currencies", True)
@@ -2141,7 +2136,9 @@ class AtlasWindow(
         self.radar.heading_up = False
         self.radar.rounded = False
         self.radar.fog.enabled = self._setting_bool("map/fog_enabled", True)
-        self.radar.fog.show_outlines = False
+        self.radar.fog.show_outlines = self._setting_bool(
+            "map/fog_show_outlines", False
+        )
         # Zone / FOW ring borders are --dev edit chrome only.
         self.radar.fog.show_layer_outlines = bool(self.dev_mode)
         self.radar.fog.hide_markers = self._setting_bool("map/fog_hide_markers", True)
@@ -2279,7 +2276,9 @@ class AtlasWindow(
         )
         self._settings.setValue("map/show_players", self.radar.show_players)
         self._settings.setValue("map/fog_enabled", self.radar.fog.enabled)
-        self._settings.setValue("map/fog_show_outlines", False)
+        self._settings.setValue(
+            "map/fog_show_outlines", self.radar.fog.show_outlines
+        )
         self._settings.setValue("map/fog_hide_markers", self.radar.fog.hide_markers)
         self._settings.setValue("map/fog_feather", self.radar.fog.feather_enabled)
         self._settings.setValue("map/fog_max_tier", self.radar.fog.max_tier)
