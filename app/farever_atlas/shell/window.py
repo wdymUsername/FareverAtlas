@@ -136,7 +136,9 @@ class AtlasWindow(
         saved_gather_kind = str(
             self._settings.value("map/gather_nav_kind", "plant") or "plant"
         ).strip().lower()
-        if saved_gather_kind in {"plant", "ore", "chest", "red_orb", "pet"}:
+        if saved_gather_kind == "pet":
+            saved_gather_kind = "critter"
+        if saved_gather_kind in {"plant", "ore", "chest", "red_orb", "critter"}:
             self.gather_nav_kind = saved_gather_kind
         saved_gather_type = str(
             self._settings.value("map/gather_nav_type", "") or ""
@@ -150,6 +152,11 @@ class AtlasWindow(
         ).strip().lower()
         if saved_gather_size in {"", "small", "medium", "large"}:
             self.gather_nav_size = saved_gather_size
+        saved_gather_collected = str(
+            self._settings.value("map/gather_nav_collected", "yes") or "yes"
+        ).strip().lower()
+        if saved_gather_collected in {"yes", "no"}:
+            self.gather_nav_collected = saved_gather_collected
         self.waypoint_manager_overlay: WaypointManagerOverlay | None = None
         self.latest_snapshot = Snapshot({}, [], False, "Waiting for bridge output", None)
         self._connection_signature: tuple[object, ...] | None = None

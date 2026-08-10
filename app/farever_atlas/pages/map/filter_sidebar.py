@@ -533,8 +533,11 @@ class FilterSidebarMixin:
         return max(0, content_layout.sizeHint().height())
 
     def _gather_sidebar_content_height(self) -> int:
-        self.gather_panel.adjustSize()
-        return max(0, self.gather_panel.sizeHint().height())
+        panel = self.gather_panel
+        panel.adjustSize()
+        if hasattr(panel, "full_content_height"):
+            return max(0, int(panel.full_content_height()))
+        return max(0, panel.sizeHint().height())
 
     def _sidebar_body_limit(self, margin: int = 4) -> int:
         available_height = max(0, self.radar.height() - (margin * 2))
