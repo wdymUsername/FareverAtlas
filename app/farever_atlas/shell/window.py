@@ -2322,6 +2322,8 @@ class AtlasWindow(
         self._update_dps_overlay(
             snapshot.state if isinstance(snapshot.state, dict) else {}
         )
+        if hasattr(self, "update_codex_from_snapshot"):
+            self.update_codex_from_snapshot(snapshot)
 
         poi_suffix = f" · {len(snapshot.pois)} POIs" if snapshot.pois else ""
         raw_party = (

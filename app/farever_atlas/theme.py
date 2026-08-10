@@ -204,6 +204,210 @@ QWidget#playersToolbar {
     border: 1px solid #273340;
     border-radius: 7px;
 }
+QToolButton#codexModeButton {
+    color: #8493a2;
+    background: transparent;
+    border: none;
+    border-radius: 3px;
+    padding: 0 8px;
+    font-size: 10px;
+    font-weight: 600;
+}
+QToolButton#codexModeButton:hover {
+    color: #dce6ee;
+    background: #202b36;
+}
+QToolButton#codexModeButton:checked {
+    color: #eef3f7;
+    background: #2a3946;
+}
+QComboBox#codexNavCombo {
+    color: #dce6ee;
+    background: #10171e;
+    border: 1px solid #344352;
+    border-radius: 4px;
+    padding: 0 8px;
+    font-size: 10px;
+    font-weight: 600;
+}
+QComboBox#codexNavCombo:hover {
+    border-color: #587083;
+    background: #141e27;
+}
+QComboBox#codexNavCombo::drop-down {
+    border: none;
+    width: 18px;
+}
+QLabel#codexSummaryLabel {
+    color: #dce6ee;
+    font-size: 10px;
+    font-weight: 600;
+    background: transparent;
+    border: none;
+    padding-left: 4px;
+}
+QWidget#codexBrowsePanel,
+QWidget#codexBrowseLeft,
+QWidget#codexBrowseControls,
+QWidget#codexTileGridHost,
+QScrollArea#codexTileGridScroll {
+    background: transparent;
+    border: none;
+}
+QLineEdit#codexSearchEdit,
+QToolButton#codexFilterButton {
+    color: #dce6ee;
+    background: #10171e;
+    border: 1px solid #344352;
+    border-radius: 4px;
+    padding: 0 7px;
+    font-size: 10px;
+    font-weight: 600;
+    min-height: 26px;
+}
+QLineEdit#codexSearchEdit:hover,
+QLineEdit#codexSearchEdit:focus,
+QToolButton#codexFilterButton:hover,
+QToolButton#codexFilterButton:checked {
+    border-color: #587083;
+    background: #141e27;
+}
+QFrame#codexFilterPopup {
+    background: #18212a;
+    border: 1px solid #3a4a58;
+    border-radius: 4px;
+}
+QLabel#codexFilterSection {
+    color: #8493a2;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    background: transparent;
+    border: none;
+    padding: 2px 2px 4px 2px;
+}
+QToolButton#codexFilterChip {
+    color: #9aabb8;
+    background: transparent;
+    border: 1px solid #3a4b5a;
+    border-radius: 5px;
+    padding: 0 8px;
+    font-size: 10px;
+    font-weight: 500;
+    text-align: left;
+}
+QToolButton#codexFilterChip:hover {
+    color: #e4ebf1;
+    background: #22303b;
+    border-color: #3d5061;
+}
+QToolButton#codexFilterChip:checked {
+    color: #ffffff;
+    background: #285f8b;
+    border-color: #3979a9;
+    font-weight: 600;
+}
+QPushButton#codexTile {
+    background: #121920;
+    border: 1px solid #2a3846;
+    border-radius: 4px;
+    padding: 0;
+    text-align: center;
+}
+QPushButton#codexTile:hover {
+    border-color: #4a6174;
+    background: #172129;
+}
+QPushButton#codexTile:checked {
+    border-color: #3979a9;
+    background: #1a2834;
+}
+QPushButton#codexTile[complete="true"] {
+    border-color: #2d4536;
+    background: #152019;
+}
+QPushButton#codexTile[complete="true"]:checked {
+    border-color: #3979a9;
+}
+QPushButton#codexTile[revealed="false"] {
+    background: #0e1318;
+    border-color: #1e2832;
+}
+QLabel#codexTileIcon {
+    color: #9aabba;
+    font-size: 22px;
+    font-weight: 700;
+    background: #0c1116;
+    border: 1px solid #24303a;
+    border-radius: 3px;
+}
+QPushButton#codexTile[revealed="false"] QLabel#codexTileIcon {
+    background: #0a0e12;
+    border-color: #1e2832;
+}
+QLabel#codexTileProgress {
+    color: #9aabba;
+    font-size: 11px;
+    font-weight: 700;
+    background: transparent;
+    border: none;
+}
+QWidget#codexDetailPanel {
+    background: #121920;
+    border: 1px solid #273340;
+    border-radius: 6px;
+}
+QLabel#codexDetailTitle {
+    color: #eef3f7;
+    font-size: 16px;
+    font-weight: 700;
+    background: transparent;
+    border: none;
+}
+QLabel#codexDetailFlavor {
+    color: #8493a2;
+    font-size: 11px;
+    font-style: italic;
+    background: transparent;
+    border: none;
+}
+QLabel#codexDetailKills {
+    color: #dce6ee;
+    font-size: 12px;
+    font-weight: 600;
+    background: transparent;
+    border: none;
+}
+QLabel#codexDetailStatus {
+    color: #dce6ee;
+    font-size: 11px;
+    font-weight: 700;
+    background: #1a2430;
+    border: 1px solid #344352;
+    border-radius: 4px;
+    padding: 4px 8px;
+}
+QLabel#codexDetailStatus[mastered="true"] {
+    color: #eef3f7;
+    background: #285f8b;
+    border-color: #3979a9;
+}
+QLabel#codexDetailSection {
+    color: #9aabba;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    background: transparent;
+    border: none;
+    padding-top: 4px;
+}
+QLabel#codexDropSlot {
+    background: #0e1318;
+    border: 1px solid #2a3846;
+    border-radius: 3px;
+}
 QLabel#playersSummaryLabel {
     color: #dce6ee;
     font-size: 10px;
