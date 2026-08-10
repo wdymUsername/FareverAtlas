@@ -253,10 +253,11 @@ prefix exists.
 Windows source workflow: build or copy `farever-atlas-bridge.exe`, then
 `farever.bat setup` and `farever.bat start` (add `--dev` the same way).
 
-Optional map-asset tooling deps:
+Optional map-asset tooling deps (separate venv — do not install into `.venv`):
 
 ```bash
-.venv/bin/pip install -r tools/requirements.txt
+python3 -m venv tools/.venv
+tools/.venv/bin/pip install -r tools/requirements.txt
 ```
 
 ### Guidelines

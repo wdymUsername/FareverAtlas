@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract CastleDB unit trait kind lists into assets/unit_traits.json.
+"""Extract CastleDB unit trait kind lists into assets/data/unit_traits.json.
 
 Reads ``extracted/res.light/data.cdb`` ``unit`` sheet:
 
@@ -25,7 +25,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 CDB_PATH = ROOT / "extracted" / "res.light" / "data.cdb"
-OUT_PATH = ROOT / "assets" / "unit_traits.json"
+OUT_PATH = ROOT / "assets" / "data" / "unit_traits.json"
 
 NEEDED_FLAGS = ("Spark", "Elite", "Boss", "Miniboss", "Unique")
 
@@ -98,18 +98,9 @@ def main() -> int:
             buckets["unique"].append(uid)
 
     payload = {key: sorted(values) for key, values in buckets.items()}
-    # One id per line (stable diffs); trailing commas omitted for strict JSON.
-    chunks: list[str] = ["{"]
-    keys = list(payload.keys())
-    for key_index, key in enumerate(keys):
-        chunks.append(f'"{key}": [')
-        values = payload[key]
-        for value_index, value in enumerate(values):
-            suffix = "," if value_index < len(values) - 1 else ""
-            chunks.append(f'"{value}"{suffix}')
-        chunks.append("]" if key_index == len(keys) - 1 else "],")
-    chunks.append("}")
-    OUT_PATH.write_text("\n".join(chunks) + "\n", encoding="utf-8")
+    OUT_PATH.write_text(
+        json.dumps(payload, separators=(",", ":")) + "\n", encoding="utf-8"
+    )
     counts = ", ".join(f"{key}={len(values)}" for key, values in payload.items())
     print(f"wrote {OUT_PATH.relative_to(ROOT)} ({counts})")
     return 0

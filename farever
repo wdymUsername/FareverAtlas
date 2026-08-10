@@ -138,24 +138,9 @@ cmd_start() {
         die "Native bridge exited during startup."
     fi
 
-    if [[ -z "${FAREVER_GAME_DIR:-}" ]]; then
-        if [[ ! -f "$GAME_DIR_FILE" ]]; then
-            mkdir -p "$(dirname -- "$GAME_DIR_FILE")"
-            for legacy in \
-                "$ROOT/user_data/nyx_game_dir.conf" \
-                "$ROOT/nyx_game_dir.conf" \
-                "$ROOT/game_dir.conf"
-            do
-                if [[ -f "$legacy" ]]; then
-                    mv -- "$legacy" "$GAME_DIR_FILE"
-                    break
-                fi
-            done
-        fi
-        if [[ -f "$GAME_DIR_FILE" ]]; then
-            IFS= read -r FAREVER_GAME_DIR < "$GAME_DIR_FILE" || true
-            export FAREVER_GAME_DIR
-        fi
+    if [[ -z "${FAREVER_GAME_DIR:-}" && -f "$GAME_DIR_FILE" ]]; then
+        IFS= read -r FAREVER_GAME_DIR < "$GAME_DIR_FILE" || true
+        export FAREVER_GAME_DIR
     fi
 
     echo "Starting Farever Atlas..."

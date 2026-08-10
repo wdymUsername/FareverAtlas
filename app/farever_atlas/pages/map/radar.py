@@ -9,6 +9,7 @@ from typing import Any
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from ...config import (
+    PLAYER_CURSOR_RELATIVE_PATH,
     WAYPOINT_COLORS,
     discover_project_asset,
     map_heading_degrees,
@@ -168,8 +169,8 @@ class RadarWidget(QtWidgets.QWidget):
     ICON_ATLAS_CELL_SIZE = 128
     ICON_ATLAS_COLUMNS = 8
     WAYPOINT_ICON_SIZE = 24
-    # Game UI icons/playerCursor.png — white chevron + orange diamond (points +X).
-    PLAYER_ARROW_ASSET = "playerCursor.png"
+    # Shipped as ui/markers/player_cursor.webp (game UI: playerCursor.png).
+    PLAYER_ARROW_ASSET = str(PLAYER_CURSOR_RELATIVE_PATH)
     PLAYER_ARROW_SIZE = 28
     # Must match native_bridge interactible sweep defaults (overridable via settings).
     # Static loot outside this bubble is drawn from the POI file; inside the

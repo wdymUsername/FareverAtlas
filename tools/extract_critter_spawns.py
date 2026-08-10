@@ -9,7 +9,7 @@ few (e.g. ``Sheep_Spark``) are a direct unit. World XYZ comes from
 Usage:
     python tools/extract_critter_spawns.py
 
-Writes ``assets/critter_spawns_W1_Siagarta.json``.
+Writes ``assets/data/w1_siagarta/critter_spawns.json``.
 """
 
 from __future__ import annotations
@@ -26,8 +26,8 @@ ROOT = Path(__file__).resolve().parents[1]
 WORLD = "W1_Siagarta"
 PREFAB_DIR = ROOT / "extracted" / "res.map" / "Level" / "World" / f"{WORLD}.dat" / "gameplayData"
 CDB_PATH = ROOT / "extracted" / "res.light" / "data.cdb"
-TRAITS_PATH = ROOT / "assets" / "unit_traits.json"
-OUT_PATH = ROOT / "assets" / f"critter_spawns_{WORLD}.json"
+TRAITS_PATH = ROOT / "assets" / "data" / "unit_traits.json"
+OUT_PATH = ROOT / "assets" / "data" / "w1_siagarta" / "critter_spawns.json"
 
 
 def round4(value: float) -> float:
@@ -100,7 +100,7 @@ def main() -> int:
     critter_set = {str(k) for k in (traits.get("critter") or []) if isinstance(k, str) and k}
     spark_set = {str(k) for k in (traits.get("spark") or []) if isinstance(k, str) and k}
     if not critter_set:
-        print("assets/unit_traits.json has no critter kinds", file=sys.stderr)
+        print("assets/data/unit_traits.json has no critter kinds", file=sys.stderr)
         return 1
 
     cdb = json.loads(CDB_PATH.read_text(encoding="utf-8"))
@@ -184,7 +184,9 @@ def main() -> int:
         "count": len(spawns),
         "spawns": spawns,
     }
-    OUT_PATH.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    OUT_PATH.write_text(
+        json.dumps(payload, separators=(",", ":")) + "\n", encoding="utf-8"
+    )
     print(f"wrote {len(spawns)} critter spawns -> {OUT_PATH}")
 
     groups: dict[str, int] = {}

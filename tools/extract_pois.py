@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Refresh POI world coordinates from W1 Siagarta HBSON prefabs.
 
-``assets/pois_W1_Siagarta.json`` is the shipped static POI table (imported from
+``assets/data/w1_siagarta/pois.json`` is the shipped static POI table (imported from
 farever-minimap / game data). Prefab export issues this tool corrects:
 
   - Orb/Camp chests exported with parent-local offsets instead of world XYZ
@@ -24,7 +24,7 @@ Orb/Camp chests — their live XY matches a standard CCW rotationZ instead.
 Usage:
     python tools/extract_pois.py
 
-Updates ``assets/pois_W1_Siagarta.json`` in place. Prints a summary of fixes.
+Updates ``assets/data/w1_siagarta/pois.json`` in place. Prints a summary of fixes.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ from hbson import HbsonError, read_hbson, walk_nodes
 ROOT = Path(__file__).resolve().parents[1]
 WORLD = "W1_Siagarta"
 PREFAB_DIR = ROOT / "extracted" / "res.map" / "Level" / "World" / f"{WORLD}.dat" / "gameplayData"
-OUT_PATH = ROOT / "assets" / f"pois_{WORLD}.json"
+OUT_PATH = ROOT / "assets" / "data" / "w1_siagarta" / "pois.json"
 
 # Ignore floating noise; treat larger deltas as real fixes.
 _EPS = 0.05
@@ -69,6 +69,18 @@ _ACTIVITY_ANCHOR_SOURCES: dict[str, tuple[str, ...]] = {
 
 def round4(value: float) -> float:
     return round(float(value) * 10000.0) / 10000.0
+
+
+def _ship_poi(poi: dict[str, Any]) -> dict[str, Any]:
+    """Drop extract-only provenance fields from the shipped POI row."""
+    shipped: dict[str, Any] = {}
+    for key, value in poi.items():
+        if key in ("source", "source_tile"):
+            continue
+        if key == "subkind" and (value is None or value == ""):
+            continue
+        shipped[key] = value
+    return shipped
 
 
 def _heaps_offset(lx: float, ly: float, rot: float) -> tuple[float, float]:
@@ -337,17 +349,21 @@ def main() -> int:
         print(f"add chest {nid} @ ({pref['x']}, {pref['y']}, {pref['z']})")
 
     changed = fixed + snapped + added
+    shipped = [_ship_poi(poi) if isinstance(poi, dict) else poi for poi in pois]
+    OUT_PATH.write_text(
+        json.dumps(shipped, separators=(",", ":")) + "\n", encoding="utf-8"
+    )
     if changed:
-        OUT_PATH.write_text(json.dumps(pois, indent=2) + "\n", encoding="utf-8")
         print(
-            f"wrote {OUT_PATH.name}: matched={matched} fixed={fixed} "
+            f"wrote {OUT_PATH.relative_to(ROOT)}: matched={matched} fixed={fixed} "
             f"snapped={snapped} added={added} unmatched_ids={len(unmatched)} "
             f"prefab_ids={len(by_id)}"
         )
     else:
         print(
-            f"up to date {OUT_PATH.name}: matched={matched} fixed=0 snapped=0 "
-            f"added=0 unmatched_ids={len(unmatched)} prefab_ids={len(by_id)}"
+            f"rewrote ship form {OUT_PATH.relative_to(ROOT)}: matched={matched} "
+            f"fixed=0 snapped=0 added=0 unmatched_ids={len(unmatched)} "
+            f"prefab_ids={len(by_id)}"
         )
     return 0
 

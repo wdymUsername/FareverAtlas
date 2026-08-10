@@ -7,7 +7,13 @@ import math
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from .. import __version__
-from ..config import ASSET_ROOT, safe_float, safe_int
+from ..config import (
+    ASSET_ROOT,
+    UI_CLOSE_RELATIVE_PATH,
+    UI_GITHUB_RELATIVE_PATH,
+    safe_float,
+    safe_int,
+)
 from ..pages.map.data import Snapshot
 from ..settings_window import SettingsPanel
 from ..toast import notify
@@ -141,7 +147,7 @@ class MainNavigationOverlay(QtWidgets.QFrame):
         close_button = QtWidgets.QToolButton()
         close_button.setObjectName("mainNavigationClose")
         close_button.setIcon(
-            QtGui.QIcon(str(ASSET_ROOT / "close.svg"))
+            QtGui.QIcon(str(ASSET_ROOT / UI_CLOSE_RELATIVE_PATH))
         )
         close_button.setIconSize(QtCore.QSize(15, 15))
         close_button.setFixedSize(26, 26)
@@ -342,7 +348,7 @@ class MainNavigationOverlay(QtWidgets.QFrame):
             github_icon.setFixedSize(17, 17)
             github_icon.setPixmap(
                 QtGui.QPixmap(
-                    str(ASSET_ROOT / "github.svg")
+                    str(ASSET_ROOT / UI_GITHUB_RELATIVE_PATH)
                 ).scaled(
                     16,
                     16,

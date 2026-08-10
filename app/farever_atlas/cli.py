@@ -54,22 +54,6 @@ def _load_settings() -> QtCore.QSettings:
         str(settings_ini_path()), QtCore.QSettings.Format.IniFormat
     )
     settings.setFallbacksEnabled(False)
-    if settings.allKeys():
-        return settings
-
-    # One-time migration from the old shared Qt org/app store (and earlier names).
-    for legacy_name in ("FareverAtlas", "FareverStandalone", "FareverMinimap"):
-        legacy = QtCore.QSettings("Local", legacy_name)
-        keys = legacy.allKeys()
-        if not keys:
-            continue
-        for key in keys:
-            settings.setValue(key, legacy.value(key))
-        settings.sync()
-        # Clear the shared store so a fresh clone does not re-import secrets.
-        legacy.clear()
-        legacy.sync()
-        break
     return settings
 
 

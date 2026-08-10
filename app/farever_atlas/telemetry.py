@@ -10,7 +10,7 @@ from typing import Any
 
 from PySide6 import QtCore
 
-from .config import ASSET_ROOT, PROJECT_ROOT, safe_float
+from .config import ASSET_ROOT, POIS_RELATIVE_PATH, PROJECT_ROOT, safe_float
 from .currency_caps import enrich_currencies
 from .pages.map.data import Snapshot
 from .unit_traits import (
@@ -89,7 +89,7 @@ class DataHub(QtCore.QObject):
     def __init__(self) -> None:
         super().__init__()
         self.live_file = PROJECT_ROOT / "native_bridge/farever-telemetry.json"
-        self.asset_poi_file = ASSET_ROOT / "pois_W1_Siagarta.json"
+        self.asset_poi_file = ASSET_ROOT / POIS_RELATIVE_PATH
         self.state: dict[str, Any] = {}
         self.pois: list[dict[str, Any]] = []
         self._live_mtime_ns = -1

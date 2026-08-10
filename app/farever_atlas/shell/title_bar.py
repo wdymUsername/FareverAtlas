@@ -4,7 +4,22 @@ from __future__ import annotations
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from ..config import ASSET_ROOT
+from ..config import (
+    ASSET_ROOT,
+    UI_CLOSE_HOVER_RELATIVE_PATH,
+    UI_CLOSE_RELATIVE_PATH,
+    UI_MAXIMIZE_HOVER_RELATIVE_PATH,
+    UI_MAXIMIZE_RELATIVE_PATH,
+    UI_MINIMIZE_HOVER_RELATIVE_PATH,
+    UI_MINIMIZE_RELATIVE_PATH,
+    UI_POWER_RELATIVE_PATH,
+    UI_RELOAD_HOVER_RELATIVE_PATH,
+    UI_RELOAD_RELATIVE_PATH,
+    UI_RESTORE_HOVER_RELATIVE_PATH,
+    UI_RESTORE_RELATIVE_PATH,
+    UI_SETTINGS_HOVER_RELATIVE_PATH,
+    UI_SETTINGS_RELATIVE_PATH,
+)
 from ..controls import PowerStatusButton
 from ..pages.map.widgets import WindowResizeGrip
 from .navigation import MainNavigationOverlay
@@ -22,7 +37,7 @@ class TitleBarMixin:
         self.app_title_bar_layout.setSpacing(0)
 
         self.online_switch = PowerStatusButton(
-            str(ASSET_ROOT / "power.svg"),
+            str(ASSET_ROOT / UI_POWER_RELATIVE_PATH),
             self.app_title_bar,
         )
         self.online_switch.setObjectName("onlineModeSwitch")
@@ -139,10 +154,10 @@ class TitleBarMixin:
             self.reload_ui_button.setObjectName("reloadUiButton")
             self.reload_ui_button.setText("")
             self.reload_ui_icon_normal = QtGui.QIcon(
-                str(ASSET_ROOT / "reload.svg")
+                str(ASSET_ROOT / UI_RELOAD_RELATIVE_PATH)
             )
             self.reload_ui_icon_hover = QtGui.QIcon(
-                str(ASSET_ROOT / "reload_hover.svg")
+                str(ASSET_ROOT / UI_RELOAD_HOVER_RELATIVE_PATH)
             )
             self.reload_ui_button.setIcon(self.reload_ui_icon_normal)
             self.reload_ui_button.setIconSize(QtCore.QSize(17, 17))
@@ -164,10 +179,10 @@ class TitleBarMixin:
         self.main_menu_button.setObjectName("mainMenuButton")
         self.main_menu_button.setText("")
         self.main_menu_icon_normal = QtGui.QIcon(
-            str(ASSET_ROOT / "settings.svg")
+            str(ASSET_ROOT / UI_SETTINGS_RELATIVE_PATH)
         )
         self.main_menu_icon_hover = QtGui.QIcon(
-            str(ASSET_ROOT / "settings_hover.svg")
+            str(ASSET_ROOT / UI_SETTINGS_HOVER_RELATIVE_PATH)
         )
         self.main_menu_button.setIcon(self.main_menu_icon_normal)
         self.main_menu_button.setIconSize(QtCore.QSize(17, 17))
@@ -243,16 +258,16 @@ class TitleBarMixin:
         assets = ASSET_ROOT
         self._window_button_icon_pairs = {
             self.window_minimize_button: (
-                QtGui.QIcon(str(assets / "window_minimize.svg")),
-                QtGui.QIcon(str(assets / "window_minimize_hover.svg")),
+                QtGui.QIcon(str(assets / UI_MINIMIZE_RELATIVE_PATH)),
+                QtGui.QIcon(str(assets / UI_MINIMIZE_HOVER_RELATIVE_PATH)),
             ),
             self.window_maximize_button: (
-                QtGui.QIcon(str(assets / "window_maximize.svg")),
-                QtGui.QIcon(str(assets / "window_maximize_hover.svg")),
+                QtGui.QIcon(str(assets / UI_MAXIMIZE_RELATIVE_PATH)),
+                QtGui.QIcon(str(assets / UI_MAXIMIZE_HOVER_RELATIVE_PATH)),
             ),
             self.window_close_button: (
-                QtGui.QIcon(str(assets / "window_close.svg")),
-                QtGui.QIcon(str(assets / "window_close_hover.svg")),
+                QtGui.QIcon(str(assets / UI_CLOSE_RELATIVE_PATH)),
+                QtGui.QIcon(str(assets / UI_CLOSE_HOVER_RELATIVE_PATH)),
             ),
         }
 
@@ -285,13 +300,13 @@ class TitleBarMixin:
         assets = ASSET_ROOT
         if maximized:
             self._window_button_icon_pairs[self.window_maximize_button] = (
-                QtGui.QIcon(str(assets / "window_restore.svg")),
-                QtGui.QIcon(str(assets / "window_restore_hover.svg")),
+                QtGui.QIcon(str(assets / UI_RESTORE_RELATIVE_PATH)),
+                QtGui.QIcon(str(assets / UI_RESTORE_HOVER_RELATIVE_PATH)),
             )
         else:
             self._window_button_icon_pairs[self.window_maximize_button] = (
-                QtGui.QIcon(str(assets / "window_maximize.svg")),
-                QtGui.QIcon(str(assets / "window_maximize_hover.svg")),
+                QtGui.QIcon(str(assets / UI_MAXIMIZE_RELATIVE_PATH)),
+                QtGui.QIcon(str(assets / UI_MAXIMIZE_HOVER_RELATIVE_PATH)),
             )
         icon_pair = self._window_button_icon_pairs[self.window_maximize_button]
         self.window_maximize_button.setIcon(

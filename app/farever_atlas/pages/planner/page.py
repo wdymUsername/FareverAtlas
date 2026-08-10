@@ -9,7 +9,14 @@ from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from ...config import ASSET_ROOT, PROJECT_ROOT, safe_int
+from ...config import (
+    ASSET_ROOT,
+    CLASS_ICON_FILES,
+    PROJECT_ROOT,
+    UI_LEVEL_MINUS_RELATIVE_PATH,
+    UI_LEVEL_PLUS_RELATIVE_PATH,
+    safe_int,
+)
 from .widgets import (
     PlannerBuildLoadOverlay,
     PlannerClassSelector,
@@ -65,7 +72,7 @@ class PlannerPageMixin:
         self.planner_level_plus = QtWidgets.QToolButton()
         self.planner_level_plus.setObjectName("plannerLevelPlusButton")
         self.planner_level_plus.setIcon(
-            QtGui.QIcon(str(ASSET_ROOT / "level_plus.svg"))
+            QtGui.QIcon(str(ASSET_ROOT / UI_LEVEL_PLUS_RELATIVE_PATH))
         )
         self.planner_level_plus.setIconSize(QtCore.QSize(8, 8))
         self.planner_level_plus.setFixedSize(28, 16)
@@ -76,7 +83,7 @@ class PlannerPageMixin:
         self.planner_level_minus = QtWidgets.QToolButton()
         self.planner_level_minus.setObjectName("plannerLevelMinusButton")
         self.planner_level_minus.setIcon(
-            QtGui.QIcon(str(ASSET_ROOT / "level_minus.svg"))
+            QtGui.QIcon(str(ASSET_ROOT / UI_LEVEL_MINUS_RELATIVE_PATH))
         )
         self.planner_level_minus.setIconSize(QtCore.QSize(8, 8))
         self.planner_level_minus.setFixedSize(28, 16)
@@ -86,10 +93,10 @@ class PlannerPageMixin:
         level_layout.addWidget(level_step_column)
 
         planner_classes = (
-            ("Warrior", "Warrior", "classWarrior.webp"),
-            ("Mage", "Mage", "classMage.webp"),
-            ("Priest", "Priest", "classPriest.webp"),
-            ("Rogue", "Rogue", "classRogue.webp"),
+            ("Warrior", "Warrior", CLASS_ICON_FILES["warrior"]),
+            ("Mage", "Mage", CLASS_ICON_FILES["mage"]),
+            ("Priest", "Priest", CLASS_ICON_FILES["priest"]),
+            ("Rogue", "Rogue", CLASS_ICON_FILES["rogue"]),
         )
         saved_class = ""
         self.planner_class = PlannerClassSelector(
