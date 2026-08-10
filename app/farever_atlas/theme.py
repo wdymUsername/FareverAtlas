@@ -1049,36 +1049,35 @@ QLabel#gatherNavFieldLabel {
     background: transparent;
     border: none;
 }
-QToolButton#gatherSidebarFab,
-QToolButton#fowToolsFab {
-    min-width: 28px;
-    max-width: 28px;
-    min-height: 28px;
-    max-height: 28px;
+QToolButton#gatherSidebarHeaderIcon,
+QToolButton#waypointsSidebarHeaderIcon,
+QToolButton#fowToolsHeaderIcon {
+    min-width: 18px;
+    max-width: 18px;
+    min-height: 18px;
+    max-height: 18px;
     padding: 0;
     margin: 0;
-    border: 1px solid #3a4856;
-    border-radius: 6px;
-    background: rgba(16, 23, 31, 218);
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background: transparent;
     color: #b9c5cf;
 }
-QToolButton#gatherSidebarFab:hover,
-QToolButton#fowToolsFab:hover {
+QToolButton#gatherSidebarHeaderIcon:hover,
+QToolButton#waypointsSidebarHeaderIcon:hover,
+QToolButton#fowToolsHeaderIcon:hover {
     background: #202b36;
-    border-color: #55778f;
+    border-color: #344352;
 }
 QWidget#gatherSidebarHeader,
+QWidget#waypointsSidebarHeader,
 QWidget#fowToolsHeader {
     background: transparent;
     border: none;
-    min-height: 22px;
-}
-QLabel#gatherSidebarHeaderIcon,
-QLabel#fowToolsHeaderIcon {
-    background: transparent;
-    border: none;
+    min-height: 18px;
 }
 QLabel#gatherSidebarTitle,
+QLabel#waypointsSidebarTitle,
 QLabel#fowToolsTitle {
     color: #8493a2;
     font-size: 10px;
@@ -1088,11 +1087,12 @@ QLabel#fowToolsTitle {
     border: none;
 }
 QToolButton#gatherSidebarCloseButton,
+QToolButton#waypointsSidebarCloseButton,
 QToolButton#fowToolsCloseButton {
-    min-width: 22px;
-    max-width: 22px;
-    min-height: 22px;
-    max-height: 22px;
+    min-width: 18px;
+    max-width: 18px;
+    min-height: 18px;
+    max-height: 18px;
     padding: 0;
     margin: 0;
     border: 1px solid transparent;
@@ -1101,6 +1101,7 @@ QToolButton#fowToolsCloseButton {
     color: #9cabb8;
 }
 QToolButton#gatherSidebarCloseButton:hover,
+QToolButton#waypointsSidebarCloseButton:hover,
 QToolButton#fowToolsCloseButton:hover {
     background: #202b36;
     border-color: #344352;
