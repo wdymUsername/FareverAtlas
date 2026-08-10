@@ -1088,7 +1088,7 @@ class FogOfWar:
                 )
         else:
             self.release_paint_caches()
-        if self.show_outlines and self.show_layer_outlines:
+        if self.show_outlines:
             self._paint_outlines(
                 painter,
                 center=center,
@@ -1098,6 +1098,8 @@ class FogOfWar:
             )
         if layers_on and self.show_layer_outlines:
             for tier in FOW_LAYER_ORDER:
+                if tier == "Baked":
+                    continue
                 if not self.layer_enabled(tier):
                     continue
                 rings = self.transformed_layer_rings(tier)
@@ -1482,6 +1484,9 @@ class FogOfWar:
     ) -> None:
         painter.save()
         for region in self.regions:
+            # Shipping clear-zone geometry is fill-only; never stroke Baked.
+            if region.tier.upper() == "BAKED" or region.id.upper() == "BAKED":
+                continue
             color = _OUTLINE_COLOR
             accessible = (
                 region.id in self.accessible_tiers

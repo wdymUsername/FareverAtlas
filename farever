@@ -145,6 +145,10 @@ cmd_start() {
 
     echo "Starting Farever Atlas..."
     export PYTHONPATH="$ROOT/app${PYTHONPATH:+:$PYTHONPATH}"
+    # Frameless always-on-top is unreliable on native Wayland; prefer XWayland.
+    if [[ -z "${QT_QPA_PLATFORM:-}" && -n "${DISPLAY:-}" ]]; then
+        export QT_QPA_PLATFORM=xcb
+    fi
     "$VENV_PYTHON" -m farever_atlas "$@"
 }
 

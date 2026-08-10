@@ -12,7 +12,7 @@ from .config import (
     safe_int,
 )
 from .pages.map.data import Snapshot
-from .window_base import PersistentWindow
+from .window_base import PersistentWindow, apply_always_on_top
 
 
 class NumericTableItem(QtWidgets.QTableWidgetItem):
@@ -163,6 +163,44 @@ class CombatWindow(PersistentWindow):
         self.reset_button.clicked.connect(self._reset_current_view)
         self.compact_button.toggled.connect(self._set_compact)
         self.always_on_top.toggled.connect(self._set_always_on_top)
+        self.apply_settings_preferences(initial=True)
+
+    @staticmethod
+    def _setting_bool(settings: QtCore.QSettings, key: str, default: bool = False) -> bool:
+        value = settings.value(key, default)
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off"}:
+            return False
+        return default
+
+    def _refresh_interval_ms(self) -> int:
+        return max(
+            100,
+            min(2000, safe_int(self._settings.value("combat/refresh_ms"), 500)),
+        )
+
+    @QtCore.Slot()
+    def apply_settings_preferences(self, initial: bool = False) -> None:
+        compact = self._setting_bool(self._settings, "combat/compact", False)
+        always_on_top = self._setting_bool(
+            self._settings, "combat/always_on_top", False
+        )
+        view = str(
+            self._settings.value("combat/default_view", "damage") or "damage"
+        ).lower()
+        self.compact_button.blockSignals(True)
+        self.compact_button.setChecked(compact)
+        self.compact_button.blockSignals(False)
+        self._set_compact(compact, persist=False)
+        self.always_on_top.blockSignals(True)
+        self.always_on_top.setChecked(always_on_top)
+        self.always_on_top.blockSignals(False)
+        self._set_always_on_top(always_on_top, persist=False)
+        self.tabs.setCurrentIndex(1 if view == "healing" else 0)
 
     @staticmethod
     def _metric_baseline(
@@ -218,7 +256,7 @@ class CombatWindow(PersistentWindow):
         self._render_dps(dps)
 
     @QtCore.Slot(bool)
-    def _set_compact(self, compact: bool) -> None:
+    def _set_compact(self, compact: bool, *, persist: bool = True) -> None:
         for table in (self.damage, self.healing):
             for column in range(3, 7):
                 table.setColumnHidden(column, compact)
@@ -227,13 +265,14 @@ class CombatWindow(PersistentWindow):
         self.reset_button.setVisible(not compact)
         if compact:
             self.resize(470, 280)
+        if persist:
+            self._settings.setValue("combat/compact", bool(compact))
 
     @QtCore.Slot(bool)
-    def _set_always_on_top(self, enabled: bool) -> None:
-        self.setWindowFlag(
-            QtCore.Qt.WindowType.WindowStaysOnTopHint, enabled
-        )
-        self.show()
+    def _set_always_on_top(self, enabled: bool, *, persist: bool = True) -> None:
+        apply_always_on_top(self, enabled)
+        if persist:
+            self._settings.setValue("combat/always_on_top", bool(enabled))
 
     def _render_dps(self, dps: dict[str, Any]) -> None:
         elapsed = max(0.0, safe_float(dps.get("elapsed")) - self._baseline_elapsed)
@@ -295,7 +334,7 @@ class CombatWindow(PersistentWindow):
         combat_state = bool(dps.get("in_combat"))
         if (
             combat_state != self._last_combat_state
-            or now_ms - self._last_render_ms >= 500
+            or now_ms - self._last_render_ms >= self._refresh_interval_ms()
         ):
             self._render_dps(dps)
             self._last_render_ms = now_ms

@@ -53,7 +53,11 @@ class DpsOverlayMixin:
             tuple[QtWidgets.QWidget, QtWidgets.QLabel, QtWidgets.QProgressBar]
         ] = []
         self._dps_overlay_signature: tuple[Any, ...] | None = None
-        for _index in range(3):
+        self._dps_overlay_opacity_effect = QtWidgets.QGraphicsOpacityEffect(
+            self.dps_overlay
+        )
+        self.dps_overlay.setGraphicsEffect(self._dps_overlay_opacity_effect)
+        for _index in range(5):
             row_widget = QtWidgets.QWidget()
             row_layout = QtWidgets.QVBoxLayout(row_widget)
             row_layout.setContentsMargins(0, 1, 0, 0)
@@ -82,6 +86,7 @@ class DpsOverlayMixin:
         self._dps_overlay_y_ratio = safe_float(
             self._settings.value("map/dps_overlay_y_ratio"), math.nan
         )
+        self._apply_dps_overlay_chrome()
         self.dps_overlay.setVisible(not self.dps_overlay_collapsed)
         self.dps_overlay.raise_()
 
@@ -95,6 +100,31 @@ class DpsOverlayMixin:
         self.dps_collapsed_button.setFixedSize(44, 24)
         self.dps_collapsed_button.setVisible(self.dps_overlay_collapsed)
         self.dps_collapsed_button.raise_()
+
+    def _dps_visible_row_count(self) -> int:
+        return max(
+            1,
+            min(5, safe_int(self._settings.value("combat/dps_visible_rows"), 3)),
+        )
+
+    def _apply_dps_overlay_chrome(self) -> None:
+        opacity_pct = max(
+            25,
+            min(100, safe_int(self._settings.value("combat/dps_opacity"), 85)),
+        )
+        effect = getattr(self, "_dps_overlay_opacity_effect", None)
+        if effect is not None:
+            effect.setOpacity(opacity_pct / 100.0)
+        # Force a redraw so row-count changes take effect immediately.
+        self._dps_overlay_signature = None
+        latest = getattr(self, "latest_snapshot", None)
+        state = getattr(latest, "state", None) if latest is not None else None
+        if self.dps_overlay.isVisible() and isinstance(state, dict):
+            self._update_dps_overlay(state)
+        self.dps_overlay.adjustSize()
+        positioner = getattr(self, "_position_map_overlays", None)
+        if callable(positioner):
+            positioner()
 
     def _set_dps_overlay_collapsed(self, collapsed: bool) -> None:
         self.dps_overlay_collapsed = bool(collapsed)
@@ -186,7 +216,7 @@ class DpsOverlayMixin:
         for index, (row_widget, row_label, row_bar) in enumerate(
             self.dps_overlay_rows
         ):
-            if index >= len(metrics):
+            if index >= self._dps_visible_row_count() or index >= len(metrics):
                 row_widget.hide()
                 continue
             metric = metrics[index]

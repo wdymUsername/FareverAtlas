@@ -39,6 +39,9 @@ assets/fonts/*.otf
 assets/fonts/*.partial
 assets/fonts/OFL.txt
 
+# Generated Nightly version bake (python -m farever_atlas.versioning --stamp)
+app/farever_atlas/_version_bake.py
+
 # Local park for superseded / unused asset originals (not shipped)
 assets/unused/
 
