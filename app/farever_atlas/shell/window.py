@@ -163,6 +163,7 @@ class AtlasWindow(
         self._view_mode_signature: tuple[object, ...] | None = None
         self._diagnostic_text: str | None = None
         self._party_status_signature: tuple[object, ...] | None = None
+        self._party_status_wanted = False
         cached_x = safe_float(self._settings.value("cache/player_x"), math.nan)
         cached_y = safe_float(self._settings.value("cache/player_y"), math.nan)
         self._cached_map_center: tuple[float, float] | None = (
@@ -333,6 +334,7 @@ class AtlasWindow(
             | QtCore.Qt.AlignmentFlag.AlignVCenter,
         )
         toolbar_layout.addStretch(1)
+        self.map_toolbar.installEventFilter(self)
 
         self.currency_status = CurrencyStatusWidget()
         toolbar_layout.addWidget(
@@ -811,6 +813,9 @@ class AtlasWindow(
                     handle = self.windowHandle()
                     if handle is not None and handle.startSystemMove():
                         return True
+        if watched is getattr(self, "map_toolbar", None):
+            if event.type() == QtCore.QEvent.Type.Resize:
+                self._sync_party_status_visibility()
         if watched is getattr(self, "radar", None):
             if event.type() == QtCore.QEvent.Type.Resize:
                 QtCore.QTimer.singleShot(0, self._position_map_overlays)
@@ -2354,9 +2359,58 @@ class AtlasWindow(
                 self.party_status_layout.addWidget(widget)
                 widget.show()
 
-        self.party_status_container.setVisible(
-            bool(members) or show_empty_slots
+        self._party_status_wanted = bool(members) or show_empty_slots
+        self._sync_party_status_visibility()
+
+    def _party_status_preferred_width(self) -> int:
+        """Natural width of the party strip, even while it is hidden."""
+        layout = self.party_status_layout
+        if layout.count() == 0:
+            return 0
+        total = 0
+        visible = 0
+        for index in range(layout.count()):
+            item = layout.itemAt(index)
+            widget = item.widget() if item is not None else None
+            if widget is None:
+                continue
+            total += max(widget.minimumWidth(), widget.sizeHint().width())
+            visible += 1
+        if visible > 1:
+            total += layout.spacing() * (visible - 1)
+        return total
+
+    def _sync_party_status_visibility(self) -> None:
+        """Show party only when content exists and the toolbar has room."""
+        if not self._party_status_wanted:
+            self.party_status_container.setVisible(False)
+            return
+        layout = self.map_toolbar.layout()
+        if layout is None:
+            self.party_status_container.setVisible(True)
+            return
+        margins = layout.contentsMargins()
+        available = max(
+            0, self.map_toolbar.width() - margins.left() - margins.right()
         )
+        spacing = layout.spacing()
+        other_widgets = [
+            widget
+            for widget in (
+                self.character_status,
+                self.currency_status,
+                self.rift_status,
+            )
+            if widget.isVisible()
+        ]
+        other_width = sum(widget.sizeHint().width() for widget in other_widgets)
+        party_width = self._party_status_preferred_width()
+        # Character, party, stretch, then any visible right-side widgets.
+        item_count = len(other_widgets) + 2
+        needed = other_width + party_width + spacing * max(0, item_count - 1)
+        # Hysteresis: require a little spare room before re-showing.
+        slack = 0 if self.party_status_container.isVisible() else spacing * 2
+        self.party_status_container.setVisible(needed + slack <= available)
 
     def update_snapshot(self, snapshot: Snapshot) -> None:
         self.latest_snapshot = snapshot
@@ -2445,8 +2499,9 @@ class AtlasWindow(
             for member in visible_party
         )
         if not self.online_mode:
-            self.party_status_container.setVisible(False)
+            self._party_status_wanted = False
             self._party_status_signature = None
+            self.party_status_container.setVisible(False)
         elif party_status_signature != self._party_status_signature:
             self._party_status_signature = party_status_signature
             self._update_party_status(visible_party)
@@ -2554,6 +2609,7 @@ class AtlasWindow(
             self.currency_status.clear()
             if self.game_time_status is not None:
                 self.game_time_status.clear()
+        self._sync_party_status_visibility()
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # noqa: N802
         super().closeEvent(event)
