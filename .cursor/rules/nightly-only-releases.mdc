@@ -1,0 +1,27 @@
+---
+description: FareverAtlas ships only a rolling Nightly release — never versioned tags or releases
+alwaysApply: true
+---
+
+# Nightly-only distribution
+
+FareverAtlas publishes **one** GitHub Release: tag/name **`Nightly`**.
+
+## Never do this
+
+- Create, restore, push, or recreate versioned tags (`v0.12.2`, `v*`, semver tags)
+- Create GitHub Releases other than `Nightly`
+- Reintroduce workflow triggers for `push: tags: v*`, `release: published`, or versioned `workflow_dispatch` tag inputs
+- Push historical tags from old commits (Actions runs the **workflow from that tag’s commit**, which can republish a dead `v*` release and steal Latest)
+- Create checkpoint/restore tags on `origin` (e.g. `restore/...`) unless the user explicitly asks for a remote tag
+
+## Always do this
+
+- Publish portable Windows builds only to the rolling **`Nightly`** release
+- On `main` pushes (path-filtered), schedule, and `workflow_dispatch`: build + attach to Nightly + VirusTotal + refresh `published_at`
+- Pull requests: artifact only — do not update Nightly
+- If a stray `v*` / non-Nightly tag or release appears: delete the release and the tag, then ensure Nightly is `make_latest`
+
+## Why
+
+Pushing an old `v*` tag re-ran the ancient workflow on that commit and recreated `v0.12.2` as Latest. That must not happen again.

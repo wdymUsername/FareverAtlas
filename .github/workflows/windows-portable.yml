@@ -97,7 +97,9 @@ jobs:
         run: |
           set -euo pipefail
           tag=""
-          if [[ "${{ github.event_name }}" == "schedule" || "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          # Publish Nightly on schedule, manual runs, and pushes to main.
+          # Pull requests stay artifact-only.
+          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
             tag="Nightly"
           fi
           sha="$(git rev-parse --short HEAD)"
@@ -110,7 +112,7 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
           if [[ -n "${tag}" ]]; then
-            echo "Publishing Nightly release (sha=${sha})"
+            echo "Publishing Nightly release (sha=${sha}, event=${{ github.event_name }})"
           else
             echo "No Nightly publish for event ${{ github.event_name }}; artifact only"
           fi

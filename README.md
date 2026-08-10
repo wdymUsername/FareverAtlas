@@ -306,7 +306,8 @@ The portable build ships the app, assets, and bridge only — not `tools/`.
 GitHub Actions builds the same portable exe
 (`.github/workflows/windows-portable.yml`) and publishes a rolling
 [Nightly](https://github.com/wdymUsername/FareverAtlas/releases/tag/Nightly)
-release daily at 00:00 UTC (or on demand via Actions → Run workflow).
+release on each qualifying push to `main`, daily at 00:00 UTC, and on demand
+via Actions → Run workflow.
 VirusTotal submission and distribution notes live in
 [`DISTRIBUTION_README.txt`](DISTRIBUTION_README.txt).
 
