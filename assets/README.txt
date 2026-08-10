@@ -46,7 +46,7 @@ them from Farever's res.map.pak with:
 
   python3 -m venv tools/.venv
   tools/.venv/bin/pip install -r tools/requirements.txt
-  tools/.venv/bin/python tools/build_map_assets.py
+  tools/.venv/bin/python tools/build_map_assets.py --scale 0.35
 
 World JSON and marker icons live under data/ and ui/ so Atlas does not depend
 on files installed into the Farever game folder. Refresh POI world coordinates

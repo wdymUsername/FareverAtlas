@@ -1615,6 +1615,8 @@ class AtlasWindow(
 
     def _toggle_fog_enabled(self, checked: bool) -> None:
         self.radar.fog.enabled = bool(checked)
+        if not self.radar.fog.enabled:
+            self.radar.fog.release_paint_caches()
         self._settings.setValue("map/fog_enabled", self.radar.fog.enabled)
         self._update_fog_toggle_button()
         self.radar.update()
