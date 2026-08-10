@@ -696,6 +696,18 @@ class AtlasWindow(
     def _set_active_page(self, page: str, *, persist: bool = True) -> None:
         if page not in getattr(self, "pages", {}):
             page = MapPage.PAGE_ID
+        if page in {PlannerPage.PAGE_ID, CodexPage.PAGE_ID}:
+            if getattr(self, "dev_mode", False):
+                self.show_toast("Feature is work in progress!", kind="info")
+            else:
+                self.show_toast("Coming soon!", kind="info")
+                current = getattr(self, "_active_page_id", MapPage.PAGE_ID)
+                if hasattr(self, "map_page_button"):
+                    self.map_page_button.setChecked(current == MapPage.PAGE_ID)
+                    self.planner_page_button.setChecked(False)
+                    self.codex_page_button.setChecked(False)
+                    self.players_page_button.setChecked(current == PlayersPage.PAGE_ID)
+                return
         previous = getattr(self, "_active_page_id", None)
         if previous in getattr(self, "pages", {}) and previous != page:
             self.pages[previous].on_deactivated()
