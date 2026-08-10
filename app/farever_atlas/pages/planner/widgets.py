@@ -7,7 +7,12 @@ from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from ...config import ASSET_ROOT
+from ...config import (
+    ASSET_ROOT,
+    CLASS_BLANK_RELATIVE_PATH,
+    PLANNER_TALENT_GOLD_RELATIVE_PATH,
+    PLANNER_TALENT_SILVER_RELATIVE_PATH,
+)
 from ...toast import notify
 
 
@@ -123,9 +128,7 @@ class PlannerClassSelector(QtWidgets.QWidget):
         self._current_class = ""
         self._class_labels = {class_id: label for class_id, label, _ in classes}
         self._class_pixmaps: dict[str, QtGui.QPixmap] = {
-            "": QtGui.QPixmap(
-                str(ASSET_ROOT / "classBlank.webp")
-            )
+            "": QtGui.QPixmap(str(ASSET_ROOT / CLASS_BLANK_RELATIVE_PATH))
         }
         for class_id, _label, icon_file in classes:
             self._class_pixmaps[class_id] = QtGui.QPixmap(
@@ -728,10 +731,10 @@ class PlannerTalentChoice(QtWidgets.QWidget):
 
         asset_root = ASSET_ROOT
         self.button._talent_icon_unranked = QtGui.QIcon(
-            str(asset_root / "planner_talent_placeholder_silver.svg")
+            str(asset_root / PLANNER_TALENT_SILVER_RELATIVE_PATH)
         )
         self.button._talent_icon_ranked = QtGui.QIcon(
-            str(asset_root / "planner_talent_placeholder_gold.svg")
+            str(asset_root / PLANNER_TALENT_GOLD_RELATIVE_PATH)
         )
         self.button.setIcon(self.button._talent_icon_unranked)
 

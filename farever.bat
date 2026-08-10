@@ -91,12 +91,6 @@ if not exist "%BRIDGE%" (
 taskkill /IM farever-atlas-bridge.exe /F >nul 2>nul
 
 if not defined FAREVER_GAME_DIR (
-    if not exist "%GAME_DIR_FILE%" (
-        if not exist "%ROOT%user_data" mkdir "%ROOT%user_data"
-        if exist "%ROOT%user_data\nyx_game_dir.conf" move /Y "%ROOT%user_data\nyx_game_dir.conf" "%GAME_DIR_FILE%" >nul
-        if not exist "%GAME_DIR_FILE%" if exist "%ROOT%nyx_game_dir.conf" move /Y "%ROOT%nyx_game_dir.conf" "%GAME_DIR_FILE%" >nul
-        if not exist "%GAME_DIR_FILE%" if exist "%ROOT%game_dir.conf" move /Y "%ROOT%game_dir.conf" "%GAME_DIR_FILE%" >nul
-    )
     if exist "%GAME_DIR_FILE%" (
         set /p FAREVER_GAME_DIR=<"%GAME_DIR_FILE%"
     )

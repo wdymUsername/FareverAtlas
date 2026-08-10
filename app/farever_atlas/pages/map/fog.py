@@ -10,7 +10,12 @@ from typing import Any, Callable
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from ...config import PROJECT_ROOT, discover_project_asset
+from ...config import (
+    FOW_PATTERN_RELATIVE_PATH,
+    FOW_REGIONS_RELATIVE_PATH,
+    PROJECT_ROOT,
+    discover_project_asset,
+)
 from .custom_fow import load_custom_fow_rings, save_custom_fow_rings
 from .fow_layers import (
     FOW_LAYER_LABELS,
@@ -27,8 +32,6 @@ from .fow_overrides import (
     save_fow_overrides,
 )
 
-FOW_REGIONS_RELATIVE_PATH = Path("map/w1_siagarta_fow.json")
-FOW_PATTERN_RELATIVE_PATH = Path("map/pattern_fog_of_war_512.png")
 # Soft FOW overlay is baked once into a map-aligned texture (release / Baked-only).
 FOW_BAKED_OVERLAY_MAX_DIM = 2048
 # Marker visibility is tested once per visible marker per frame, so the composite

@@ -1,6 +1,6 @@
 """Static wild-critter spawn points extracted from world prefabs.
 
-Source of truth: ``assets/critter_spawns_W1_Siagarta.json``, rebuilt with
+Source of truth: ``assets/data/w1_siagarta/critter_spawns.json``, rebuilt with
 ``python tools/extract_critter_spawns.py``. These are authored spawner
 positions (and roaming pools), not live streamed entities.
 """
@@ -11,9 +11,9 @@ import json
 from functools import lru_cache
 from typing import Any
 
-from .config import ASSET_ROOT
+from .config import ASSET_ROOT, CRITTER_SPAWNS_RELATIVE_PATH
 
-_SPAWNS_FILE = ASSET_ROOT / "critter_spawns_W1_Siagarta.json"
+_SPAWNS_FILE = ASSET_ROOT / CRITTER_SPAWNS_RELATIVE_PATH
 
 
 @lru_cache(maxsize=1)

@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from ...config import ASSET_ROOT, LOOSE_KIND_ICON_FILES, discover_project_asset
+from ...config import (
+    ASSET_ROOT,
+    LOOSE_KIND_ICON_FILES,
+    UI_CLOSE_RELATIVE_PATH,
+    UI_COLLECT_RELATIVE_PATH,
+    discover_project_asset,
+)
 from ...controls import SidebarHeaderButton
 from .gather_nav import GatherNavPanel
 
@@ -263,7 +269,9 @@ class FilterSidebarMixin:
         self._init_gather_sidebar()
 
     def _init_gather_sidebar(self) -> None:
-        icon_path = discover_project_asset("collect.svg") or (ASSET_ROOT / "collect.svg")
+        icon_path = discover_project_asset(UI_COLLECT_RELATIVE_PATH) or (
+            ASSET_ROOT / UI_COLLECT_RELATIVE_PATH
+        )
         guide_icon = (
             QtGui.QIcon(str(icon_path)) if icon_path.is_file() else QtGui.QIcon()
         )
@@ -331,7 +339,9 @@ class FilterSidebarMixin:
         self.gather_sidebar_close.setFixedSize(22, 22)
         self.gather_sidebar_close.setIconSize(QtCore.QSize(12, 12))
         self.gather_sidebar_close.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        close_icon = discover_project_asset("close.svg") or (ASSET_ROOT / "close.svg")
+        close_icon = discover_project_asset(UI_CLOSE_RELATIVE_PATH) or (
+            ASSET_ROOT / UI_CLOSE_RELATIVE_PATH
+        )
         if close_icon.is_file():
             self.gather_sidebar_close.setIcon(QtGui.QIcon(str(close_icon)))
         else:

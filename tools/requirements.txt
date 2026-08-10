@@ -1,3 +1,4 @@
-# Dependencies for maintainer map tooling (tools/build_map_assets.py).
+# Maintainer map tooling only (tools/build_map_assets.py, etc.).
+# Install into tools/.venv — not the app .venv. See README.
 Pillow>=10
 texture2ddecoder>=1.0

@@ -10,7 +10,7 @@ companion critter kind from ``unit_traits``.
 Usage:
     python tools/extract_patrol_paths.py
 
-Writes ``assets/patrol_paths_W1_Siagarta.json``.
+Writes ``assets/data/w1_siagarta/patrol_paths.json``.
 """
 
 from __future__ import annotations
@@ -27,8 +27,8 @@ ROOT = Path(__file__).resolve().parents[1]
 WORLD = "W1_Siagarta"
 PREFAB_DIR = ROOT / "extracted" / "res.map" / "Level" / "World" / f"{WORLD}.dat" / "gameplayData"
 CDB_PATH = ROOT / "extracted" / "res.light" / "data.cdb"
-TRAITS_PATH = ROOT / "assets" / "unit_traits.json"
-OUT_PATH = ROOT / "assets" / f"patrol_paths_{WORLD}.json"
+TRAITS_PATH = ROOT / "assets" / "data" / "unit_traits.json"
+OUT_PATH = ROOT / "assets" / "data" / "w1_siagarta" / "patrol_paths.json"
 
 # Cap polyline density for map draw; always keep endpoints.
 _MAX_POLY_POINTS = 48
@@ -164,7 +164,7 @@ def main() -> int:
     ranked_set = spark_set | elite_set | boss_set | miniboss_set | unique_set
     if not ranked_set and not critter_set:
         print(
-            "assets/unit_traits.json has no ranked/spark or critter kinds",
+            "assets/data/unit_traits.json has no ranked/spark or critter kinds",
             file=sys.stderr,
         )
         return 1
@@ -320,7 +320,9 @@ def main() -> int:
         "count": len(paths),
         "paths": paths,
     }
-    OUT_PATH.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    OUT_PATH.write_text(
+        json.dumps(payload, separators=(",", ":")) + "\n", encoding="utf-8"
+    )
     print(f"wrote {len(paths)} patrol paths -> {OUT_PATH}")
     if missing:
         print(f"missing splines ({len(set(missing))}): {sorted(set(missing))}")

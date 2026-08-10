@@ -9,8 +9,15 @@ from typing import Any
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from ..config import (
-    LOOSE_KIND_ICON_FILES,
     ASSET_ROOT,
+    LOOSE_KIND_ICON_FILES,
+    UI_CLOSE_RELATIVE_PATH,
+    UI_FOG_RELATIVE_PATH,
+    UI_HELP_HOVER_RELATIVE_PATH,
+    UI_HELP_RELATIVE_PATH,
+    UI_LEVEL_MINUS_RELATIVE_PATH,
+    UI_LEVEL_PLUS_RELATIVE_PATH,
+    UI_MAP_RECENTER_RELATIVE_PATH,
     discover_project_asset,
     fmt_hp,
     fmt_number,
@@ -294,7 +301,7 @@ class AtlasWindow(
         self.recenter.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.recenter.setFixedSize(28, 28)
         self.recenter.setIconSize(QtCore.QSize(16, 16))
-        recenter_icon = QtGui.QIcon(str(ASSET_ROOT / "map_recenter.svg"))
+        recenter_icon = QtGui.QIcon(str(ASSET_ROOT / UI_MAP_RECENTER_RELATIVE_PATH))
         if not recenter_icon.isNull():
             self.recenter.setIcon(recenter_icon)
 
@@ -348,7 +355,7 @@ class AtlasWindow(
         self.zoom_in.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.zoom_in.setFixedSize(28, 28)
         self.zoom_in.setIconSize(QtCore.QSize(14, 14))
-        zoom_in_icon = QtGui.QIcon(str(ASSET_ROOT / "level_plus.svg"))
+        zoom_in_icon = QtGui.QIcon(str(ASSET_ROOT / UI_LEVEL_PLUS_RELATIVE_PATH))
         if not zoom_in_icon.isNull():
             self.zoom_in.setIcon(zoom_in_icon)
 
@@ -360,7 +367,7 @@ class AtlasWindow(
         self.zoom_out.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.zoom_out.setFixedSize(28, 28)
         self.zoom_out.setIconSize(QtCore.QSize(14, 14))
-        zoom_out_icon = QtGui.QIcon(str(ASSET_ROOT / "level_minus.svg"))
+        zoom_out_icon = QtGui.QIcon(str(ASSET_ROOT / UI_LEVEL_MINUS_RELATIVE_PATH))
         if not zoom_out_icon.isNull():
             self.zoom_out.setIcon(zoom_out_icon)
 
@@ -455,8 +462,8 @@ class AtlasWindow(
         self.map_help_button = footer.findChild(
             QtWidgets.QToolButton, "mapHelpButton"
         )
-        self.help_icon_normal = QtGui.QIcon(str(ASSET_ROOT / "help.svg"))
-        self.help_icon_hover = QtGui.QIcon(str(ASSET_ROOT / "help_hover.svg"))
+        self.help_icon_normal = QtGui.QIcon(str(ASSET_ROOT / UI_HELP_RELATIVE_PATH))
+        self.help_icon_hover = QtGui.QIcon(str(ASSET_ROOT / UI_HELP_HOVER_RELATIVE_PATH))
         self.map_help_button.setIcon(self.help_icon_normal)
         self.map_help_button.setIconSize(QtCore.QSize(18, 18))
         self.map_help_button.installEventFilter(self)
@@ -921,7 +928,9 @@ class AtlasWindow(
 
     def _init_map_fow_edit_overlay(self) -> None:
         """Dev-only FOW / zone edit controls (separate from zoom overlay)."""
-        icon_path = discover_project_asset("fog.svg") or (ASSET_ROOT / "fog.svg")
+        icon_path = discover_project_asset(UI_FOG_RELATIVE_PATH) or (
+            ASSET_ROOT / UI_FOG_RELATIVE_PATH
+        )
         fow_icon = (
             QtGui.QIcon(str(icon_path)) if icon_path.is_file() else QtGui.QIcon()
         )
@@ -989,7 +998,9 @@ class AtlasWindow(
         self.fow_tools_close.setFixedSize(22, 22)
         self.fow_tools_close.setIconSize(QtCore.QSize(12, 12))
         self.fow_tools_close.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        close_icon = discover_project_asset("close.svg") or (ASSET_ROOT / "close.svg")
+        close_icon = discover_project_asset(UI_CLOSE_RELATIVE_PATH) or (
+            ASSET_ROOT / UI_CLOSE_RELATIVE_PATH
+        )
         if close_icon.is_file():
             self.fow_tools_close.setIcon(QtGui.QIcon(str(close_icon)))
         else:

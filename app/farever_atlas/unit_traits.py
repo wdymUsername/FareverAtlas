@@ -1,6 +1,6 @@
 """CastleDB `unit` trait kind lists for map classification.
 
-Source: ``assets/unit_traits.json`` (rebuild with ``tools/extract_unit_traits.py``).
+Source: ``assets/data/unit_traits.json`` (rebuild with ``tools/extract_unit_traits.py``).
 Critters / specials / Spark rares are still ``ent.Foe`` at runtime; classify by
 kind id, not HashLink class.
 """
@@ -11,9 +11,9 @@ import json
 from functools import lru_cache
 from typing import Any
 
-from .config import ASSET_ROOT
+from .config import ASSET_ROOT, UNIT_TRAITS_RELATIVE_PATH
 
-_TRAITS_FILE = ASSET_ROOT / "unit_traits.json"
+_TRAITS_FILE = ASSET_ROOT / UNIT_TRAITS_RELATIVE_PATH
 
 _TraitSets = tuple[
     frozenset[str],

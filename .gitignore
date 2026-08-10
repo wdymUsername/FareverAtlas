@@ -1,4 +1,5 @@
 .venv/
+tools/.venv/
 __pycache__/
 *.py[cod]
 *.tmp
@@ -7,7 +8,6 @@ __pycache__/
 .tmp*/
 
 # Local user and machine state
-nyx_game_dir.conf
 game_dir.conf
 # Machine-local launcher paths; never commit (leaks home dir)
 farever-atlas.desktop
@@ -38,6 +38,9 @@ assets/fonts/*.ttf
 assets/fonts/*.otf
 assets/fonts/*.partial
 assets/fonts/OFL.txt
+
+# Local park for superseded / unused asset originals (not shipped)
+assets/unused/
 
 # Local backups and extracted game files
 .backups/

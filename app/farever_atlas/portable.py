@@ -58,26 +58,9 @@ def game_dir_conf_path() -> Path:
 
 
 def resolve_game_dir_conf() -> Path | None:
-    """Return the game-dir override file, migrating legacy names if needed."""
+    """Return the game-dir override file if present."""
     current = game_dir_conf_path()
-    if current.is_file():
-        return current
-
-    legacy_candidates = (
-        user_data_dir() / "nyx_game_dir.conf",
-        PROJECT_ROOT / "nyx_game_dir.conf",
-        PROJECT_ROOT / "game_dir.conf",
-    )
-    for legacy in legacy_candidates:
-        if not legacy.is_file():
-            continue
-        try:
-            current.parent.mkdir(parents=True, exist_ok=True)
-            legacy.replace(current)
-            return current
-        except OSError:
-            return legacy
-    return None
+    return current if current.is_file() else None
 
 
 def _windows_no_window_flags() -> int:

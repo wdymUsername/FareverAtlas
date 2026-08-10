@@ -7,7 +7,7 @@ from typing import Any
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from ...config import CLASS_ICON_FILES, discover_project_asset, safe_float, safe_int
+from ...config import CLASS_BLANK_RELATIVE_PATH, CLASS_ICON_FILES, discover_project_asset, safe_float, safe_int
 from .steam import farever_uid_to_steamid64, steam_persona_label
 
 
@@ -346,7 +346,7 @@ class PlayerListRow(QtWidgets.QFrame):
             return
         self._displayed_class = normalized
         if normalized == "__blank__":
-            blank_path = discover_project_asset("classBlank.webp")
+            blank_path = discover_project_asset(CLASS_BLANK_RELATIVE_PATH)
             pixmap = QtGui.QPixmap(str(blank_path)) if blank_path else QtGui.QPixmap()
         else:
             icon_name = CLASS_ICON_FILES.get(normalized)
