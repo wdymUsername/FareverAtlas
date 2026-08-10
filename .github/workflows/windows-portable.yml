@@ -124,6 +124,7 @@ jobs:
         with:
           tag_name: Nightly
           name: Nightly
+          target_commitish: ${{ github.sha }}
           prerelease: false
           make_latest: true
           generate_release_notes: false
@@ -131,6 +132,24 @@ jobs:
           files: |
             dist/FareverAtlas.exe
             dist/FareverAtlas.exe.sha256
+
+      - name: Point Nightly tag at this commit
+        if: steps.release.outputs.id != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.release.outputs.id }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # softprops leaves an existing Nightly tag where it was; force-move it.
+          repo="${{ github.repository }}"
+          gh api -X PATCH "repos/${repo}/git/refs/tags/Nightly" \
+            -f sha="${COMMIT_SHA}" \
+            -F force=true >/dev/null
+          gh api -X PATCH "repos/${repo}/releases/${RELEASE_ID}" \
+            --input - <<< "{\"target_commitish\":\"${COMMIT_SHA}\"}" >/dev/null
+          echo "Nightly tag -> $(gh api "repos/${repo}/git/ref/tags/Nightly" --jq .object.sha)"
 
       - name: Refresh Nightly published timestamp
         if: steps.release.outputs.id != ''
