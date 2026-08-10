@@ -717,14 +717,24 @@ class FogOfWar:
     ) -> tuple[tuple[tuple[float, float], ...], ...]:
         return self.transformed_layer_rings("Z4")
 
+    def _drop_soft_fog_cache(self) -> None:
+        self._soft_fog_image = None
+        self._soft_fog_cache_key = None
+
+    def _drop_baked_overlay_cache(self) -> None:
+        self._baked_overlay = None
+        self._baked_overlay_key = None
+
+    def release_paint_caches(self) -> None:
+        """Free soft-fog and baked-overlay images (e.g. FOW master off)."""
+        self._drop_soft_fog_cache()
+        self._drop_baked_overlay_cache()
+
     def _invalidate_accessible_path(self) -> None:
         self._world_accessible_path = None
         self._world_path_cache_key = None
         self._world_path_generation += 1
-        self._soft_fog_image = None
-        self._soft_fog_cache_key = None
-        self._baked_overlay = None
-        self._baked_overlay_key = None
+        self.release_paint_caches()
         self._accessible_mask_key = None
         self._accessible_mask_bits = None
         self._accessible_mask_geom = None
@@ -883,6 +893,7 @@ class FogOfWar:
     def ensure_baked_overlay(self, map_texture: Any) -> bool:
         """Build a map-aligned FOW overlay texture for the Baked clear zone."""
         if not self.can_use_baked_overlay():
+            self._drop_baked_overlay_cache()
             return False
         image = getattr(map_texture, "image", None)
         if image is None or image.isNull():
@@ -1061,7 +1072,12 @@ class FogOfWar:
                     view_center=view_center,
                     pixels_per_metre=pixels_per_metre,
                 )
-            if not used_overlay:
+            if used_overlay:
+                # Baked path owns FOW fill — soft viewport cache is unused.
+                self._drop_soft_fog_cache()
+            else:
+                # Soft/hard path — drop map-sized baked overlay while unused.
+                self._drop_baked_overlay_cache()
                 self._paint_fog(
                     painter,
                     viewport=viewport,
@@ -1070,6 +1086,8 @@ class FogOfWar:
                     view_center=view_center,
                     world_to_screen=world_to_screen,
                 )
+        else:
+            self.release_paint_caches()
         if self.show_outlines and self.show_layer_outlines:
             self._paint_outlines(
                 painter,
@@ -1343,6 +1361,8 @@ class FogOfWar:
         )
         radius_px = feather_m * max(0.0, float(pixels_per_metre))
         if radius_px < 0.75:
+            # Hard edge — soft viewport cache is unused.
+            self._drop_soft_fog_cache()
             self._draw_fog_path(painter, fog_path)
             return
 

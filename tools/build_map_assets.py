@@ -5,7 +5,7 @@ Extracts minimap tiles for a world, stitches them into one image, and writes
 Atlas-native calibration derived from the tile grid (not eye-fit).
 
     python tools/build_map_assets.py
-    python tools/build_map_assets.py --pak /path/to/res.map.pak --scale 0.5
+    python tools/build_map_assets.py --pak /path/to/res.map.pak --scale 0.35
 
 Outputs (default):
     assets/map/w1_siagarta.webp
@@ -447,8 +447,8 @@ def main() -> int:
     parser.add_argument(
         "--scale",
         type=float,
-        default=0.5,
-        help="Tile downsample factor (1.0 = full 1024px tiles → 11264²)",
+        default=0.35,
+        help="Tile downsample factor (1.0 = full 1024px tiles → 11264²; 0.35 → ~3938²)",
     )
     parser.add_argument(
         "--quality",
