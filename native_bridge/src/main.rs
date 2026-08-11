@@ -456,6 +456,7 @@ mod windows_bridge {
     const PLAYER_GROUP_FIELD_INDEX: usize = 37;
     // st.Player inherits BaseState(17)+State(10)=27. Declared: accountProgress=6,
     // heroData=7, progress=8, stats=9, group=10 → flattened 33..37.
+    const PLAYER_ACCOUNT_PROGRESS_FIELD_INDEX: usize = 33;
     const PLAYER_PROGRESS_FIELD_INDEX: usize = 35;
     const PLAYER_HERO_DATA_FIELD_INDEX: usize = 34;
     const PLAYER_HERO_FIELD_INDEX: usize = 43;
@@ -499,6 +500,20 @@ mod windows_bridge {
     const PROGRESS_COUNTERS_FIELD_INDEX: usize = 19;
     const PROGRESS_ACTIVITIES_FIELD_INDEX: usize = 20;
     const PROGRESS_ELEMENTS_FIELD_INDEX: usize = 21;
+    // npcs=5 → 22, unitsProgress=6 → 23.
+    const PROGRESS_UNITS_PROGRESS_FIELD_INDEX: usize = 23;
+    const ACCOUNT_PROGRESS_TYPE_INDEX: usize = 1_363;
+    // st.player.AccountProgress inherits DBState(21); collection is declared field 3 → 24.
+    const ACCOUNT_PROGRESS_COLLECTION_FIELD_INDEX: usize = 24;
+    const COLLECTION_TYPE_INDEX: usize = 1_364;
+    // st.player.Collection inherits DBBaseState(17); gliders=1 → 18 … pets=6 → 23.
+    const COLLECTION_GLIDERS_FIELD_INDEX: usize = 18;
+    const COLLECTION_MOUNTS_FIELD_INDEX: usize = 19;
+    const COLLECTION_GEARS_FIELD_INDEX: usize = 22;
+    const COLLECTION_PETS_FIELD_INDEX: usize = 23;
+    const CODEX_PROXY_TYPE_INDEX: usize = 14_152;
+    const CODEX_PROXY_KILL_COUNT_FIELD_INDEX: usize = 2;
+    const CODEX_PROXY_RANK_FIELD_INDEX: usize = 3;
     const MAP_DATA_TYPE_INDEX: usize = 1_038;
     const MAP_DATA_MAP_FIELD_INDEX: usize = 4;
     const STRING_MAP_TYPE_INDEX: usize = 66;
@@ -837,6 +852,7 @@ mod windows_bridge {
         hero_player_offset: usize,
         hero_name_offset: usize,
         player_group_offset: usize,
+        player_account_progress_offset: usize,
         player_progress_offset: usize,
         player_hero_data_offset: usize,
         player_hero_offset: usize,
@@ -870,6 +886,14 @@ mod windows_bridge {
         progress_counters_offset: usize,
         progress_activities_offset: usize,
         progress_elements_offset: usize,
+        progress_units_progress_offset: usize,
+        account_progress_collection_offset: usize,
+        collection_gliders_offset: usize,
+        collection_mounts_offset: usize,
+        collection_gears_offset: usize,
+        collection_pets_offset: usize,
+        codex_proxy_kill_count_offset: usize,
+        codex_proxy_rank_offset: usize,
         map_data_map_offset: usize,
         string_map_handle_offset: usize,
         completion_proxy_completed_offset: usize,
@@ -2523,6 +2547,11 @@ mod windows_bridge {
             types_address + PLAYER_TYPE_INDEX * 32,
             PLAYER_GROUP_FIELD_INDEX,
         )?;
+        let player_account_progress_offset = object_field_offset(
+            process,
+            types_address + PLAYER_TYPE_INDEX * 32,
+            PLAYER_ACCOUNT_PROGRESS_FIELD_INDEX,
+        )?;
         let player_progress_offset = object_field_offset(
             process,
             types_address + PLAYER_TYPE_INDEX * 32,
@@ -2666,6 +2695,46 @@ mod windows_bridge {
             process,
             types_address + PROGRESS_TYPE_INDEX * 32,
             PROGRESS_ELEMENTS_FIELD_INDEX,
+        )?;
+        let progress_units_progress_offset = object_field_offset(
+            process,
+            types_address + PROGRESS_TYPE_INDEX * 32,
+            PROGRESS_UNITS_PROGRESS_FIELD_INDEX,
+        )?;
+        let account_progress_collection_offset = object_field_offset(
+            process,
+            types_address + ACCOUNT_PROGRESS_TYPE_INDEX * 32,
+            ACCOUNT_PROGRESS_COLLECTION_FIELD_INDEX,
+        )?;
+        let collection_gliders_offset = object_field_offset(
+            process,
+            types_address + COLLECTION_TYPE_INDEX * 32,
+            COLLECTION_GLIDERS_FIELD_INDEX,
+        )?;
+        let collection_mounts_offset = object_field_offset(
+            process,
+            types_address + COLLECTION_TYPE_INDEX * 32,
+            COLLECTION_MOUNTS_FIELD_INDEX,
+        )?;
+        let collection_gears_offset = object_field_offset(
+            process,
+            types_address + COLLECTION_TYPE_INDEX * 32,
+            COLLECTION_GEARS_FIELD_INDEX,
+        )?;
+        let collection_pets_offset = object_field_offset(
+            process,
+            types_address + COLLECTION_TYPE_INDEX * 32,
+            COLLECTION_PETS_FIELD_INDEX,
+        )?;
+        let codex_proxy_kill_count_offset = object_field_offset(
+            process,
+            types_address + CODEX_PROXY_TYPE_INDEX * 32,
+            CODEX_PROXY_KILL_COUNT_FIELD_INDEX,
+        )?;
+        let codex_proxy_rank_offset = object_field_offset(
+            process,
+            types_address + CODEX_PROXY_TYPE_INDEX * 32,
+            CODEX_PROXY_RANK_FIELD_INDEX,
         )?;
         let map_data_map_offset = object_field_offset(
             process,
@@ -2824,6 +2893,7 @@ mod windows_bridge {
             hero_player_offset,
             hero_name_offset,
             player_group_offset,
+            player_account_progress_offset,
             player_progress_offset,
             player_hero_data_offset,
             player_hero_offset,
@@ -2857,6 +2927,14 @@ mod windows_bridge {
             progress_counters_offset,
             progress_activities_offset,
             progress_elements_offset,
+            progress_units_progress_offset,
+            account_progress_collection_offset,
+            collection_gliders_offset,
+            collection_mounts_offset,
+            collection_gears_offset,
+            collection_pets_offset,
+            codex_proxy_kill_count_offset,
+            codex_proxy_rank_offset,
             map_data_map_offset,
             string_map_handle_offset,
             completion_proxy_completed_offset,
@@ -3046,6 +3124,22 @@ mod windows_bridge {
         ui: UiSample,
         completed_elements: Vec<String>,
         completed_activities: Vec<String>,
+        collection: CollectionSample,
+        codex_units: Vec<(String, CodexUnitSample)>,
+    }
+
+    #[derive(Clone, Default)]
+    struct CollectionSample {
+        mounts: Vec<String>,
+        gliders: Vec<String>,
+        pets: Vec<String>,
+        gears: Vec<String>,
+    }
+
+    #[derive(Clone, Copy)]
+    struct CodexUnitSample {
+        kills: i32,
+        rank: i32,
     }
 
     struct PartySample {
@@ -3914,6 +4008,314 @@ mod windows_bridge {
         completed.sort_unstable();
         completed.dedup();
         Ok(completed)
+    }
+
+    /// Decode one Collection array element: a Haxe String, or an object that
+    /// carries an id/kind String in an early field slot.
+    fn decode_collection_entry(
+        process: &OwnedHandle,
+        types_address: usize,
+        elem: usize,
+        label: &str,
+    ) -> Option<String> {
+        if elem == 0 {
+            return None;
+        }
+        if let Ok(text) = read_hashlink_string(process, types_address, elem, label) {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() && trimmed.len() <= 96 {
+                return Some(trimmed.to_owned());
+            }
+        }
+        // CDB-backed / boxed entries: probe early pointer slots for a String id.
+        for offset in (8_usize..=0x40).step_by(8) {
+            let Ok(pointer) = read_object_pointer_field(process, elem, offset) else {
+                continue;
+            };
+            if pointer == 0 {
+                continue;
+            }
+            let Ok(text) = read_hashlink_string(process, types_address, pointer, label) else {
+                continue;
+            };
+            let trimmed = text.trim();
+            if trimmed.len() >= 2
+                && trimmed.len() <= 96
+                && trimmed
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '_')
+            {
+                return Some(trimmed.to_owned());
+            }
+        }
+        None
+    }
+
+    fn read_string_array_proxy(
+        process: &OwnedHandle,
+        code: &CodeAnchor,
+        root: &PlayerRoot,
+        proxy: usize,
+        label: &str,
+        max_length: usize,
+    ) -> Result<Vec<String>, String> {
+        if proxy == 0 {
+            return Ok(Vec::new());
+        }
+        if read_u64_le(&read_process_bytes(process, proxy, 8)?, 0)? as usize
+            != code.types_address + ARRAY_PROXY_TYPE_INDEX * 32
+        {
+            return Err(format!("{label} is not an ArrayProxyData object"));
+        }
+        let dynamic_array =
+            read_object_pointer_field(process, proxy, root.array_proxy_array_offset)?;
+        if dynamic_array == 0 {
+            return Ok(Vec::new());
+        }
+        if read_u64_le(&read_process_bytes(process, dynamic_array, 8)?, 0)? as usize
+            != code.types_address + ARRAY_DYN_TYPE_INDEX * 32
+        {
+            return Err(format!("{label} proxy does not contain an ArrayDyn"));
+        }
+        let array = read_object_pointer_field(process, dynamic_array, root.array_dyn_array_offset)?;
+        if array == 0 {
+            return Ok(Vec::new());
+        }
+        if read_u64_le(&read_process_bytes(process, array, 8)?, 0)? as usize
+            != code.types_address + ARRAY_OBJ_TYPE_INDEX * 32
+        {
+            return Err(format!("{label} ArrayDyn does not contain an ArrayObj"));
+        }
+        let length = read_u32_le(
+            &read_process_bytes(process, array + root.array_length_offset, 4)?,
+            0,
+        )? as usize;
+        if length > max_length {
+            return Err(format!("{label} length exceeded its safety bound"));
+        }
+        if length == 0 {
+            return Ok(Vec::new());
+        }
+        let storage = read_object_pointer_field(process, array, root.array_storage_offset)?;
+        if storage == 0 {
+            return Ok(Vec::new());
+        }
+        let header = read_process_bytes(process, storage, 24)?;
+        let storage_length = read_u32_le(&header, 16)? as usize;
+        if storage_length < length || storage_length > max_length.saturating_mul(2).max(64) {
+            return Err(format!("{label} array storage failed validation"));
+        }
+        let entries = read_process_bytes(process, storage + 24, length * 8)?;
+        let mut values = Vec::new();
+        for index in 0..length {
+            let candidate = read_u64_le(&entries, index * 8)? as usize;
+            if let Some(text) =
+                decode_collection_entry(process, code.types_address, candidate, label)
+            {
+                values.push(text);
+            }
+        }
+        values.sort_unstable();
+        values.dedup();
+        Ok(values)
+    }
+
+    fn read_collection(
+        process: &OwnedHandle,
+        code: &CodeAnchor,
+        root: &PlayerRoot,
+        player: usize,
+    ) -> Result<CollectionSample, String> {
+        let account =
+            read_object_pointer_field(process, player, root.player_account_progress_offset)?;
+        if account == 0 {
+            return Ok(CollectionSample::default());
+        }
+        if read_u64_le(&read_process_bytes(process, account, 8)?, 0)? as usize
+            != code.types_address + ACCOUNT_PROGRESS_TYPE_INDEX * 32
+        {
+            return Err("Player.accountProgress is not a live AccountProgress object".to_owned());
+        }
+        let collection =
+            read_object_pointer_field(process, account, root.account_progress_collection_offset)?;
+        if collection == 0 {
+            return Ok(CollectionSample::default());
+        }
+        if read_u64_le(&read_process_bytes(process, collection, 8)?, 0)? as usize
+            != code.types_address + COLLECTION_TYPE_INDEX * 32
+        {
+            return Err("AccountProgress.collection is not a live Collection object".to_owned());
+        }
+        let mounts = read_string_array_proxy(
+            process,
+            code,
+            root,
+            read_object_pointer_field(process, collection, root.collection_mounts_offset)?,
+            "Collection.mounts",
+            512,
+        )?;
+        let gliders = read_string_array_proxy(
+            process,
+            code,
+            root,
+            read_object_pointer_field(process, collection, root.collection_gliders_offset)?,
+            "Collection.gliders",
+            512,
+        )?;
+        let pets = read_string_array_proxy(
+            process,
+            code,
+            root,
+            read_object_pointer_field(process, collection, root.collection_pets_offset)?,
+            "Collection.pets",
+            512,
+        )?;
+        let gears = read_string_array_proxy(
+            process,
+            code,
+            root,
+            read_object_pointer_field(process, collection, root.collection_gears_offset)?,
+            "Collection.gears",
+            2_048,
+        )?;
+        Ok(CollectionSample {
+            mounts,
+            gliders,
+            pets,
+            gears,
+        })
+    }
+
+    fn read_codex_units(
+        process: &OwnedHandle,
+        code: &CodeAnchor,
+        root: &PlayerRoot,
+        player: usize,
+    ) -> Result<Vec<(String, CodexUnitSample)>, String> {
+        let hero_data = read_object_pointer_field(process, player, root.player_hero_data_offset)?;
+        let progress = if hero_data != 0
+            && read_u64_le(&read_process_bytes(process, hero_data, 8)?, 0)? as usize
+                == code.types_address + HERO_DATA_TYPE_INDEX * 32
+        {
+            read_object_pointer_field(process, hero_data, root.hero_data_progress_offset)?
+        } else {
+            read_object_pointer_field(process, player, root.player_progress_offset)?
+        };
+        if progress == 0 {
+            return Ok(Vec::new());
+        }
+        if read_u64_le(&read_process_bytes(process, progress, 8)?, 0)? as usize
+            != code.types_address + PROGRESS_TYPE_INDEX * 32
+        {
+            return Err("Player.progress is not a live st.player.Progress object".to_owned());
+        }
+        let units_progress =
+            read_object_pointer_field(process, progress, root.progress_units_progress_offset)?;
+        if units_progress == 0 {
+            return Ok(Vec::new());
+        }
+        if read_u64_le(&read_process_bytes(process, units_progress, 8)?, 0)? as usize
+            != code.types_address + MAP_DATA_TYPE_INDEX * 32
+        {
+            return Err("Progress.unitsProgress is not an hxbit.MapData object".to_owned());
+        }
+        let map_value =
+            read_object_pointer_field(process, units_progress, root.map_data_map_offset)?;
+        if map_value == 0 {
+            return Ok(Vec::new());
+        }
+        let expected_map_type = code.types_address + STRING_MAP_TYPE_INDEX * 32;
+        let map_object = if read_u64_le(&read_process_bytes(process, map_value, 8)?, 0)? as usize
+            == expected_map_type
+        {
+            map_value
+        } else {
+            let wrapper = read_process_bytes(process, map_value, 40)?;
+            [8_usize, 16, 24, 32]
+                .into_iter()
+                .filter_map(|offset| read_u64_le(&wrapper, offset).ok())
+                .map(|value| value as usize)
+                .find(|candidate| {
+                    *candidate != 0
+                        && read_process_bytes(process, *candidate, 8)
+                            .ok()
+                            .and_then(|bytes| read_u64_le(&bytes, 0).ok())
+                            .map(|value| value as usize == expected_map_type)
+                            .unwrap_or(false)
+                })
+                .ok_or_else(|| "Progress.unitsProgress map is not a StringMap".to_owned())?
+        };
+        let handle = read_object_pointer_field(process, map_object, root.string_map_handle_offset)?;
+        if handle == 0 {
+            return Ok(Vec::new());
+        }
+        let header = read_process_bytes(process, handle, 64)?;
+        let values = read_u64_le(&header, 24)? as usize;
+        let nentries = read_u32_le(&header, 52)? as usize;
+        let maxentries = read_u32_le(&header, 56)? as usize;
+        if nentries > maxentries || maxentries > 100_000 || (maxentries > 0 && values == 0) {
+            return Err(
+                "Progress.unitsProgress StringMap header failed sanity validation".to_owned(),
+            );
+        }
+        const ENTRY_SIZE: usize = 16;
+        const CHUNK_ENTRIES: usize = 4096 / ENTRY_SIZE;
+        let expected_value_type = code.types_address + CODEX_PROXY_TYPE_INDEX * 32;
+        let mut units = Vec::new();
+        let mut index = 0usize;
+        while index < maxentries {
+            let chunk = (maxentries - index).min(CHUNK_ENTRIES);
+            let entries =
+                read_process_bytes(process, values + index * ENTRY_SIZE, chunk * ENTRY_SIZE)?;
+            for local in 0..chunk {
+                let offset = local * ENTRY_SIZE;
+                let key_pointer = read_u64_le(&entries, offset)? as usize;
+                let value_pointer = read_u64_le(&entries, offset + 8)? as usize;
+                if key_pointer == 0 || value_pointer == 0 {
+                    continue;
+                }
+                let value_type =
+                    read_u64_le(&read_process_bytes(process, value_pointer, 8)?, 0)? as usize;
+                if value_type != expected_value_type {
+                    continue;
+                }
+                let kills = i32::from_le_bytes(
+                    read_process_bytes(
+                        process,
+                        value_pointer + root.codex_proxy_kill_count_offset,
+                        4,
+                    )?
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| "codex killCount read truncated".to_owned())?,
+                );
+                let rank = i32::from_le_bytes(
+                    read_process_bytes(
+                        process,
+                        value_pointer + root.codex_proxy_rank_offset,
+                        4,
+                    )?
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| "codex rank read truncated".to_owned())?,
+                );
+                if kills < 0 || rank < 0 {
+                    continue;
+                }
+                let Ok(key) = read_bounded_utf16(process, key_pointer, "codex unit key") else {
+                    continue;
+                };
+                let trimmed = key.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                units.push((trimmed.to_owned(), CodexUnitSample { kills, rank }));
+            }
+            index += chunk;
+        }
+        units.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+        units.dedup_by(|left, right| left.0 == right.0);
+        Ok(units)
     }
 
     fn read_group_players(
@@ -4890,9 +5292,12 @@ mod windows_bridge {
         hud_health_gauge: &mut Option<usize>,
         hud_shield_gauge: &mut Option<usize>,
         allow_hud_discovery: bool,
+        refresh_codex_progress: bool,
         party_gauge_cache: &mut Vec<PartyGaugeCache>,
         completed_elements_cache: &mut Vec<String>,
         completed_activities_cache: &mut Vec<String>,
+        collection_cache: &mut CollectionSample,
+        codex_units_cache: &mut Vec<(String, CodexUnitSample)>,
     ) -> Result<TelemetrySample, String> {
         let root = &code.player_root;
         let game_app = read_object_pointer_field(
@@ -5129,6 +5534,15 @@ mod windows_bridge {
                 *completed_activities_cache = completed;
             }
         }
+        if refresh_codex_progress {
+            // Soft-fail: collection / codex maps are large and change slowly.
+            if let Ok(collection) = read_collection(process, code, root, player) {
+                *collection_cache = collection;
+            }
+            if let Ok(units) = read_codex_units(process, code, root, player) {
+                *codex_units_cache = units;
+            }
+        }
         let currencies = read_currencies(process, code, root, player, hero);
         let currency_counters = read_currency_counters(process, code, root, player);
         let instance = read_instance_context(process, code, hero);
@@ -5170,6 +5584,8 @@ mod windows_bridge {
             ui,
             completed_elements: completed_elements_cache.clone(),
             completed_activities: completed_activities_cache.clone(),
+            collection: collection_cache.clone(),
+            codex_units: codex_units_cache.clone(),
         })
     }
 
@@ -5332,6 +5748,8 @@ mod windows_bridge {
         let mut party_gauge_cache = Vec::new();
         let mut completed_elements_cache = Vec::new();
         let mut completed_activities_cache = Vec::new();
+        let mut collection_cache = CollectionSample::default();
+        let mut codex_units_cache: Vec<(String, CodexUnitSample)> = Vec::new();
         let mut observed_dps = ObservedDps::new();
         let mut last_good_player_name = String::new();
         let mut last_good_player_uid = String::new();
@@ -5358,6 +5776,8 @@ mod windows_bridge {
                         party_gauge_cache.clear();
                         completed_elements_cache.clear();
                         completed_activities_cache.clear();
+                        collection_cache = CollectionSample::default();
+                        codex_units_cache.clear();
                         observed_dps = ObservedDps::new();
                         // Keep last_good_player_name across soft reattaches so
                         // teleport blips do not wipe the display name.
@@ -5382,9 +5802,12 @@ mod windows_bridge {
                     &mut hud_health_gauge,
                     &mut hud_shield_gauge,
                     sequence == 1 || sequence % 10 == 0,
+                    sequence == 1 || sequence % 30 == 0,
                     &mut party_gauge_cache,
                     &mut completed_elements_cache,
                     &mut completed_activities_cache,
+                    &mut collection_cache,
+                    &mut codex_units_cache,
                 );
                 profile.add(0, sample_started);
                 match sampled {
@@ -5560,6 +5983,50 @@ mod windows_bridge {
                             .map(|value| json_string(value))
                             .collect::<Vec<_>>()
                             .join(",");
+                        let collection_json = format!(
+                            "{{\"mounts\":[{}],\"gliders\":[{}],\"pets\":[{}],\"gears\":[{}]}}",
+                            sample
+                                .collection
+                                .mounts
+                                .iter()
+                                .map(|value| json_string(value))
+                                .collect::<Vec<_>>()
+                                .join(","),
+                            sample
+                                .collection
+                                .gliders
+                                .iter()
+                                .map(|value| json_string(value))
+                                .collect::<Vec<_>>()
+                                .join(","),
+                            sample
+                                .collection
+                                .pets
+                                .iter()
+                                .map(|value| json_string(value))
+                                .collect::<Vec<_>>()
+                                .join(","),
+                            sample
+                                .collection
+                                .gears
+                                .iter()
+                                .map(|value| json_string(value))
+                                .collect::<Vec<_>>()
+                                .join(","),
+                        );
+                        let codex_units_json = sample
+                            .codex_units
+                            .iter()
+                            .map(|(unit_id, entry)| {
+                                format!(
+                                    "{}:{{\"kills\":{},\"rank\":{}}}",
+                                    json_string(unit_id),
+                                    entry.kills,
+                                    entry.rank,
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join(",");
                         let instance_json = format!(
                             "{{\"type\":{},\"map_id\":{},\"is_rift\":{},\"is_dungeon\":{},\"is_world_map\":{},\"activity_kind\":{}}}",
                             json_string(sample.instance.kind),
@@ -5614,7 +6081,7 @@ mod windows_bridge {
                             .join(",");
                         (
                             format!(
-                                "{{\"schema\":1,\"bridge_version\":\"{BRIDGE_VERSION}\",\"state\":\"connected\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"game_app_address\":\"0x{:x}\",\"player_address\":\"0x{:x}\",\"hero_address\":\"0x{:x}\",\"player\":{{\"name\":{},\"uid\":{},\"class\":{},\"level\":{},\"in_combat\":{},\"vitality\":{},\"health\":{},\"max_health\":{},\"health_regen\":{},\"shield\":{},\"shield_ratio\":{},\"shield_capacity\":{},\"shield_gauge_visible\":{},\"raw_shield\":{},\"shield_gauge_available\":{},\"special_energy\":{},\"special_energy_regen\":{},\"currencies\":[{currencies_json}],\"currency_counters\":{{{currency_counters_json}}}}},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}},\"rotation_z\":{},\"camera_yaw\":{camera_yaw_json},\"party\":[{}],\"enemies\":[{}],\"critters\":[{}],\"players\":[{}],\"interactibles\":[{}],\"instance\":{instance_json},\"time_of_day\":{time_of_day_json},\"ui\":{ui_json},\"completed_elements\":[{}],\"completed_activities\":[{}],\"dps\":{{\"mode\":\"observed_nearby\",\"fight_id\":{},\"current\":{},\"total\":{},\"elapsed\":{},\"in_combat\":{},\"damage_skills\":[{{\"skill\":\"Observed nearby damage\",\"total\":{},\"hits\":0,\"crits\":0,\"max\":0}}],\"healing_skills\":[]}}}}\n",
+                                "{{\"schema\":1,\"bridge_version\":\"{BRIDGE_VERSION}\",\"state\":\"connected\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"game_app_address\":\"0x{:x}\",\"player_address\":\"0x{:x}\",\"hero_address\":\"0x{:x}\",\"player\":{{\"name\":{},\"uid\":{},\"class\":{},\"level\":{},\"in_combat\":{},\"vitality\":{},\"health\":{},\"max_health\":{},\"health_regen\":{},\"shield\":{},\"shield_ratio\":{},\"shield_capacity\":{},\"shield_gauge_visible\":{},\"raw_shield\":{},\"shield_gauge_available\":{},\"special_energy\":{},\"special_energy_regen\":{},\"currencies\":[{currencies_json}],\"currency_counters\":{{{currency_counters_json}}}}},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}},\"rotation_z\":{},\"camera_yaw\":{camera_yaw_json},\"party\":[{}],\"enemies\":[{}],\"critters\":[{}],\"players\":[{}],\"interactibles\":[{}],\"instance\":{instance_json},\"time_of_day\":{time_of_day_json},\"ui\":{ui_json},\"completed_elements\":[{}],\"completed_activities\":[{}],\"collection\":{collection_json},\"codex_units\":{{{codex_units_json}}},\"dps\":{{\"mode\":\"observed_nearby\",\"fight_id\":{},\"current\":{},\"total\":{},\"elapsed\":{},\"in_combat\":{},\"damage_skills\":[{{\"skill\":\"Observed nearby damage\",\"total\":{},\"hits\":0,\"crits\":0,\"max\":0}}],\"healing_skills\":[]}}}}\n",
                                 sample.game_app,
                                 sample.player,
                                 sample.hero,

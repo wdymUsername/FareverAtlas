@@ -411,6 +411,12 @@ class DataHub(QtCore.QObject):
             "ui": ui,
             "completed_elements": payload.get("completed_elements", []),
             "completed_activities": payload.get("completed_activities", []),
+            "collection": payload.get("collection")
+            if isinstance(payload.get("collection"), dict)
+            else {},
+            "codex_units": payload.get("codex_units")
+            if isinstance(payload.get("codex_units"), dict)
+            else {},
             "player": {
                 "name": player_name,
                 "uid": native_player.get("uid"),
@@ -471,7 +477,9 @@ class DataHub(QtCore.QObject):
                 message = "Waiting for live player data"
         except FileNotFoundError:
             pass
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
+        except (OSError, ValueError, json.JSONDecodeError, SystemError) as exc:
+            # SystemError can appear when a prior Qt paint override left an
+            # exception set (Python 3.14); skip this tick instead of spamming.
             message = f"Live-state read error: {exc}"
 
         try:
