@@ -215,8 +215,10 @@ class SteamProfileCache(QtCore.QObject):
         self._inflight = False
         self._pending_ids: list[str] = []
         self._api_key = ""
-        # Pin the active QRunnable so its signals QObject is not GC'd mid-run.
+        # Keep strong refs until finished: QRunnable auto-delete + unparented
+        # signal QObjects are otherwise GC'd before emit (PySide).
         self._worker: _SteamSummariesWorker | None = None
+        self._worker_signals: _SteamWorkerSignals | None = None
         self._load_all()
 
     def set_api_key(self, key: object) -> None:
@@ -295,13 +297,19 @@ class SteamProfileCache(QtCore.QObject):
         batch = self._pending_ids[:100]
         self._pending_ids = self._pending_ids[100:]
         self._inflight = True
-        worker = _SteamSummariesWorker(self._api_key, batch, self.cache_dir)
+        signals = _SteamWorkerSignals(self)
+        worker = _SteamSummariesWorker(self._api_key, batch, self.cache_dir, signals)
         self._worker = worker
-        worker.signals.finished.connect(self._on_worker_finished)
+        self._worker_signals = signals
+        signals.finished.connect(self._on_worker_finished)
         QtCore.QThreadPool.globalInstance().start(worker)
 
     def _on_worker_finished(self, summaries: object) -> None:
+        signals = self._worker_signals
         self._worker = None
+        self._worker_signals = None
+        if signals is not None:
+            signals.deleteLater()
         self._inflight = False
         changed = False
         if isinstance(summaries, dict):
@@ -348,15 +356,34 @@ class _SteamWorkerSignals(QtCore.QObject):
     finished = QtCore.Signal(object)
 
 
+def _emit_finished(signals: _SteamWorkerSignals | None, result: object) -> None:
+    """Emit finished if the signal QObject still exists (reload/GC safe)."""
+    if signals is None:
+        return
+    try:
+        signals.finished.emit(result)
+    except RuntimeError:
+        # "Signal source has been deleted" when the cache was torn down mid-run.
+        return
+
+
 class _SteamSummariesWorker(QtCore.QRunnable):
-    def __init__(self, api_key: str, steamids: list[str], cache_dir: Path) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        steamids: list[str],
+        cache_dir: Path,
+        signals: _SteamWorkerSignals,
+    ) -> None:
         super().__init__()
         self.api_key = api_key
         self.steamids = steamids
         self.cache_dir = cache_dir
-        self.signals = _SteamWorkerSignals()
+        self.signals = signals
 
     def run(self) -> None:  # noqa: N802
+        # Local pin for the duration of run(); cache also parents/pins signals.
+        signals = self.signals
         result: dict[str, dict[str, Any]] = {}
         try:
             query = urllib.parse.urlencode(
@@ -416,7 +443,7 @@ class _SteamSummariesWorker(QtCore.QRunnable):
                     self._download_avatar(str(avatar_url), folder / "avatar.jpg")
                 result[sid] = summary
         finally:
-            self.signals.finished.emit(result)
+            _emit_finished(signals, result)
 
     @staticmethod
     def _download_avatar(url: str, path: Path) -> None:
@@ -447,8 +474,10 @@ class SteamFriendListCache(QtCore.QObject):
         self._inflight = False
         self._api_key = ""
         self._steamid64 = ""
-        # Pin the active QRunnable so its signals QObject is not GC'd mid-run.
+        # Keep strong refs until finished: QRunnable auto-delete + unparented
+        # signal QObjects are otherwise GC'd before emit (PySide).
         self._worker: _SteamFriendListWorker | None = None
+        self._worker_signals: _SteamWorkerSignals | None = None
         self._load()
 
     def set_api_key(self, key: object) -> None:
@@ -484,13 +513,19 @@ class SteamFriendListCache(QtCore.QObject):
         if self._inflight:
             return
         self._inflight = True
-        worker = _SteamFriendListWorker(self._api_key, self._steamid64)
+        signals = _SteamWorkerSignals(self)
+        worker = _SteamFriendListWorker(self._api_key, self._steamid64, signals)
         self._worker = worker
-        worker.signals.finished.connect(self._on_worker_finished)
+        self._worker_signals = signals
+        signals.finished.connect(self._on_worker_finished)
         QtCore.QThreadPool.globalInstance().start(worker)
 
     def _on_worker_finished(self, payload: object) -> None:
+        signals = self._worker_signals
         self._worker = None
+        self._worker_signals = None
+        if signals is not None:
+            signals.deleteLater()
         self._inflight = False
         if not isinstance(payload, dict):
             return
@@ -553,13 +588,19 @@ class SteamFriendListCache(QtCore.QObject):
 
 
 class _SteamFriendListWorker(QtCore.QRunnable):
-    def __init__(self, api_key: str, steamid64: str) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        steamid64: str,
+        signals: _SteamWorkerSignals,
+    ) -> None:
         super().__init__()
         self.api_key = api_key
         self.steamid64 = steamid64
-        self.signals = _SteamWorkerSignals()
+        self.signals = signals
 
     def run(self) -> None:  # noqa: N802
+        signals = self.signals
         result: dict[str, Any] = {"ok": False, "ids": [], "fetched_at": 0}
         try:
             query = urllib.parse.urlencode(
@@ -602,4 +643,4 @@ class _SteamFriendListWorker(QtCore.QRunnable):
                 "steamid64": self.steamid64,
             }
         finally:
-            self.signals.finished.emit(result)
+            _emit_finished(signals, result)

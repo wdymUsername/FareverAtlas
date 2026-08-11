@@ -242,6 +242,9 @@ def reload_ui(controller: Controller) -> None:
             else:
                 old_overlay.close()
             old_overlay.deleteLater()
+        # Let in-flight Steam QRunnables finish so their signal QObjects are
+        # not deleted mid-emit when the old players page caches go away.
+        QtCore.QThreadPool.globalInstance().waitForDone(3_000)
         old_map.deleteLater()
         old_combat.deleteLater()
         app.processEvents(QtCore.QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)

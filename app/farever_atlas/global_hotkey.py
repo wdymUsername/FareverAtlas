@@ -9,6 +9,26 @@ from typing import Callable
 from PySide6 import QtCore, QtGui
 
 
+def _flag_int(value: object) -> int:
+    """Convert Qt enums/flags to int (PySide6 + Python 3.14 safe)."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return int(value)
+    raw = getattr(value, "value", None)
+    if isinstance(raw, int) and not isinstance(raw, bool):
+        return int(raw)
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except TypeError as exc:
+        raise TypeError(f"cannot convert {type(value).__name__} to int") from exc
+
+
+# int() / Flag mixing is broken on Python 3.14; keep mask constants as ints.
+_MOD_SHIFT = _flag_int(QtCore.Qt.KeyboardModifier.ShiftModifier)
+_MOD_CTRL = _flag_int(QtCore.Qt.KeyboardModifier.ControlModifier)
+_MOD_ALT = _flag_int(QtCore.Qt.KeyboardModifier.AltModifier)
+_MOD_META = _flag_int(QtCore.Qt.KeyboardModifier.MetaModifier)
+
+
 def _combo_from_sequence(sequence: QtGui.QKeySequence) -> tuple[int, int] | None:
     """Return (qt_key, qt_modifiers) for the first chord, or None if empty."""
     if sequence.isEmpty():
@@ -24,14 +44,15 @@ def _combo_from_sequence(sequence: QtGui.QKeySequence) -> tuple[int, int] | None
             return int(key) & 0x01FFFFFF, int(key) & ~0x01FFFFFF
         return None
     if hasattr(combo, "key"):
-        return int(combo.key()), int(combo.keyboardModifiers())
+        # KeyboardModifier is a Flag; int(flag) raises TypeError on Py 3.14.
+        return _flag_int(combo.key()), _flag_int(combo.keyboardModifiers())
     # Fallback: parse toString
     text = sequence.toString(QtGui.QKeySequence.SequenceFormat.PortableText)
     parsed = QtGui.QKeySequence(text)
     if parsed.isEmpty():
         return None
     combo = parsed[0]
-    return int(combo.key()), int(combo.keyboardModifiers())
+    return _flag_int(combo.key()), _flag_int(combo.keyboardModifiers())
 
 
 class GlobalHotkey(QtCore.QObject):
@@ -102,13 +123,13 @@ class _WindowsHotkey(_HotkeyBackend):
         if vk is None:
             return False
         mods = 0
-        if self._qt_mods & QtCore.Qt.KeyboardModifier.ShiftModifier:
+        if self._qt_mods & _MOD_SHIFT:
             mods |= 0x0004  # MOD_SHIFT
-        if self._qt_mods & QtCore.Qt.KeyboardModifier.ControlModifier:
+        if self._qt_mods & _MOD_CTRL:
             mods |= 0x0002  # MOD_CONTROL
-        if self._qt_mods & QtCore.Qt.KeyboardModifier.AltModifier:
+        if self._qt_mods & _MOD_ALT:
             mods |= 0x0001  # MOD_ALT
-        if self._qt_mods & QtCore.Qt.KeyboardModifier.MetaModifier:
+        if self._qt_mods & _MOD_META:
             mods |= 0x0008  # MOD_WIN
         mods |= 0x4000  # MOD_NOREPEAT
         if not user32.RegisterHotKey(None, self._HOTKEY_ID, mods, vk):
@@ -262,13 +283,13 @@ class _X11Hotkey(_HotkeyBackend):
             xlib.XCloseDisplay(dpy)
             return False
         x_mods = 0
-        if self._qt_mods & QtCore.Qt.KeyboardModifier.ShiftModifier:
+        if self._qt_mods & _MOD_SHIFT:
             x_mods |= 1 << 0  # ShiftMask
-        if self._qt_mods & QtCore.Qt.KeyboardModifier.ControlModifier:
+        if self._qt_mods & _MOD_CTRL:
             x_mods |= 1 << 2  # ControlMask
-        if self._qt_mods & QtCore.Qt.KeyboardModifier.AltModifier:
+        if self._qt_mods & _MOD_ALT:
             x_mods |= 1 << 3  # Mod1Mask
-        if self._qt_mods & QtCore.Qt.KeyboardModifier.MetaModifier:
+        if self._qt_mods & _MOD_META:
             x_mods |= 1 << 6  # Mod4Mask
         GrabModeAsync = 1
         # Grab with and without NumLock/CapsLock (Mod2/Lock) so Insert still fires.

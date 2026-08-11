@@ -166,8 +166,12 @@ class PlayersPageMixin:
         self._players_last_focus_key: str | None = None
 
         self._friend_store = FriendStore()
-        self._steam_cache = SteamProfileCache(FRIENDS_CACHE_DIR)
-        self._steam_friend_list = SteamFriendListCache(FRIENDS_CACHE_DIR)
+        self._steam_cache = SteamProfileCache(
+            FRIENDS_CACHE_DIR, parent=self.players_body
+        )
+        self._steam_friend_list = SteamFriendListCache(
+            FRIENDS_CACHE_DIR, parent=self.players_body
+        )
         self._steam_cache.set_api_key(
             self._settings.value("steam/web_api_key", "") or ""
         )
