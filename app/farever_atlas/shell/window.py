@@ -70,6 +70,7 @@ class AtlasWindow(
     combatMeterRequested = QtCore.Signal()
     onlineModeChanged = QtCore.Signal(bool)
     uiReloadRequested = QtCore.Signal()
+    mapViewChanged = QtCore.Signal()
     PARTY_SLOT_COUNT = 3
 
     # (visible radius in metres, displayed zoom multiplier).
@@ -2045,6 +2046,7 @@ class AtlasWindow(
 
     def _pan_state_changed(self, panned: bool) -> None:
         self.recenter.setEnabled(panned or self.radar.is_following())
+        self.mapViewChanged.emit()
 
     def _apply_user_settings(self) -> None:
         always_on_top = self._setting_bool("app/always_on_top", False)
@@ -2301,6 +2303,7 @@ class AtlasWindow(
         )
         self._settings.setValue("map/zoom_radius", radius)
         self.radar.update()
+        self.mapViewChanged.emit()
 
     def _update_party_status(self, members: list[dict[str, Any]]) -> None:
         show_distance = self._setting_bool("party/show_distance", True)

@@ -166,6 +166,10 @@ def apply_settings_defaults(settings: QtCore.QSettings) -> None:
     settings.setValue("map/show_game_time", True)
     settings.setValue("map/show_rift_timer", True)
     settings.setValue("map/show_dps_overlay", True)
+    settings.setValue("map/overlay_enabled", False)
+    settings.setValue("map/overlay_unlocked", False)
+    settings.setValue("map/overlay_opacity", 100)
+    settings.setValue("map/overlay_zoom_radius", 200)
     for key, (default, _minimum, _maximum) in CULL_SETTING_KEYS.items():
         settings.setValue(key, default)
     settings.setValue("party/show_empty_slots", True)
@@ -249,6 +253,18 @@ class SettingsPanel(QtCore.QObject):
             self.show_route.setChecked(
                 _as_bool(self._settings.value("map/show_route_line"), True)
             )
+            self.overlay_enabled.setChecked(
+                _as_bool(self._settings.value("map/overlay_enabled"), False)
+            )
+            self.overlay_unlocked.setChecked(
+                _as_bool(self._settings.value("map/overlay_unlocked"), False)
+            )
+            opacity = max(
+                5,
+                min(100, _as_int(self._settings.value("map/overlay_opacity"), 100)),
+            )
+            self.overlay_opacity.setValue(opacity)
+            self._sync_overlay_controls_enabled()
             self.fog_enabled.setChecked(
                 _as_bool(self._settings.value("map/fog_enabled"), True)
             )
@@ -436,6 +452,17 @@ class SettingsPanel(QtCore.QObject):
     def _emit_changed(self) -> None:
         if not self._suppress:
             self.changed.emit()
+
+    def _sync_overlay_controls_enabled(self, *_args: object) -> None:
+        enabled = bool(self.overlay_enabled.isChecked())
+        self.overlay_unlocked.setEnabled(enabled)
+        self.overlay_opacity.setEnabled(enabled)
+        if not enabled and self.overlay_unlocked.isChecked():
+            blocked = self.overlay_unlocked.blockSignals(True)
+            self.overlay_unlocked.setChecked(False)
+            self.overlay_unlocked.blockSignals(blocked)
+            if not self._suppress:
+                self._settings.setValue("map/overlay_unlocked", False)
 
     def _bind_bool(
         self,
@@ -779,6 +806,32 @@ class SettingsPanel(QtCore.QObject):
             "Waypoint route line",
             self.show_route,
             "Lines between waypoints.",
+        )
+        self.overlay_enabled = SettingsToggle()
+        self._bind_bool(self.overlay_enabled, "map/overlay_enabled")
+        self.overlay_enabled.toggled.connect(self._sync_overlay_controls_enabled)
+        self._add_setting(
+            form,
+            "Map overlay",
+            self.overlay_enabled,
+            "Always-on-top map mirror over the game (click-through).",
+        )
+        self.overlay_opacity = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.overlay_opacity.setRange(5, 100)
+        self.overlay_opacity.valueChanged.connect(self._on_overlay_opacity_changed)
+        self._add_setting(
+            form,
+            "Overlay opacity",
+            self.overlay_opacity,
+            "Overlay window transparency (5–100%). Use + / − on the overlay to zoom.",
+        )
+        self.overlay_unlocked = SettingsToggle()
+        self._bind_bool(self.overlay_unlocked, "map/overlay_unlocked")
+        self._add_setting(
+            form,
+            "Unlock overlay move/resize",
+            self.overlay_unlocked,
+            "Temporarily accepts mouse so you can drag or resize the overlay.",
         )
         layout.addWidget(display)
 
@@ -1215,6 +1268,11 @@ class SettingsPanel(QtCore.QObject):
         if self._suppress or not (0 <= index < len(ZOOM_CHOICES)):
             return
         self._set_int("map/zoom_radius", ZOOM_CHOICES[index][1])
+
+    def _on_overlay_opacity_changed(self, value: int) -> None:
+        if self._suppress:
+            return
+        self._set_int("map/overlay_opacity", max(5, min(100, int(value))))
 
     def _on_fog_tier_changed(self, index: int) -> None:
         if self._suppress or not (0 <= index < self.fog_max_tier.count()):
