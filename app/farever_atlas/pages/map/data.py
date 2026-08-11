@@ -1,4 +1,4 @@
-"""Map calibration, projection, texture loading, and discovery."""
+"""Map calibration, texture loading, and discovery."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from PySide6 import QtCore, QtGui
 from ...config import (
     ACTIVITY_ICON_ATLAS_RELATIVE_PATH,
     DEFAULT_MAP_RELATIVE_PATH,
+    GAME_ACTIVITY_ICON_ATLAS_RELATIVE_PATH,
     IMAGE_SUFFIXES,
     LOOSE_KIND_ICON_FILES,
     NATIVE_CALIBRATION_RELATIVE_PATH,
@@ -177,64 +178,6 @@ class MapCalibration:
         return calibration if calibration.valid() else None
 
 
-@dataclass(frozen=True)
-class MapProjection:
-    """Map fixed Farever world X/Y onto the source texture.
-
-    World-space display directions are user-verified: -X west, +X east, -Y
-    north, +Y south.  ``u_sign`` and ``v_sign`` describe only how the shipped
-    PNG stores those axes.  The rendered crop is mirrored when necessary so
-    the Atlas display always remains east-right and south-down.
-    """
-
-    u_sign: float = -1.0
-    v_sign: float = -1.0
-    offset_mode: str = "post"
-    score: float = 0.0
-    inside_ratio: float = 0.0
-
-    @staticmethod
-    def _number(obj: dict[str, Any], key: str) -> float | None:
-        value = safe_float(obj.get(key), math.nan)
-        return value if math.isfinite(value) else None
-
-    @staticmethod
-    def _apply(value: float, scale: float, offset: float, mode: str) -> float:
-        if mode == "pre":
-            return scale * (value + offset)
-        return scale * value + offset
-
-    def object_to_pixel(
-        self,
-        obj: dict[str, Any],
-        calibration: MapCalibration,
-    ) -> tuple[float, float] | None:
-        world_x = self._number(obj, "x")
-        world_y = self._number(obj, "y")
-        if world_x is None or world_y is None:
-            return None
-        return (
-            self._apply(
-                world_x * self.u_sign,
-                calibration.scale_x,
-                calibration.offset_x,
-                self.offset_mode,
-            ),
-            self._apply(
-                world_y * self.v_sign,
-                calibration.scale_y,
-                calibration.offset_y,
-                self.offset_mode,
-            ),
-        )
-
-    @property
-    def label(self) -> str:
-        source_x = "+X" if self.u_sign > 0 else "-X"
-        source_y = "+Y" if self.v_sign > 0 else "-Y"
-        return f"source {source_x}/{source_y}, {self.offset_mode}-scale offset"
-
-
 @dataclass
 class MapTexture:
     image: QtGui.QImage
@@ -252,14 +195,6 @@ class MapTexture:
     # Half-size copies of `image`, keyed by halving count. Zoomed-out views
     # otherwise resample the full 31-megapixel source on every frame.
     _mip_levels: dict[int, QtGui.QImage] = field(default_factory=dict, repr=False)
-
-    def ensure_dynamic_calibration(
-        self,
-        pois: list[dict[str, Any]],
-        state: dict[str, Any],
-    ) -> None:
-        del pois, state
-        return
 
     def _logical_to_preview(self, u: float, v: float) -> tuple[float, float]:
         width = self.logical_width if self.logical_width > 1.0 else float(self.image.width())
@@ -297,32 +232,6 @@ class MapTexture:
             (u - calibration.offset_x) / calibration.scale_x,
             (raw_v - calibration.offset_y) / calibration.scale_y,
         )
-
-    def render_view(
-        self,
-        view_center: dict[str, Any],
-        pixels_per_metre: float,
-        pixel_width: int,
-        pixel_height: int,
-    ) -> QtGui.QImage | None:
-        """Allocate a cropped view image (prefer draw_view for paint hot paths)."""
-        geometry = self._view_geometry(
-            view_center, pixels_per_metre, pixel_width, pixel_height
-        )
-        if geometry is None:
-            return None
-        source_preview, visible_source, target = geometry
-        view = QtGui.QImage(
-            pixel_width,
-            pixel_height,
-            QtGui.QImage.Format.Format_ARGB32_Premultiplied,
-        )
-        view.fill(QtGui.QColor("#10151b"))
-        painter = QtGui.QPainter(view)
-        painter.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform)
-        painter.drawImage(target, self.image, visible_source)
-        painter.end()
-        return view
 
     def _mip_level_for(self, pixels_per_metre: float) -> int:
         """How many halvings the source can take before it starts to blur.
@@ -884,9 +793,9 @@ def load_map_texture(
 
     activity_icon_atlas: QtGui.QImage | None = None
     activity_icon_atlas_source = "unavailable"
-    atlas_path = discover_project_asset(ACTIVITY_ICON_ATLAS_RELATIVE_PATH.name)
+    atlas_path = discover_project_asset(ACTIVITY_ICON_ATLAS_RELATIVE_PATH)
     if atlas_path is None and game_dir is not None:
-        installed_atlas_path = game_dir / ACTIVITY_ICON_ATLAS_RELATIVE_PATH
+        installed_atlas_path = game_dir / GAME_ACTIVITY_ICON_ATLAS_RELATIVE_PATH
         atlas_path = installed_atlas_path if installed_atlas_path.is_file() else None
     if atlas_path is not None:
         if atlas_path.is_file():

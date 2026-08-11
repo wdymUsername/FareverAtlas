@@ -108,10 +108,21 @@ ensure_ui_fonts() {
         "$python" -m farever_atlas.fonts
 }
 
+stamp_version() {
+    local python="${PYTHON:-python3}"
+    if [[ -x "$ROOT/.venv/bin/python" ]]; then
+        python="$ROOT/.venv/bin/python"
+    fi
+    echo "Stamping Nightly version from local git..."
+    PYTHONPATH="$ROOT/app${PYTHONPATH:+:$PYTHONPATH}" \
+        "$python" -m farever_atlas.versioning --stamp
+}
+
 main() {
     need_cmd wine
     need_cmd wineboot
     ensure_bridge
+    stamp_version
     ensure_ui_fonts
     ensure_windows_python
 

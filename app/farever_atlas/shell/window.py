@@ -9,8 +9,15 @@ from typing import Any
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from ..config import (
-    LOOSE_KIND_ICON_FILES,
     ASSET_ROOT,
+    LOOSE_KIND_ICON_FILES,
+    UI_CLOSE_RELATIVE_PATH,
+    UI_FOG_RELATIVE_PATH,
+    UI_HELP_HOVER_RELATIVE_PATH,
+    UI_HELP_RELATIVE_PATH,
+    UI_LEVEL_MINUS_RELATIVE_PATH,
+    UI_LEVEL_PLUS_RELATIVE_PATH,
+    UI_MAP_RECENTER_RELATIVE_PATH,
     discover_project_asset,
     fmt_hp,
     fmt_number,
@@ -46,7 +53,7 @@ from ..waypoints import (
     WaypointManagerOverlay,
     WaypointStore,
 )
-from ..window_base import PersistentWindow
+from ..window_base import PersistentWindow, apply_always_on_top
 from .footer import build_footer
 from .navigation import MainNavigationOverlay
 from .title_bar import TitleBarMixin
@@ -63,6 +70,7 @@ class AtlasWindow(
     combatMeterRequested = QtCore.Signal()
     onlineModeChanged = QtCore.Signal(bool)
     uiReloadRequested = QtCore.Signal()
+    mapViewChanged = QtCore.Signal()
     PARTY_SLOT_COUNT = 3
 
     # (visible radius in metres, displayed zoom multiplier).
@@ -129,7 +137,9 @@ class AtlasWindow(
         saved_gather_kind = str(
             self._settings.value("map/gather_nav_kind", "plant") or "plant"
         ).strip().lower()
-        if saved_gather_kind in {"plant", "ore", "chest", "red_orb", "pet"}:
+        if saved_gather_kind == "pet":
+            saved_gather_kind = "critter"
+        if saved_gather_kind in {"plant", "ore", "chest", "red_orb", "critter"}:
             self.gather_nav_kind = saved_gather_kind
         saved_gather_type = str(
             self._settings.value("map/gather_nav_type", "") or ""
@@ -143,12 +153,18 @@ class AtlasWindow(
         ).strip().lower()
         if saved_gather_size in {"", "small", "medium", "large"}:
             self.gather_nav_size = saved_gather_size
+        saved_gather_collected = str(
+            self._settings.value("map/gather_nav_collected", "yes") or "yes"
+        ).strip().lower()
+        if saved_gather_collected in {"yes", "no"}:
+            self.gather_nav_collected = saved_gather_collected
         self.waypoint_manager_overlay: WaypointManagerOverlay | None = None
         self.latest_snapshot = Snapshot({}, [], False, "Waiting for bridge output", None)
         self._connection_signature: tuple[object, ...] | None = None
         self._view_mode_signature: tuple[object, ...] | None = None
         self._diagnostic_text: str | None = None
         self._party_status_signature: tuple[object, ...] | None = None
+        self._party_status_wanted = False
         cached_x = safe_float(self._settings.value("cache/player_x"), math.nan)
         cached_y = safe_float(self._settings.value("cache/player_y"), math.nan)
         self._cached_map_center: tuple[float, float] | None = (
@@ -294,7 +310,7 @@ class AtlasWindow(
         self.recenter.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.recenter.setFixedSize(28, 28)
         self.recenter.setIconSize(QtCore.QSize(16, 16))
-        recenter_icon = QtGui.QIcon(str(ASSET_ROOT / "map_recenter.svg"))
+        recenter_icon = QtGui.QIcon(str(ASSET_ROOT / UI_MAP_RECENTER_RELATIVE_PATH))
         if not recenter_icon.isNull():
             self.recenter.setIcon(recenter_icon)
 
@@ -319,6 +335,7 @@ class AtlasWindow(
             | QtCore.Qt.AlignmentFlag.AlignVCenter,
         )
         toolbar_layout.addStretch(1)
+        self.map_toolbar.installEventFilter(self)
 
         self.currency_status = CurrencyStatusWidget()
         toolbar_layout.addWidget(
@@ -348,7 +365,7 @@ class AtlasWindow(
         self.zoom_in.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.zoom_in.setFixedSize(28, 28)
         self.zoom_in.setIconSize(QtCore.QSize(14, 14))
-        zoom_in_icon = QtGui.QIcon(str(ASSET_ROOT / "level_plus.svg"))
+        zoom_in_icon = QtGui.QIcon(str(ASSET_ROOT / UI_LEVEL_PLUS_RELATIVE_PATH))
         if not zoom_in_icon.isNull():
             self.zoom_in.setIcon(zoom_in_icon)
 
@@ -360,7 +377,7 @@ class AtlasWindow(
         self.zoom_out.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.zoom_out.setFixedSize(28, 28)
         self.zoom_out.setIconSize(QtCore.QSize(14, 14))
-        zoom_out_icon = QtGui.QIcon(str(ASSET_ROOT / "level_minus.svg"))
+        zoom_out_icon = QtGui.QIcon(str(ASSET_ROOT / UI_LEVEL_MINUS_RELATIVE_PATH))
         if not zoom_out_icon.isNull():
             self.zoom_out.setIcon(zoom_out_icon)
 
@@ -455,8 +472,8 @@ class AtlasWindow(
         self.map_help_button = footer.findChild(
             QtWidgets.QToolButton, "mapHelpButton"
         )
-        self.help_icon_normal = QtGui.QIcon(str(ASSET_ROOT / "help.svg"))
-        self.help_icon_hover = QtGui.QIcon(str(ASSET_ROOT / "help_hover.svg"))
+        self.help_icon_normal = QtGui.QIcon(str(ASSET_ROOT / UI_HELP_RELATIVE_PATH))
+        self.help_icon_hover = QtGui.QIcon(str(ASSET_ROOT / UI_HELP_HOVER_RELATIVE_PATH))
         self.map_help_button.setIcon(self.help_icon_normal)
         self.map_help_button.setIconSize(QtCore.QSize(18, 18))
         self.map_help_button.installEventFilter(self)
@@ -584,7 +601,6 @@ class AtlasWindow(
             button.toggled.connect(self._poi_filter_changed)
         for button in self.loot_filters.values():
             button.toggled.connect(self._controls_changed)
-        self.sidebar_toggle.clicked.connect(self._toggle_sidebar)
         self.custom_add_current.clicked.connect(self._add_current_custom_waypoint)
         self.custom_manage.clicked.connect(self._open_waypoint_manager)
         self.dps_overlay_open.clicked.connect(self.combatMeterRequested)
@@ -683,6 +699,18 @@ class AtlasWindow(
     def _set_active_page(self, page: str, *, persist: bool = True) -> None:
         if page not in getattr(self, "pages", {}):
             page = MapPage.PAGE_ID
+        if page in {PlannerPage.PAGE_ID, CodexPage.PAGE_ID}:
+            if getattr(self, "dev_mode", False):
+                self.show_toast("Feature is work in progress!", kind="info")
+            else:
+                self.show_toast("Coming soon!", kind="info")
+                current = getattr(self, "_active_page_id", MapPage.PAGE_ID)
+                if hasattr(self, "map_page_button"):
+                    self.map_page_button.setChecked(current == MapPage.PAGE_ID)
+                    self.planner_page_button.setChecked(False)
+                    self.codex_page_button.setChecked(False)
+                    self.players_page_button.setChecked(current == PlayersPage.PAGE_ID)
+                return
         previous = getattr(self, "_active_page_id", None)
         if previous in getattr(self, "pages", {}) and previous != page:
             self.pages[previous].on_deactivated()
@@ -786,6 +814,9 @@ class AtlasWindow(
                     handle = self.windowHandle()
                     if handle is not None and handle.startSystemMove():
                         return True
+        if watched is getattr(self, "map_toolbar", None):
+            if event.type() == QtCore.QEvent.Type.Resize:
+                self._sync_party_status_visibility()
         if watched is getattr(self, "radar", None):
             if event.type() == QtCore.QEvent.Type.Resize:
                 QtCore.QTimer.singleShot(0, self._position_map_overlays)
@@ -921,36 +952,21 @@ class AtlasWindow(
 
     def _init_map_fow_edit_overlay(self) -> None:
         """Dev-only FOW / zone edit controls (separate from zoom overlay)."""
-        icon_path = discover_project_asset("fog.svg") or (ASSET_ROOT / "fog.svg")
+        icon_path = discover_project_asset(UI_FOG_RELATIVE_PATH) or (
+            ASSET_ROOT / UI_FOG_RELATIVE_PATH
+        )
         fow_icon = (
             QtGui.QIcon(str(icon_path)) if icon_path.is_file() else QtGui.QIcon()
         )
 
-        # Collapsed: bare FAB on the radar (no panel chrome / margins).
-        self.fow_tools_fab = QtWidgets.QToolButton(self.radar)
-        self.fow_tools_fab.setObjectName("fowToolsFab")
-        self.fow_tools_fab.setToolTip("Open FOW TOOLS")
-        self.fow_tools_fab.setFixedSize(28, 28)
-        self.fow_tools_fab.setIconSize(QtCore.QSize(16, 16))
-        self.fow_tools_fab.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        self.fow_tools_fab.setAutoRaise(False)
-        self.fow_tools_fab.setAttribute(
-            QtCore.Qt.WidgetAttribute.WA_NoMousePropagation, True
-        )
-        if not fow_icon.isNull():
-            self.fow_tools_fab.setIcon(fow_icon)
-        else:
-            self.fow_tools_fab.setText("FOW")
-        self.fow_tools_fab.clicked.connect(self._on_fow_tools_fab_clicked)
-
-        # Expanded panel only — never used as the collapsed chrome.
+        # One panel for both states. Open header is icon · title · close.
         self.map_fow_edit_overlay = QtWidgets.QWidget(self.radar)
         self.map_fow_edit_overlay.setObjectName("mapFowEditOverlay")
         self.map_fow_edit_overlay.setAttribute(
             QtCore.Qt.WidgetAttribute.WA_NoMousePropagation, True
         )
         layout = QtWidgets.QVBoxLayout(self.map_fow_edit_overlay)
-        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setContentsMargins(7, 7, 7, 7)
         layout.setSpacing(6)
 
         self.fow_tools_header = QtWidgets.QWidget()
@@ -959,16 +975,33 @@ class AtlasWindow(
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(6)
 
-        self.fow_tools_header_icon = QtWidgets.QLabel()
+        self.fow_tools_header_icon = QtWidgets.QToolButton()
         self.fow_tools_header_icon.setObjectName("fowToolsHeaderIcon")
-        self.fow_tools_header_icon.setFixedSize(18, 18)
-        self.fow_tools_header_icon.setAttribute(
-            QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents
+        self.fow_tools_header_icon.setStyleSheet(
+            "QToolButton {"
+            " min-width: 18px; max-width: 18px;"
+            " min-height: 18px; max-height: 18px;"
+            " padding: 0px; margin: 0px; border: none;"
+            " background: transparent;"
+            "}"
+            "QToolButton:hover {"
+            " background: #202b36; border-radius: 4px;"
+            "}"
         )
+        self.fow_tools_header_icon.setFixedSize(18, 18)
+        self.fow_tools_header_icon.setIconSize(QtCore.QSize(16, 16))
+        self.fow_tools_header_icon.setToolButtonStyle(
+            QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly
+        )
+        self.fow_tools_header_icon.setAutoRaise(True)
+        self.fow_tools_header_icon.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        self.fow_tools_header_icon.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.fow_tools_header_icon.setToolTip("Open FOW TOOLS")
         if not fow_icon.isNull():
-            self.fow_tools_header_icon.setPixmap(
-                fow_icon.pixmap(QtCore.QSize(16, 16))
-            )
+            self.fow_tools_header_icon.setIcon(fow_icon)
+        else:
+            self.fow_tools_header_icon.setText("FOW")
+        self.fow_tools_header_icon.clicked.connect(self._on_fow_tools_icon_clicked)
         header_layout.addWidget(
             self.fow_tools_header_icon, 0, QtCore.Qt.AlignmentFlag.AlignVCenter
         )
@@ -981,15 +1014,39 @@ class AtlasWindow(
         header_layout.addWidget(
             self.fow_tools_title, 0, QtCore.Qt.AlignmentFlag.AlignVCenter
         )
-        header_layout.addStretch(1)
+
+        self.fow_tools_header_spacer = QtWidgets.QWidget()
+        self.fow_tools_header_spacer.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
+        header_layout.addWidget(self.fow_tools_header_spacer, 1)
 
         self.fow_tools_close = QtWidgets.QToolButton()
         self.fow_tools_close.setObjectName("fowToolsCloseButton")
+        self.fow_tools_close.setStyleSheet(
+            "QToolButton {"
+            " min-width: 18px; max-width: 18px;"
+            " min-height: 18px; max-height: 18px;"
+            " padding: 0px; margin: 0px; border: none;"
+            " background: transparent;"
+            "}"
+            "QToolButton:hover {"
+            " background: #202b36; border-radius: 4px;"
+            "}"
+        )
         self.fow_tools_close.setToolTip("Close FOW TOOLS")
-        self.fow_tools_close.setFixedSize(22, 22)
+        self.fow_tools_close.setFixedSize(18, 18)
         self.fow_tools_close.setIconSize(QtCore.QSize(12, 12))
+        self.fow_tools_close.setToolButtonStyle(
+            QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly
+        )
+        self.fow_tools_close.setAutoRaise(True)
+        self.fow_tools_close.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         self.fow_tools_close.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        close_icon = discover_project_asset("close.svg") or (ASSET_ROOT / "close.svg")
+        close_icon = discover_project_asset(UI_CLOSE_RELATIVE_PATH) or (
+            ASSET_ROOT / UI_CLOSE_RELATIVE_PATH
+        )
         if close_icon.is_file():
             self.fow_tools_close.setIcon(QtGui.QIcon(str(close_icon)))
         else:
@@ -1261,17 +1318,19 @@ class AtlasWindow(
 
         layout.addWidget(self.fow_tools_body)
 
-        self.fow_tools_fab_size = 28
+        self.fow_tools_collapsed_size = 32
         self.fow_tools_expanded_width = 188
-        self.map_fow_edit_overlay.setFixedWidth(self.fow_tools_expanded_width)
-        self.map_fow_edit_overlay.adjustSize()
         self.fow_tools_collapsed = True
-        self.map_fow_edit_overlay.hide()
-        self.fow_tools_fab.show()
-        self.fow_tools_fab.raise_()
+        self.fow_tools_title.hide()
+        self.fow_tools_close.hide()
+        self.fow_tools_header_spacer.hide()
+        self.fow_tools_body.hide()
+        self._apply_fow_tools_collapsed_chrome()
+        self.map_fow_edit_overlay.show()
+        self.map_fow_edit_overlay.raise_()
         self.fow_tools_close.clicked.connect(self._close_fow_tools)
 
-    def _on_fow_tools_fab_clicked(self) -> None:
+    def _on_fow_tools_icon_clicked(self) -> None:
         if getattr(self, "fow_tools_collapsed", True):
             self._set_fow_tools_collapsed(False)
 
@@ -1279,29 +1338,54 @@ class AtlasWindow(
         if not getattr(self, "fow_tools_collapsed", True):
             self._set_fow_tools_collapsed(True)
 
+    def _apply_fow_tools_collapsed_chrome(self) -> None:
+        collapsed = bool(getattr(self, "fow_tools_collapsed", True))
+        self.fow_tools_title.setVisible(not collapsed)
+        self.fow_tools_close.setVisible(not collapsed)
+        self.fow_tools_header_spacer.setVisible(not collapsed)
+        self.fow_tools_body.setVisible(not collapsed)
+        self.fow_tools_header_icon.setToolTip(
+            "Open FOW TOOLS" if collapsed else "FOW TOOLS"
+        )
+        # Same inset collapsed/expanded (7+18+7) so the icon does not shift.
+        size = 32
+        self.fow_tools_collapsed_size = size
+        width = (
+            size
+            if collapsed
+            else int(getattr(self, "fow_tools_expanded_width", 188))
+        )
+        overlay = self.map_fow_edit_overlay
+        layout = overlay.layout()
+        header_layout = self.fow_tools_header.layout()
+        if layout is not None:
+            layout.setContentsMargins(7, 7, 7, 7)
+        if header_layout is not None:
+            header_layout.setContentsMargins(0, 0, 0, 0)
+        if collapsed:
+            self.fow_tools_header.setFixedSize(18, 18)
+            overlay.setFixedSize(size, size)
+        else:
+            self.fow_tools_header.setMinimumSize(0, 0)
+            self.fow_tools_header.setMaximumSize(16777215, 16777215)
+            self.fow_tools_header.setFixedHeight(18)
+            overlay.setFixedWidth(width)
+            overlay.setMinimumHeight(0)
+            overlay.setMaximumHeight(16777215)
+            overlay.adjustSize()
+
     def _set_fow_tools_collapsed(
         self,
         collapsed: bool,
         *,
         persist: bool = True,
     ) -> None:
-        if not hasattr(self, "map_fow_edit_overlay") or not hasattr(
-            self, "fow_tools_fab"
-        ):
+        if not hasattr(self, "map_fow_edit_overlay"):
             return
         self.fow_tools_collapsed = bool(collapsed)
-        if self.fow_tools_collapsed:
-            self.fow_tools_fab.show()
-            self.fow_tools_fab.raise_()
-            self.map_fow_edit_overlay.hide()
-        else:
-            self.fow_tools_fab.hide()
-            self.map_fow_edit_overlay.setFixedWidth(
-                int(getattr(self, "fow_tools_expanded_width", 188))
-            )
-            self.map_fow_edit_overlay.adjustSize()
-            self.map_fow_edit_overlay.show()
-            self.map_fow_edit_overlay.raise_()
+        self._apply_fow_tools_collapsed_chrome()
+        self.map_fow_edit_overlay.show()
+        self.map_fow_edit_overlay.raise_()
         self._position_map_overlays()
         if persist:
             self._settings.setValue(
@@ -1340,66 +1424,53 @@ class AtlasWindow(
         if hasattr(self, "gather_sidebar"):
             max_gather_bottom = self.radar.height() - sidebar_margin
             min_gather_top = sidebar_margin + sidebar_height + sidebar_margin
-            if getattr(self, "gather_sidebar_collapsed", True) and hasattr(
-                self, "gather_fab"
+            gather_target = self._gather_sidebar_target_body_height(sidebar_margin)
+            if (
+                self.gather_sidebar_animation.state()
+                != QtCore.QAbstractAnimation.State.Running
             ):
-                fab = self.gather_fab
-                fab_size = int(getattr(self, "gather_sidebar_fab_size", 28))
-                fab.resize(fab_size, fab_size)
-                fab_y = max(
-                    min_gather_top,
-                    max_gather_bottom - fab_size,
+                self._set_gather_sidebar_body_height(gather_target)
+            elif self._gather_sidebar_body_height > self._gather_sidebar_body_limit(
+                sidebar_margin
+            ):
+                self._set_gather_sidebar_body_height(
+                    self._gather_sidebar_body_limit(sidebar_margin)
                 )
-                fab.move(sidebar_margin, fab_y)
-                fab.raise_()
-            else:
-                gather_target = self._gather_sidebar_target_body_height(sidebar_margin)
+            gather_height = (
+                self._gather_sidebar_chrome_height(self._gather_sidebar_body_height)
+                + self._gather_sidebar_body_height
+            )
+            # Keep gather below waypoints with a gap when the window is short.
+            if min_gather_top + gather_height > max_gather_bottom:
+                # Prefer shrinking gather body; header stays visible.
+                allowed_body = max(
+                    0,
+                    max_gather_bottom
+                    - min_gather_top
+                    - self._gather_sidebar_chrome_height(1),
+                )
                 if (
                     self.gather_sidebar_animation.state()
                     != QtCore.QAbstractAnimation.State.Running
                 ):
-                    self._set_gather_sidebar_body_height(gather_target)
-                elif self._gather_sidebar_body_height > self._gather_sidebar_body_limit(
-                    sidebar_margin
-                ):
                     self._set_gather_sidebar_body_height(
-                        self._gather_sidebar_body_limit(sidebar_margin)
+                        min(self._gather_sidebar_body_height, allowed_body)
                     )
                 gather_height = (
-                    self._gather_sidebar_chrome_height(self._gather_sidebar_body_height)
+                    self._gather_sidebar_chrome_height(
+                        self._gather_sidebar_body_height
+                    )
                     + self._gather_sidebar_body_height
                 )
-                # Keep gather below waypoints with a gap when the window is short.
-                if min_gather_top + gather_height > max_gather_bottom:
-                    # Prefer shrinking gather body; header stays visible.
-                    allowed_body = max(
-                        0,
-                        max_gather_bottom
-                        - min_gather_top
-                        - self._gather_sidebar_chrome_height(1),
-                    )
-                    if (
-                        self.gather_sidebar_animation.state()
-                        != QtCore.QAbstractAnimation.State.Running
-                    ):
-                        self._set_gather_sidebar_body_height(
-                            min(self._gather_sidebar_body_height, allowed_body)
-                        )
-                    gather_height = (
-                        self._gather_sidebar_chrome_height(
-                            self._gather_sidebar_body_height
-                        )
-                        + self._gather_sidebar_body_height
-                    )
-                gather_y = max(
-                    min_gather_top,
-                    max_gather_bottom - gather_height,
-                )
-                self.gather_sidebar.resize(
-                    self.gather_sidebar_width, max(0, gather_height)
-                )
-                self.gather_sidebar.move(sidebar_margin, gather_y)
-                self.gather_sidebar.raise_()
+            gather_y = max(
+                min_gather_top,
+                max_gather_bottom - gather_height,
+            )
+            self.gather_sidebar.resize(
+                self.gather_sidebar_width, max(0, gather_height)
+            )
+            self.gather_sidebar.move(sidebar_margin, gather_y)
+            self.gather_sidebar.raise_()
 
         self.map_controls_overlay.adjustSize()
         controls_x = max(
@@ -1414,24 +1485,17 @@ class AtlasWindow(
         self.map_controls_overlay.raise_()
 
         if hasattr(self, "map_fow_edit_overlay"):
-            fow_x = max(
-                margin,
-                self.radar.width()
-                - (
-                    int(getattr(self, "fow_tools_fab_size", 28))
-                    if getattr(self, "fow_tools_collapsed", True)
-                    else self.map_fow_edit_overlay.width()
-                )
-                - margin,
+            fow_width = (
+                int(getattr(self, "fow_tools_collapsed_size", 28))
+                if getattr(self, "fow_tools_collapsed", True)
+                else self.map_fow_edit_overlay.width()
             )
-            if getattr(self, "fow_tools_collapsed", True) and hasattr(
-                self, "fow_tools_fab"
-            ):
-                fab = self.fow_tools_fab
-                fab_size = int(getattr(self, "fow_tools_fab_size", 28))
-                fab.resize(fab_size, fab_size)
-                fab.move(fow_x, margin)
-                fab.raise_()
+            fow_x = max(margin, self.radar.width() - fow_width - margin)
+            if getattr(self, "fow_tools_collapsed", True):
+                fab_size = int(getattr(self, "fow_tools_collapsed_size", 28))
+                self.map_fow_edit_overlay.resize(fab_size, fab_size)
+                self.map_fow_edit_overlay.move(fow_x, margin)
+                self.map_fow_edit_overlay.raise_()
             else:
                 self.map_fow_edit_overlay.adjustSize()
                 fow_y = margin
@@ -1604,6 +1668,8 @@ class AtlasWindow(
 
     def _toggle_fog_enabled(self, checked: bool) -> None:
         self.radar.fog.enabled = bool(checked)
+        if not self.radar.fog.enabled:
+            self.radar.fog.release_paint_caches()
         self._settings.setValue("map/fog_enabled", self.radar.fog.enabled)
         self._update_fog_toggle_button()
         self.radar.update()
@@ -1980,16 +2046,11 @@ class AtlasWindow(
 
     def _pan_state_changed(self, panned: bool) -> None:
         self.recenter.setEnabled(panned or self.radar.is_following())
+        self.mapViewChanged.emit()
 
     def _apply_user_settings(self) -> None:
         always_on_top = self._setting_bool("app/always_on_top", False)
-        if bool(self.windowFlags() & QtCore.Qt.WindowType.WindowStaysOnTopHint) != always_on_top:
-            was_visible = self.isVisible()
-            self.setWindowFlag(
-                QtCore.Qt.WindowType.WindowStaysOnTopHint, always_on_top
-            )
-            if was_visible:
-                self.show()
+        apply_always_on_top(self, always_on_top)
 
         saved_radius = safe_int(self._settings.value("map/zoom_radius", 200), 200)
         self.zoom_index = min(
@@ -2040,6 +2101,7 @@ class AtlasWindow(
         elif not dps_enabled:
             self.dps_overlay.hide()
             self.dps_collapsed_button.hide()
+        self._apply_dps_overlay_chrome()
 
         self.currency_status.setVisible(
             self._setting_bool("map/show_currencies", True)
@@ -2081,7 +2143,9 @@ class AtlasWindow(
         self.radar.heading_up = False
         self.radar.rounded = False
         self.radar.fog.enabled = self._setting_bool("map/fog_enabled", True)
-        self.radar.fog.show_outlines = False
+        self.radar.fog.show_outlines = self._setting_bool(
+            "map/fog_show_outlines", False
+        )
         # Zone / FOW ring borders are --dev edit chrome only.
         self.radar.fog.show_layer_outlines = bool(self.dev_mode)
         self.radar.fog.hide_markers = self._setting_bool("map/fog_hide_markers", True)
@@ -2219,7 +2283,9 @@ class AtlasWindow(
         )
         self._settings.setValue("map/show_players", self.radar.show_players)
         self._settings.setValue("map/fog_enabled", self.radar.fog.enabled)
-        self._settings.setValue("map/fog_show_outlines", False)
+        self._settings.setValue(
+            "map/fog_show_outlines", self.radar.fog.show_outlines
+        )
         self._settings.setValue("map/fog_hide_markers", self.radar.fog.hide_markers)
         self._settings.setValue("map/fog_feather", self.radar.fog.feather_enabled)
         self._settings.setValue("map/fog_max_tier", self.radar.fog.max_tier)
@@ -2237,6 +2303,7 @@ class AtlasWindow(
         )
         self._settings.setValue("map/zoom_radius", radius)
         self.radar.update()
+        self.mapViewChanged.emit()
 
     def _update_party_status(self, members: list[dict[str, Any]]) -> None:
         show_distance = self._setting_bool("party/show_distance", True)
@@ -2295,9 +2362,58 @@ class AtlasWindow(
                 self.party_status_layout.addWidget(widget)
                 widget.show()
 
-        self.party_status_container.setVisible(
-            bool(members) or show_empty_slots
+        self._party_status_wanted = bool(members) or show_empty_slots
+        self._sync_party_status_visibility()
+
+    def _party_status_preferred_width(self) -> int:
+        """Natural width of the party strip, even while it is hidden."""
+        layout = self.party_status_layout
+        if layout.count() == 0:
+            return 0
+        total = 0
+        visible = 0
+        for index in range(layout.count()):
+            item = layout.itemAt(index)
+            widget = item.widget() if item is not None else None
+            if widget is None:
+                continue
+            total += max(widget.minimumWidth(), widget.sizeHint().width())
+            visible += 1
+        if visible > 1:
+            total += layout.spacing() * (visible - 1)
+        return total
+
+    def _sync_party_status_visibility(self) -> None:
+        """Show party only when content exists and the toolbar has room."""
+        if not self._party_status_wanted:
+            self.party_status_container.setVisible(False)
+            return
+        layout = self.map_toolbar.layout()
+        if layout is None:
+            self.party_status_container.setVisible(True)
+            return
+        margins = layout.contentsMargins()
+        available = max(
+            0, self.map_toolbar.width() - margins.left() - margins.right()
         )
+        spacing = layout.spacing()
+        other_widgets = [
+            widget
+            for widget in (
+                self.character_status,
+                self.currency_status,
+                self.rift_status,
+            )
+            if widget.isVisible()
+        ]
+        other_width = sum(widget.sizeHint().width() for widget in other_widgets)
+        party_width = self._party_status_preferred_width()
+        # Character, party, stretch, then any visible right-side widgets.
+        item_count = len(other_widgets) + 2
+        needed = other_width + party_width + spacing * max(0, item_count - 1)
+        # Hysteresis: require a little spare room before re-showing.
+        slack = 0 if self.party_status_container.isVisible() else spacing * 2
+        self.party_status_container.setVisible(needed + slack <= available)
 
     def update_snapshot(self, snapshot: Snapshot) -> None:
         self.latest_snapshot = snapshot
@@ -2388,8 +2504,9 @@ class AtlasWindow(
             for member in visible_party
         )
         if not self.online_mode:
-            self.party_status_container.setVisible(False)
+            self._party_status_wanted = False
             self._party_status_signature = None
+            self.party_status_container.setVisible(False)
         elif party_status_signature != self._party_status_signature:
             self._party_status_signature = party_status_signature
             self._update_party_status(visible_party)
@@ -2497,6 +2614,7 @@ class AtlasWindow(
             self.currency_status.clear()
             if self.game_time_status is not None:
                 self.game_time_status.clear()
+        self._sync_party_status_visibility()
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # noqa: N802
         super().closeEvent(event)

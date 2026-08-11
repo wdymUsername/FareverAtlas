@@ -10,7 +10,7 @@ Reads ``extracted/res.light/data.cdb``:
 Usage:
     python tools/extract_display_names.py
 
-Writes ``assets/display_names.json``.
+Writes ``assets/data/display_names.json``.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 CDB_PATH = ROOT / "extracted" / "res.light" / "data.cdb"
-OUT_PATH = ROOT / "assets" / "display_names.json"
+OUT_PATH = ROOT / "assets" / "data" / "display_names.json"
 
 _ITEM_REF = re.compile(r"\[([A-Za-z0-9_]+)\]")
 _SIZE_TOKENS = ("Small", "Medium", "Large", "Big")
@@ -132,7 +132,10 @@ def main() -> int:
         "items": dict(sorted(items.items())),
         "chests": dict(sorted(chests.items())),
     }
-    OUT_PATH.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    OUT_PATH.write_text(
+        json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
     print(
         f"wrote {OUT_PATH.relative_to(ROOT)} "
         f"(units={len(units)}, gatherables={len(gatherables)}, "

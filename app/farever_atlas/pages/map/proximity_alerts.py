@@ -27,7 +27,37 @@ class ProximityAlertsMixin:
         # Actor ids with a toast still on screen (blocks re-stacking).
         self._proximity_toast_ids: set[str] = set()
 
+    def _proximity_setting_bool(self, key: str, default: bool = True) -> bool:
+        getter = getattr(self, "_setting_bool", None)
+        if callable(getter):
+            return bool(getter(key, default))
+        settings = getattr(self, "_settings", None)
+        if settings is None:
+            return default
+        value = settings.value(key, default)
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off"}:
+            return False
+        return default
+
+    def _proximity_toast_duration_ms(self) -> int:
+        settings = getattr(self, "_settings", None)
+        if settings is None:
+            return self.SPOT_TOAST_MS
+        seconds = safe_float(settings.value("alerts/proximity_duration_s"), 10.0)
+        if not math.isfinite(seconds):
+            seconds = 10.0
+        return max(3_000, min(30_000, int(round(seconds * 1000.0))))
+
     def _proximity_alert_tick(self, snapshot: Any = None) -> None:
+        if not self._proximity_setting_bool("alerts/proximity_enabled", True):
+            self._proximity_seen_ids.clear()
+            return
+
         player = self._proximity_player_position(snapshot)
         if player is None:
             self._proximity_seen_ids.clear()
@@ -63,35 +93,43 @@ class ProximityAlertsMixin:
             else DEFAULT_CRITTER_Z_M
         )
 
+        alert_enemies = self._proximity_setting_bool(
+            "alerts/proximity_enemies", True
+        )
+        alert_critters = self._proximity_setting_bool(
+            "alerts/proximity_critters", True
+        )
         in_range: set[str] = set()
 
-        for enemy in enemies:
-            if not isinstance(enemy, dict):
-                continue
-            if not self._proximity_is_special_enemy(enemy):
-                continue
-            actor_id = str(enemy.get("id") or "").strip()
-            if not actor_id:
-                continue
-            if not self._proximity_in_range(
-                player, enemy, xy_m=enemy_xy, z_m=enemy_z
-            ):
-                continue
-            in_range.add(actor_id)
-            self._proximity_maybe_alert_enemy(actor_id, enemy)
+        if alert_enemies:
+            for enemy in enemies:
+                if not isinstance(enemy, dict):
+                    continue
+                if not self._proximity_is_special_enemy(enemy):
+                    continue
+                actor_id = str(enemy.get("id") or "").strip()
+                if not actor_id:
+                    continue
+                if not self._proximity_in_range(
+                    player, enemy, xy_m=enemy_xy, z_m=enemy_z
+                ):
+                    continue
+                in_range.add(actor_id)
+                self._proximity_maybe_alert_enemy(actor_id, enemy)
 
-        for critter in critters:
-            if not isinstance(critter, dict):
-                continue
-            actor_id = str(critter.get("id") or "").strip()
-            if not actor_id:
-                continue
-            if not self._proximity_in_range(
-                player, critter, xy_m=critter_xy, z_m=critter_z
-            ):
-                continue
-            in_range.add(actor_id)
-            self._proximity_maybe_alert_critter(actor_id, critter)
+        if alert_critters:
+            for critter in critters:
+                if not isinstance(critter, dict):
+                    continue
+                actor_id = str(critter.get("id") or "").strip()
+                if not actor_id:
+                    continue
+                if not self._proximity_in_range(
+                    player, critter, xy_m=critter_xy, z_m=critter_z
+                ):
+                    continue
+                in_range.add(actor_id)
+                self._proximity_maybe_alert_critter(actor_id, critter)
 
         # Drop ids that left range so a later re-entry can alert again.
         self._proximity_seen_ids &= in_range | self._proximity_toast_ids
@@ -159,7 +197,7 @@ class ProximityAlertsMixin:
             self,  # type: ignore[arg-type]
             message,
             kind=kind,
-            duration_ms=self.SPOT_TOAST_MS,
+            duration_ms=self._proximity_toast_duration_ms(),
             action_label=action_label,
             on_action=on_action,
             on_dismiss=_on_dismiss,

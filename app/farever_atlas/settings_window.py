@@ -1,17 +1,64 @@
 """In-window settings pages for Farever Atlas.
 
-General, Map, Party, and the compact DPS enable toggle are live.
-Alerts and advanced Combat options stay visible but disabled for later work.
+General, Map, Party, Combat, and proximity Alerts are live.
+Cast-warning UI stays out until the bridge exposes cast data.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from .pages.map.fow_layers import FOW_LAYER_LABELS, FOW_LAYER_ORDER
 from .cull_limits import CULL_SETTING_KEYS, clamp_cull_value, cull_setting
+
+
+_ACCENT = QtGui.QColor("#587083")
+_MUTED = QtGui.QColor("#344352")
+
+
+class SettingsToggle(QtWidgets.QCheckBox):
+    """Pill on/off switch used in settings rows."""
+
+    _W = 36
+    _H = 20
+
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("settingsToggle")
+        self.setText("")
+        self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
+        self.setFixedSize(self._W, self._H)
+
+    def sizeHint(self) -> QtCore.QSize:
+        return QtCore.QSize(self._W, self._H)
+
+    def minimumSizeHint(self) -> QtCore.QSize:
+        return self.sizeHint()
+
+    def hitButton(self, pos: QtCore.QPoint) -> bool:  # noqa: N802
+        # Style sheets zero the indicator; treat the whole pill as clickable.
+        return self.rect().contains(pos)
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # noqa: ARG002
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        track = QtCore.QRectF(0.5, 0.5, self._W - 1, self._H - 1)
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.setBrush(_ACCENT if self.isChecked() else _MUTED)
+        painter.drawRoundedRect(track, self._H / 2, self._H / 2)
+        knob_d = self._H - 6
+        knob_x = self._W - knob_d - 3 if self.isChecked() else 3.0
+        painter.setBrush(QtGui.QColor("#eef3f7"))
+        painter.drawEllipse(QtCore.QRectF(knob_x, 3.0, knob_d, knob_d))
+        if self.hasFocus():
+            pen = QtGui.QPen(QtGui.QColor("#9ec9e0"))
+            pen.setWidth(1)
+            painter.setPen(pen)
+            painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(track, self._H / 2, self._H / 2)
 
 
 def _as_bool(value: Any, default: bool = False) -> bool:
@@ -68,6 +115,26 @@ LOOT_DEFAULT_KINDS = (
 
 PARTY_SLOT_COUNT = 3
 
+DPS_ROW_CHOICES = (1, 2, 3, 4, 5)
+COMBAT_REFRESH_CHOICES = (
+    ("4 FPS", 250),
+    ("2 FPS", 500),
+    ("1 FPS", 1000),
+)
+PROXIMITY_DURATION_CHOICES = (
+    ("5 s", 5),
+    ("10 s", 10),
+    ("15 s", 15),
+)
+
+SETTINGS_PAGE_META = (
+    ("General", "Application behavior and Steam friend lookup."),
+    ("Map", "Map display, fog, markers, and cull ranges."),
+    ("Party", "Party cards, markers, and distance display."),
+    ("Combat", "Combat meter and compact DPS overlay."),
+    ("Alerts", "Proximity toasts for elites, bosses, and critters."),
+)
+
 
 def apply_settings_defaults(settings: QtCore.QSettings) -> None:
     """Restore the first-slice settings keys to their defaults."""
@@ -99,6 +166,10 @@ def apply_settings_defaults(settings: QtCore.QSettings) -> None:
     settings.setValue("map/show_game_time", True)
     settings.setValue("map/show_rift_timer", True)
     settings.setValue("map/show_dps_overlay", True)
+    settings.setValue("map/overlay_enabled", False)
+    settings.setValue("map/overlay_unlocked", False)
+    settings.setValue("map/overlay_opacity", 100)
+    settings.setValue("map/overlay_zoom_radius", 200)
     for key, (default, _minimum, _maximum) in CULL_SETTING_KEYS.items():
         settings.setValue(key, default)
     settings.setValue("party/show_empty_slots", True)
@@ -109,10 +180,20 @@ def apply_settings_defaults(settings: QtCore.QSettings) -> None:
     settings.setValue("party/show_names", True)
     settings.setValue("party/show_health_rings", True)
     settings.setValue("party/dim_invalid", True)
+    settings.setValue("combat/dps_visible_rows", 3)
+    settings.setValue("combat/dps_opacity", 85)
+    settings.setValue("combat/refresh_ms", 500)
+    settings.setValue("combat/default_view", "damage")
+    settings.setValue("combat/always_on_top", False)
+    settings.setValue("combat/compact", False)
+    settings.setValue("alerts/proximity_enabled", True)
+    settings.setValue("alerts/proximity_enemies", True)
+    settings.setValue("alerts/proximity_critters", True)
+    settings.setValue("alerts/proximity_duration_s", 10)
 
 
 class SettingsPanel(QtCore.QObject):
-    """Builds settings tabs and persists values into QSettings."""
+    """Builds settings pages and persists values into QSettings."""
 
     changed = QtCore.Signal()
     resetWindowsRequested = QtCore.Signal()
@@ -130,12 +211,16 @@ class SettingsPanel(QtCore.QObject):
         self.dev_mode = bool(dev_mode)
         self._suppress = False
         self.cull_spins: dict[str, QtWidgets.QSpinBox] = {}
-        self.tabs = QtWidgets.QTabWidget()
-        self.tabs.addTab(self._general_tab(), "General")
-        self.tabs.addTab(self._map_tab(), "Map")
-        self.tabs.addTab(self._party_tab(), "Party")
-        self.tabs.addTab(self._combat_tab(), "Combat")
-        self.tabs.addTab(self._alerts_tab(), "Alerts")
+        builders = (
+            self._general_tab,
+            self._map_tab,
+            self._party_tab,
+            self._combat_tab,
+            self._alerts_tab,
+        )
+        self.pages: list[tuple[str, str, QtWidgets.QWidget]] = []
+        for (title, description), build in zip(SETTINGS_PAGE_META, builders):
+            self.pages.append((title, description, build()))
         self.reload_from_settings()
 
     def reload_from_settings(self) -> None:
@@ -168,6 +253,18 @@ class SettingsPanel(QtCore.QObject):
             self.show_route.setChecked(
                 _as_bool(self._settings.value("map/show_route_line"), True)
             )
+            self.overlay_enabled.setChecked(
+                _as_bool(self._settings.value("map/overlay_enabled"), False)
+            )
+            self.overlay_unlocked.setChecked(
+                _as_bool(self._settings.value("map/overlay_unlocked"), False)
+            )
+            opacity = max(
+                5,
+                min(100, _as_int(self._settings.value("map/overlay_opacity"), 100)),
+            )
+            self.overlay_opacity.setValue(opacity)
+            self._sync_overlay_controls_enabled()
             self.fog_enabled.setChecked(
                 _as_bool(self._settings.value("map/fog_enabled"), True)
             )
@@ -221,42 +318,15 @@ class SettingsPanel(QtCore.QObject):
             self.fog_feather.setChecked(
                 _as_bool(self._settings.value("map/fog_feather"), True)
             )
+            self.fog_show_outlines.setChecked(
+                _as_bool(self._settings.value("map/fog_show_outlines"), False)
+            )
             fog_tier = str(
                 self._settings.value("map/fog_max_tier", "Z3") or "Z3"
             ).upper()
             fog_index = max(0, self.fog_max_tier.findData(fog_tier))
             self.fog_max_tier.setCurrentIndex(fog_index)
 
-            legacy_pois = _as_bool(self._settings.value("map/show_pois"), True)
-            for kind, checkbox in self.poi_defaults.items():
-                checkbox.setChecked(
-                    _as_bool(
-                        self._settings.value(f"map/show_poi_{kind}"),
-                        legacy_pois,
-                    )
-                )
-            legacy_loot = _as_bool(
-                self._settings.value("map/show_collectibles"), False
-            )
-            for kind, checkbox in self.loot_defaults.items():
-                checkbox.setChecked(
-                    _as_bool(
-                        self._settings.value(f"map/show_loot_{kind}"),
-                        legacy_loot,
-                    )
-                )
-            self.show_enemies.setChecked(
-                _as_bool(self._settings.value("map/show_enemies"), True)
-            )
-            self.show_critters.setChecked(
-                _as_bool(self._settings.value("map/show_critters"), True)
-            )
-            self.show_players.setChecked(
-                _as_bool(self._settings.value("map/show_players"), True)
-            )
-            self.show_player_names.setChecked(
-                _as_bool(self._settings.value("map/show_player_names"), False)
-            )
             self.show_currencies.setChecked(
                 _as_bool(self._settings.value("map/show_currencies"), True)
             )
@@ -309,6 +379,66 @@ class SettingsPanel(QtCore.QObject):
             self.dps_enabled.setChecked(
                 _as_bool(self._settings.value("map/show_dps_overlay"), True)
             )
+            rows = _as_int(self._settings.value("combat/dps_visible_rows"), 3)
+            row_index = next(
+                (
+                    index
+                    for index, value in enumerate(DPS_ROW_CHOICES)
+                    if value == rows
+                ),
+                2,
+            )
+            self.dps_visible_rows.setCurrentIndex(row_index)
+            self.dps_opacity.setValue(
+                max(
+                    25,
+                    min(100, _as_int(self._settings.value("combat/dps_opacity"), 85)),
+                )
+            )
+            refresh_ms = _as_int(self._settings.value("combat/refresh_ms"), 500)
+            refresh_index = next(
+                (
+                    index
+                    for index, (_label, value) in enumerate(COMBAT_REFRESH_CHOICES)
+                    if value == refresh_ms
+                ),
+                1,
+            )
+            self.combat_refresh.setCurrentIndex(refresh_index)
+            view = str(
+                self._settings.value("combat/default_view", "damage") or "damage"
+            ).lower()
+            self.combat_default_view.setCurrentIndex(0 if view != "healing" else 1)
+            self.combat_always_on_top.setChecked(
+                _as_bool(self._settings.value("combat/always_on_top"), False)
+            )
+            self.combat_compact.setChecked(
+                _as_bool(self._settings.value("combat/compact"), False)
+            )
+
+            self.proximity_enabled.setChecked(
+                _as_bool(self._settings.value("alerts/proximity_enabled"), True)
+            )
+            self.proximity_enemies.setChecked(
+                _as_bool(self._settings.value("alerts/proximity_enemies"), True)
+            )
+            self.proximity_critters.setChecked(
+                _as_bool(self._settings.value("alerts/proximity_critters"), True)
+            )
+            duration_s = _as_int(
+                self._settings.value("alerts/proximity_duration_s"), 10
+            )
+            duration_index = next(
+                (
+                    index
+                    for index, (_label, value) in enumerate(
+                        PROXIMITY_DURATION_CHOICES
+                    )
+                    if value == duration_s
+                ),
+                1,
+            )
+            self.proximity_duration.setCurrentIndex(duration_index)
         finally:
             self._suppress = False
 
@@ -322,6 +452,17 @@ class SettingsPanel(QtCore.QObject):
     def _emit_changed(self) -> None:
         if not self._suppress:
             self.changed.emit()
+
+    def _sync_overlay_controls_enabled(self, *_args: object) -> None:
+        enabled = bool(self.overlay_enabled.isChecked())
+        self.overlay_unlocked.setEnabled(enabled)
+        self.overlay_opacity.setEnabled(enabled)
+        if not enabled and self.overlay_unlocked.isChecked():
+            blocked = self.overlay_unlocked.blockSignals(True)
+            self.overlay_unlocked.setChecked(False)
+            self.overlay_unlocked.blockSignals(blocked)
+            if not self._suppress:
+                self._settings.setValue("map/overlay_unlocked", False)
 
     def _bind_bool(
         self,
@@ -371,20 +512,158 @@ class SettingsPanel(QtCore.QObject):
     def _page() -> tuple[QtWidgets.QWidget, QtWidgets.QVBoxLayout]:
         page = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(page)
-        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setContentsMargins(0, 2, 0, 0)
         layout.setSpacing(10)
         return page, layout
 
-    @staticmethod
-    def _group(title: str) -> tuple[QtWidgets.QGroupBox, QtWidgets.QFormLayout]:
+    @classmethod
+    def _group(cls, title: str) -> tuple[QtWidgets.QGroupBox, QtWidgets.QVBoxLayout]:
         group = QtWidgets.QGroupBox(title)
-        form = QtWidgets.QFormLayout(group)
-        form.setFieldGrowthPolicy(
-            QtWidgets.QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
+        body = QtWidgets.QVBoxLayout(group)
+        body.setContentsMargins(10, 10, 10, 8)
+        body.setSpacing(0)
+        return group, body
+
+    @staticmethod
+    def _prepare_field(field: QtWidgets.QWidget) -> QtWidgets.QWidget:
+        if isinstance(field, QtWidgets.QCheckBox):
+            field.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Fixed,
+                QtWidgets.QSizePolicy.Policy.Fixed,
+            )
+        elif isinstance(field, QtWidgets.QAbstractSpinBox):
+            field.setFixedHeight(28)
+            field.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Fixed,
+                QtWidgets.QSizePolicy.Policy.Fixed,
+            )
+        elif isinstance(field, QtWidgets.QComboBox):
+            field.setFixedHeight(28)
+            field.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Fixed,
+                QtWidgets.QSizePolicy.Policy.Fixed,
+            )
+            field.setSizeAdjustPolicy(
+                QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents
+            )
+            field.setMinimumContentsLength(4)
+        elif isinstance(field, QtWidgets.QLineEdit):
+            field.setObjectName("settingsField")
+            field.setFixedHeight(28)
+            field.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Preferred,
+                QtWidgets.QSizePolicy.Policy.Fixed,
+            )
+            field.setMinimumWidth(160)
+            field.setMaximumWidth(280)
+            field.setAlignment(
+                QtCore.Qt.AlignmentFlag.AlignLeft
+                | QtCore.Qt.AlignmentFlag.AlignVCenter
+            )
+        elif isinstance(field, QtWidgets.QSlider):
+            field.setMinimumWidth(140)
+            field.setMaximumWidth(220)
+            field.setFixedHeight(22)
+            field.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Preferred,
+                QtWidgets.QSizePolicy.Policy.Fixed,
+            )
+        elif isinstance(field, QtWidgets.QPushButton):
+            field.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Fixed,
+                QtWidgets.QSizePolicy.Policy.Fixed,
+            )
+        else:
+            field.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Preferred,
+                QtWidgets.QSizePolicy.Policy.Preferred,
+            )
+        return field
+
+    @classmethod
+    def _add_separator(cls, body: QtWidgets.QVBoxLayout) -> None:
+        if body.count() <= 0:
+            return
+        sep = QtWidgets.QFrame()
+        sep.setObjectName("settingsRowSeparator")
+        sep.setFrameShape(QtWidgets.QFrame.Shape.HLine)
+        sep.setFixedHeight(1)
+        body.addWidget(sep)
+
+    @classmethod
+    def _add_setting(
+        cls,
+        body: QtWidgets.QVBoxLayout,
+        title: str,
+        field: QtWidgets.QWidget,
+        hint: str = "",
+    ) -> None:
+        cls._add_separator(body)
+
+        row = QtWidgets.QWidget()
+        row.setObjectName("settingsRow")
+        row_layout = QtWidgets.QHBoxLayout(row)
+        row_layout.setContentsMargins(2, 8, 2, 8)
+        row_layout.setSpacing(16)
+
+        left = QtWidgets.QWidget()
+        left.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Preferred,
         )
-        form.setHorizontalSpacing(14)
-        form.setVerticalSpacing(8)
-        return group, form
+        left_layout = QtWidgets.QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(3)
+        title_lab = QtWidgets.QLabel(title)
+        title_lab.setObjectName("settingsRowTitle")
+        title_lab.setWordWrap(True)
+        left_layout.addWidget(title_lab)
+        if hint:
+            hint_lab = QtWidgets.QLabel(hint)
+            hint_lab.setObjectName("settingsRowHint")
+            hint_lab.setWordWrap(True)
+            hint_lab.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Expanding,
+                QtWidgets.QSizePolicy.Policy.Preferred,
+            )
+            left_layout.addWidget(hint_lab)
+
+        field = cls._prepare_field(field)
+        row_layout.addWidget(left, 1)
+        row_layout.addWidget(
+            field,
+            0,
+            QtCore.Qt.AlignmentFlag.AlignRight
+            | QtCore.Qt.AlignmentFlag.AlignVCenter,
+        )
+        body.addWidget(row)
+
+    @classmethod
+    def _add_note(cls, body: QtWidgets.QVBoxLayout, text: str) -> None:
+        cls._add_separator(body)
+        note = QtWidgets.QLabel(text)
+        note.setWordWrap(True)
+        note.setObjectName("settingsDeferredNote")
+        note.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
+        wrap = QtWidgets.QWidget()
+        wrap_layout = QtWidgets.QVBoxLayout(wrap)
+        wrap_layout.setContentsMargins(2, 8, 2, 4)
+        wrap_layout.setSpacing(0)
+        wrap_layout.addWidget(note)
+        body.addWidget(wrap)
+
+    @classmethod
+    def _add_action(cls, body: QtWidgets.QVBoxLayout, widget: QtWidgets.QWidget) -> None:
+        wrap = QtWidgets.QWidget()
+        wrap_layout = QtWidgets.QHBoxLayout(wrap)
+        wrap_layout.setContentsMargins(2, 6, 2, 4)
+        wrap_layout.setSpacing(0)
+        wrap_layout.addWidget(widget, 0, QtCore.Qt.AlignmentFlag.AlignLeft)
+        wrap_layout.addStretch(1)
+        body.addWidget(wrap)
 
     @staticmethod
     def _finish(
@@ -394,23 +673,53 @@ class SettingsPanel(QtCore.QObject):
         layout.addStretch(1)
         return page
 
+    @staticmethod
+    def _pair_row(
+        left: QtWidgets.QWidget,
+        right: QtWidgets.QWidget,
+    ) -> QtWidgets.QWidget:
+        row = QtWidgets.QWidget()
+        layout = QtWidgets.QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+        left_wrap = QtWidgets.QWidget()
+        left_layout = QtWidgets.QHBoxLayout(left_wrap)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(6)
+        left_label = QtWidgets.QLabel("XY")
+        left_layout.addWidget(left_label)
+        left_layout.addWidget(left, 1)
+        right_wrap = QtWidgets.QWidget()
+        right_layout = QtWidgets.QHBoxLayout(right_wrap)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(6)
+        right_label = QtWidgets.QLabel("Z")
+        right_layout.addWidget(right_label)
+        right_layout.addWidget(right, 1)
+        layout.addWidget(left_wrap, 1)
+        layout.addWidget(right_wrap, 1)
+        return row
+
     def _general_tab(self) -> QtWidgets.QWidget:
         page, layout = self._page()
         behavior, form = self._group("Application behavior")
 
-        self.always_on_top = QtWidgets.QCheckBox()
+        self.always_on_top = SettingsToggle()
         self._bind_bool(self.always_on_top, "app/always_on_top")
-        form.addRow("Always on top", self.always_on_top)
-
-        single = QtWidgets.QCheckBox()
-        single.setChecked(True)
-        single.setEnabled(False)
-        single.setToolTip("Farever Atlas always uses a single-instance lock")
-        form.addRow("Single instance", single)
-
-        self.restore_windows = QtWidgets.QCheckBox()
+        self._add_setting(
+            form,
+            "Always on top",
+            self.always_on_top,
+            "Keep Atlas above other windows (Linux uses X11/XWayland).",
+        )
+        self.restore_windows = SettingsToggle()
         self._bind_bool(self.restore_windows, "app/restore_window_positions")
-        form.addRow("Restore window positions", self.restore_windows)
+        self._add_setting(
+            form,
+            "Restore window positions",
+            self.restore_windows,
+            "Remember window layout between launches.",
+        )
         layout.addWidget(behavior)
 
         steam, steam_form = self._group("Steam")
@@ -425,8 +734,12 @@ class SettingsPanel(QtCore.QObject):
             "Private profiles may still show Offline — Atlas labels those Private."
         )
         self.steam_web_api_key.editingFinished.connect(self._on_steam_api_key_changed)
-        steam_form.addRow("Web API key", self.steam_web_api_key)
-
+        self._add_setting(
+            steam_form,
+            "Web API key",
+            self.steam_web_api_key,
+            "Caches friend avatars and the Steam-friend badge.",
+        )
         self.steam_steamid64 = QtWidgets.QLineEdit()
         self.steam_steamid64.setPlaceholderText("Your SteamID64 (digits only)")
         self.steam_steamid64.setClearButtonEnabled(True)
@@ -436,17 +749,32 @@ class SettingsPanel(QtCore.QObject):
             "Friend list must be public (or GetFriendList returns 401)."
         )
         self.steam_steamid64.editingFinished.connect(self._on_steam_steamid64_changed)
-        steam_form.addRow("Your SteamID64", self.steam_steamid64)
-
+        self._add_setting(
+            steam_form,
+            "Your SteamID64",
+            self.steam_steamid64,
+            "Your 64-bit Steam ID for friend lookup.",
+        )
         steam_note = QtWidgets.QLabel(
             "Optional. Friends still work with Here/Away from the game layer. "
-            "Steam-friend badge needs API key + SteamID64 and a readable friend list. "
-            "Private Steam profiles often look Offline — Atlas shows Private instead."
+            "Steam-friend badge needs API key + SteamID64 and a readable friend list."
         )
         steam_note.setWordWrap(True)
         steam_note.setObjectName("settingsDeferredNote")
-        steam_form.addRow(steam_note)
         layout.addWidget(steam)
+        layout.addWidget(steam_note)
+
+        actions, actions_form = self._group("Reset")
+        self.reset_all_settings = QtWidgets.QPushButton(
+            "Reset all settings to default"
+        )
+        self.reset_all_settings.setObjectName("resetAllSettingsButton")
+        self.reset_all_settings.setToolTip(
+            "Restore General, Map, Party, Combat, and Alerts settings to defaults"
+        )
+        self.reset_all_settings.setProperty("confirmReset", False)
+        self._add_action(actions_form, self.reset_all_settings)
+        layout.addWidget(actions)
         return self._finish(page, layout)
 
     def _map_tab(self) -> QtWidgets.QWidget:
@@ -457,57 +785,146 @@ class SettingsPanel(QtCore.QObject):
         for label, _radius in ZOOM_CHOICES:
             self.default_zoom.addItem(label)
         self.default_zoom.currentIndexChanged.connect(self._on_zoom_changed)
-        form.addRow("Default zoom", self.default_zoom)
-
-        self.show_texture = QtWidgets.QCheckBox()
+        self._add_setting(
+            form,
+            "Default zoom",
+            self.default_zoom,
+            "Initial zoom when opening the map.",
+        )
+        self.show_texture = SettingsToggle()
         self._bind_bool(self.show_texture, "map/show_texture")
-        form.addRow("Show map texture", self.show_texture)
-
-        self.show_route = QtWidgets.QCheckBox()
+        self._add_setting(
+            form,
+            "Show map texture",
+            self.show_texture,
+            "Terrain and map artwork.",
+        )
+        self.show_route = SettingsToggle()
         self._bind_bool(self.show_route, "map/show_route_line")
-        form.addRow("Waypoint route line", self.show_route)
+        self._add_setting(
+            form,
+            "Waypoint route line",
+            self.show_route,
+            "Lines between waypoints.",
+        )
+        self.overlay_enabled = SettingsToggle()
+        self._bind_bool(self.overlay_enabled, "map/overlay_enabled")
+        self.overlay_enabled.toggled.connect(self._sync_overlay_controls_enabled)
+        self._add_setting(
+            form,
+            "Map overlay",
+            self.overlay_enabled,
+            "Always-on-top map mirror over the game (click-through).",
+        )
+        self.overlay_opacity = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.overlay_opacity.setRange(5, 100)
+        self.overlay_opacity.valueChanged.connect(self._on_overlay_opacity_changed)
+        self._add_setting(
+            form,
+            "Overlay opacity",
+            self.overlay_opacity,
+            "Overlay window transparency (5–100%). Use + / − on the overlay to zoom.",
+        )
+        self.overlay_unlocked = SettingsToggle()
+        self._bind_bool(self.overlay_unlocked, "map/overlay_unlocked")
+        self._add_setting(
+            form,
+            "Unlock overlay move/resize",
+            self.overlay_unlocked,
+            "Temporarily accepts mouse so you can drag or resize the overlay.",
+        )
         layout.addWidget(display)
 
         status_bar, status_form = self._group("Status bar")
-        self.show_currencies = QtWidgets.QCheckBox()
+        self.show_currencies = SettingsToggle()
         self._bind_bool(self.show_currencies, "map/show_currencies")
-        status_form.addRow("Currencies", self.show_currencies)
-
-        self.show_game_time = QtWidgets.QCheckBox()
+        self._add_setting(
+            status_form,
+            "Currencies",
+            self.show_currencies,
+            "Currency totals on the status bar.",
+        )
+        self.show_game_time = SettingsToggle()
         self._bind_bool(self.show_game_time, "map/show_game_time")
-        status_form.addRow("Time of day", self.show_game_time)
-
-        self.show_rift_timer = QtWidgets.QCheckBox()
+        self._add_setting(
+            status_form,
+            "Time of day",
+            self.show_game_time,
+            "In-game time of day.",
+        )
+        self.show_rift_timer = SettingsToggle()
         self._bind_bool(self.show_rift_timer, "map/show_rift_timer")
-        status_form.addRow("Rift timer", self.show_rift_timer)
+        self._add_setting(
+            status_form,
+            "Rift timer",
+            self.show_rift_timer,
+            "Rift timer when a rift is active.",
+        )
         layout.addWidget(status_bar)
 
         fog, fog_form = self._group("Fog of war")
-        self.fog_enabled = QtWidgets.QCheckBox()
+        self.fog_enabled = SettingsToggle()
         self._bind_bool(self.fog_enabled, "map/fog_enabled")
-        fog_form.addRow("Enable fog", self.fog_enabled)
-
-        self.fog_feather = QtWidgets.QCheckBox()
+        self._add_setting(
+            fog_form,
+            "Enable fog",
+            self.fog_enabled,
+            "Reveal only explored areas.",
+        )
+        self.fog_feather = SettingsToggle()
         self._bind_bool(self.fog_feather, "map/fog_feather")
-        fog_form.addRow("Soft fog edge (feather)", self.fog_feather)
-
-        self.fog_hide_markers = QtWidgets.QCheckBox()
+        self._add_setting(
+            fog_form,
+            "Soft fog edge (feather)",
+            self.fog_feather,
+            "Soften fog edges.",
+        )
+        self.fog_hide_markers = SettingsToggle()
         self._bind_bool(self.fog_hide_markers, "map/fog_hide_markers")
-        fog_form.addRow("Hide markers under fog", self.fog_hide_markers)
+        self._add_setting(
+            fog_form,
+            "Hide markers under fog",
+            self.fog_hide_markers,
+            "Hide markers in unexplored areas.",
+        )
+        self.fog_show_outlines = SettingsToggle()
+        self._bind_bool(self.fog_show_outlines, "map/fog_show_outlines")
+        self._add_setting(
+            fog_form,
+            "Show region outlines",
+            self.fog_show_outlines,
+            "Region boundaries on the map.",
+        )
+        self._add_note(
+            fog_form,
+            "Outlines are inaccurate: the extracted zone polygons never lined "
+            "up with the Atlas map. Math couldn't fix the transform; hand-editing "
+            "the rings was not worth the time.",
+        )
 
         self.fog_layer_checks: dict[str, QtWidgets.QCheckBox] = {}
         self.fog_layer_invert_checks: dict[str, QtWidgets.QCheckBox] = {}
         for tier in FOW_LAYER_ORDER:
-            enabled = QtWidgets.QCheckBox()
-            inverted = QtWidgets.QCheckBox()
+            enabled = SettingsToggle()
+            inverted = SettingsToggle()
             self.fog_layer_checks[tier] = enabled
             self.fog_layer_invert_checks[tier] = inverted
             self._bind_bool(enabled, f"map/fog_layer_{tier}")
             self._bind_bool(inverted, f"map/fog_layer_{tier}_invert")
             if self.dev_mode:
                 label = FOW_LAYER_LABELS.get(tier, tier)
-                fog_form.addRow(f"{label} layer", enabled)
-                fog_form.addRow(f"{label} invert", inverted)
+                self._add_setting(
+                    fog_form,
+                    f"{label} layer",
+                    enabled,
+                    "Dev: include this fog layer.",
+                )
+                self._add_setting(
+                    fog_form,
+                    f"{label} invert",
+                    inverted,
+                    "Dev: invert this fog layer mask.",
+                )
 
         self.fog_max_tier = QtWidgets.QComboBox()
         self.fog_max_tier.addItem(
@@ -520,110 +937,91 @@ class SettingsPanel(QtCore.QObject):
         self.fog_max_tier.setCurrentIndex(tier_index)
         self.fog_max_tier.currentIndexChanged.connect(self._on_fog_tier_changed)
         if self.dev_mode:
-            fog_form.addRow("Legacy accessible through", self.fog_max_tier)
-
+            self._add_setting(
+                fog_form,
+                "Legacy accessible through",
+                self.fog_max_tier,
+                "Dev: legacy fog tier ceiling.",
+            )
         layout.addWidget(fog)
 
-        defaults, default_form = self._group("Default visibility")
-        self.poi_defaults: dict[str, QtWidgets.QCheckBox] = {}
-        for kind, label in POI_DEFAULT_KINDS:
-            checkbox = QtWidgets.QCheckBox()
-            self.poi_defaults[kind] = checkbox
-            self._bind_bool(checkbox, f"map/show_poi_{kind}")
-            default_form.addRow(label, checkbox)
-
-        self.loot_defaults: dict[str, QtWidgets.QCheckBox] = {}
-        for kind, label in LOOT_DEFAULT_KINDS:
-            checkbox = QtWidgets.QCheckBox()
-            self.loot_defaults[kind] = checkbox
-            self._bind_bool(checkbox, f"map/show_loot_{kind}")
-            default_form.addRow(label, checkbox)
-
-        self.show_enemies = QtWidgets.QCheckBox()
-        self._bind_bool(self.show_enemies, "map/show_enemies")
-        default_form.addRow("Nearby enemies", self.show_enemies)
-        self.show_critters = QtWidgets.QCheckBox()
-        self._bind_bool(self.show_critters, "map/show_critters")
-        default_form.addRow("Companion critters", self.show_critters)
-        self.show_players = QtWidgets.QCheckBox()
-        self._bind_bool(self.show_players, "map/show_players")
-        default_form.addRow("Nearby players", self.show_players)
-        self.show_player_names = QtWidgets.QCheckBox()
-        self._bind_bool(self.show_player_names, "map/show_player_names")
-        default_form.addRow("Player names", self.show_player_names)
-        layout.addWidget(defaults)
-
-        ranges, range_form = self._group("Range & elevation")
-        range_note = QtWidgets.QLabel(
-            "Hide markers beyond XY / elevation from you. "
-            "0 = Off (no Atlas filter on that axis). "
-            "Maxima match the live game stream."
-        )
-        range_note.setWordWrap(True)
-        range_note.setObjectName("settingsDeferredNote")
-        range_form.addRow(range_note)
-        range_form.addRow(
-            "Enemies XY",
-            self._cull_spin(
-                "map/cull/enemy_xy_m",
-                tooltip="Atlas XY filter for enemy markers (max 500 m). 0 = Off.",
+        ranges, range_form = self._group("Live detection limits")
+        self._add_setting(
+            range_form,
+            "Enemies",
+            self._pair_row(
+                self._cull_spin(
+                    "map/cull/enemy_xy_m",
+                    tooltip="Atlas XY filter for enemy markers (max 500 m). 0 = Off.",
+                ),
+                self._cull_spin(
+                    "map/cull/enemy_z_m",
+                    tooltip="Hide enemies on other floors (max 120 m). 0 = Off.",
+                ),
             ),
+            "XY and elevation cull. 0 = Off.",
         )
-        range_form.addRow(
-            "Enemies Z",
-            self._cull_spin(
-                "map/cull/enemy_z_m",
-                tooltip="Hide enemies on other floors (max 120 m). 0 = Off.",
+        self._add_setting(
+            range_form,
+            "Critters",
+            self._pair_row(
+                self._cull_spin(
+                    "map/cull/critter_xy_m",
+                    tooltip="Atlas XY filter for critter markers (max 500 m). 0 = Off.",
+                ),
+                self._cull_spin(
+                    "map/cull/critter_z_m",
+                    tooltip="Hide critters on other floors (max 120 m). 0 = Off.",
+                ),
             ),
+            "XY and elevation cull. 0 = Off.",
         )
-        range_form.addRow(
-            "Critters XY",
-            self._cull_spin(
-                "map/cull/critter_xy_m",
-                tooltip="Atlas XY filter for critter markers (max 500 m). 0 = Off.",
+        self._add_setting(
+            range_form,
+            "Patrol",
+            self._pair_row(
+                self._cull_spin(
+                    "map/cull/patrol_xy_m",
+                    tooltip=(
+                        "Only claim patrol paths for live units within this XY "
+                        "range (max 500 m)."
+                    ),
+                ),
+                self._cull_spin(
+                    "map/cull/patrol_z_m",
+                    tooltip="Patrol path elevation gate (max 120 m). 0 = Off.",
+                ),
             ),
+            "Claim patrol paths near live units. 0 = Off.",
         )
-        range_form.addRow(
-            "Critters Z",
-            self._cull_spin(
-                "map/cull/critter_z_m",
-                tooltip="Hide critters on other floors (max 120 m). 0 = Off.",
-            ),
-        )
-        range_form.addRow(
-            "Patrol XY",
-            self._cull_spin(
-                "map/cull/patrol_xy_m",
-                tooltip="Only claim patrol paths for live units within this XY range (max 500 m).",
-            ),
-        )
-        range_form.addRow(
-            "Patrol Z",
-            self._cull_spin(
-                "map/cull/patrol_z_m",
-                tooltip="Patrol path elevation gate (max 120 m). 0 = Off.",
-            ),
-        )
-        range_form.addRow(
+        self._add_setting(
+            range_form,
             "Patrol leash",
             self._cull_spin(
                 "map/cull/patrol_leash_m",
                 tooltip="Max distance from a live unit to its path samples (max 200 m).",
             ),
+            "Max distance from a unit to its path samples.",
         )
-        range_form.addRow(
-            "Loot / NODE GUIDE XY",
-            self._cull_spin(
-                "map/cull/loot_xy_m",
-                tooltip="Live loot bubble radius (max 500 m).",
+        self._add_setting(
+            range_form,
+            "Loot / NODE GUIDE",
+            self._pair_row(
+                self._cull_spin(
+                    "map/cull/loot_xy_m",
+                    tooltip="Live loot bubble radius (max 500 m).",
+                ),
+                self._cull_spin(
+                    "map/cull/loot_z_m",
+                    tooltip="Live loot elevation cull (max 160 m).",
+                ),
             ),
+            "Live loot bubble. 0 = Off.",
         )
-        range_form.addRow(
-            "Loot / NODE GUIDE Z",
-            self._cull_spin(
-                "map/cull/loot_z_m",
-                tooltip="Live loot elevation cull (max 160 m).",
-            ),
+        self._add_note(
+            range_form,
+            "Hide markers beyond XY / elevation from you. "
+            "0 = Off. Maxima match the live game stream limit + sanity check.",
         )
         layout.addWidget(ranges)
         return self._finish(page, layout)
@@ -632,88 +1030,158 @@ class SettingsPanel(QtCore.QObject):
         page, layout = self._page()
         cards, form = self._group("Party cards")
 
-        self.show_empty_slots = QtWidgets.QCheckBox()
+        self.show_empty_slots = SettingsToggle()
         self._bind_bool(self.show_empty_slots, "party/show_empty_slots")
-        form.addRow("Show empty slots", self.show_empty_slots)
-
-        self.show_distance = QtWidgets.QCheckBox()
+        self._add_setting(
+            form,
+            "Show empty slots",
+            self.show_empty_slots,
+            "Keep vacant party slots visible.",
+        )
+        self.show_distance = SettingsToggle()
         self._bind_bool(self.show_distance, "party/show_distance")
-        form.addRow("Show distance", self.show_distance)
-
+        self._add_setting(
+            form,
+            "Show distance",
+            self.show_distance,
+            "Distance on party cards.",
+        )
         self.distance_rounding = QtWidgets.QComboBox()
         for label, _value in DISTANCE_ROUND_CHOICES:
             self.distance_rounding.addItem(label)
         self.distance_rounding.currentIndexChanged.connect(
             self._on_distance_round_changed
         )
-        form.addRow("Distance rounding", self.distance_rounding)
-
+        self._add_setting(
+            form,
+            "Distance rounding",
+            self.distance_rounding,
+            "Round displayed distance.",
+        )
         self.empty_opacity = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self.empty_opacity.setRange(25, 100)
         self.empty_opacity.valueChanged.connect(
             lambda value: self._set_int("party/empty_slot_opacity", value)
         )
-        form.addRow("Empty-slot opacity", self.empty_opacity)
+        self._add_setting(
+            form,
+            "Empty-slot opacity",
+            self.empty_opacity,
+            "Fade unused slots.",
+        )
         layout.addWidget(cards)
 
         markers, marker_form = self._group("Map markers")
-        self.show_party_names = QtWidgets.QCheckBox()
+        self.show_party_names = SettingsToggle()
         self._bind_bool(self.show_party_names, "party/show_names")
-        marker_form.addRow("Show names", self.show_party_names)
-
-        self.show_health_rings = QtWidgets.QCheckBox()
+        self._add_setting(
+            marker_form,
+            "Show names",
+            self.show_party_names,
+            "Names on map party markers.",
+        )
+        self.show_health_rings = SettingsToggle()
         self._bind_bool(self.show_health_rings, "party/show_health_rings")
-        marker_form.addRow("Health rings", self.show_health_rings)
-
-        self.dim_invalid = QtWidgets.QCheckBox()
+        self._add_setting(
+            marker_form,
+            "Health rings",
+            self.show_health_rings,
+            "Health rings around party markers.",
+        )
+        self.dim_invalid = SettingsToggle()
         self._bind_bool(self.dim_invalid, "party/dim_invalid")
-        marker_form.addRow("Dim invalid members", self.dim_invalid)
+        self._add_setting(
+            marker_form,
+            "Dim invalid members",
+            self.dim_invalid,
+            "Dim members with stale or invalid data.",
+        )
         layout.addWidget(markers)
         return self._finish(page, layout)
 
     def _combat_tab(self) -> QtWidgets.QWidget:
         page, layout = self._page()
+        preview = QtWidgets.QLabel("PREVIEW  ·  Work in progress")
+        preview.setObjectName("mainNavigationPreview")
+        layout.addWidget(preview)
+
         hud, form = self._group("Compact DPS HUD")
 
-        self.dps_enabled = QtWidgets.QCheckBox()
+        self.dps_enabled = SettingsToggle()
         self._bind_bool(self.dps_enabled, "map/show_dps_overlay")
-        form.addRow("Enabled", self.dps_enabled)
-
-        for label, widget in (
-            (
-                "Auto behavior",
-                self._disabled_combo(
-                    "Always visible", "Combat only", "Auto-collapse"
-                ),
-            ),
-            ("Scale", self._disabled_slider(100)),
-            ("Opacity", self._disabled_slider(85)),
-            (
-                "Visible rows",
-                self._disabled_combo("3", "1", "2", "4", "5"),
-            ),
-            ("Default view", self._disabled_combo("Damage", "Healing")),
-        ):
-            form.addRow(label, widget)
+        self._add_setting(
+            form,
+            "Enabled",
+            self.dps_enabled,
+            "Show the compact DPS overlay.",
+        )
+        self.dps_visible_rows = QtWidgets.QComboBox()
+        for count in DPS_ROW_CHOICES:
+            self.dps_visible_rows.addItem(str(count), count)
+        self.dps_visible_rows.currentIndexChanged.connect(self._on_dps_rows_changed)
+        self._add_setting(
+            form,
+            "Visible rows",
+            self.dps_visible_rows,
+            "How many DPS rows to show.",
+        )
+        self.dps_opacity = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.dps_opacity.setRange(25, 100)
+        self.dps_opacity.valueChanged.connect(
+            lambda value: self._set_int("combat/dps_opacity", value)
+        )
+        self._add_setting(
+            form,
+            "Opacity",
+            self.dps_opacity,
+            "Overlay transparency.",
+        )
         layout.addWidget(hud)
 
         meter, meter_form = self._group("Full Combat Meter")
-        for label, widget in (
-            ("Refresh rate", self._disabled_combo("2 FPS", "4 FPS", "1 FPS")),
-            (
-                "Encounter history",
-                self._disabled_combo("5", "10", "20", "Off"),
-            ),
-            (
-                "Auto reset",
-                self._disabled_combo("New fight ID", "Manual", "After combat"),
-            ),
-        ):
-            meter_form.addRow(label, widget)
+        self.combat_refresh = QtWidgets.QComboBox()
+        for label, value in COMBAT_REFRESH_CHOICES:
+            self.combat_refresh.addItem(label, value)
+        self.combat_refresh.currentIndexChanged.connect(self._on_combat_refresh_changed)
+        self._add_setting(
+            meter_form,
+            "Refresh rate",
+            self.combat_refresh,
+            "How often the meter updates.",
+        )
+        self.combat_default_view = QtWidgets.QComboBox()
+        self.combat_default_view.addItem("Damage", "damage")
+        self.combat_default_view.addItem("Healing", "healing")
+        self.combat_default_view.currentIndexChanged.connect(
+            self._on_combat_default_view_changed
+        )
+        self._add_setting(
+            meter_form,
+            "Default view",
+            self.combat_default_view,
+            "Damage or healing on open.",
+        )
+        self.combat_compact = SettingsToggle()
+        self._bind_bool(self.combat_compact, "combat/compact")
+        self._add_setting(
+            meter_form,
+            "Compact columns",
+            self.combat_compact,
+            "Tighter meter columns.",
+        )
+        self.combat_always_on_top = SettingsToggle()
+        self._bind_bool(self.combat_always_on_top, "combat/always_on_top")
+        self._add_setting(
+            meter_form,
+            "Always on top",
+            self.combat_always_on_top,
+            "Keep the meter above other windows.",
+        )
         layout.addWidget(meter)
 
         note = QtWidgets.QLabel(
-            "Advanced combat options will return after the DPS pipeline rework."
+            "Observed nearby DPS only for now. Skill-level history needs a "
+            "richer bridge pipeline."
         )
         note.setWordWrap(True)
         note.setObjectName("settingsDeferredNote")
@@ -722,56 +1190,55 @@ class SettingsPanel(QtCore.QObject):
 
     def _alerts_tab(self) -> QtWidgets.QWidget:
         page, layout = self._page()
-        casting, form = self._group("Target cast warnings")
-        for label, widget in (
-            ("Enabled", self._disabled_checkbox(True)),
-            ("Warning sound", self._disabled_checkbox(True)),
-            ("Toast notification", self._disabled_checkbox(True)),
-            (
-                "Minimum cast duration",
-                self._disabled_combo("0.5 s", "1.0 s", "2.0 s"),
-            ),
-        ):
-            form.addRow(label, widget)
-        configure = QtWidgets.QPushButton("Configure…")
-        configure.setEnabled(False)
-        configure.setToolTip("Requires the upcoming alerts pipeline")
-        form.addRow("Per-skill overrides", configure)
-        layout.addWidget(casting)
+        proximity, form = self._group("Proximity toasts")
+
+        self.proximity_enabled = SettingsToggle()
+        self._bind_bool(self.proximity_enabled, "alerts/proximity_enabled")
+        self._add_setting(
+            form,
+            "Enabled",
+            self.proximity_enabled,
+            "Show proximity toasts.",
+        )
+        self.proximity_enemies = SettingsToggle()
+        self._bind_bool(self.proximity_enemies, "alerts/proximity_enemies")
+        self._add_setting(
+            form,
+            "Special enemies",
+            self.proximity_enemies,
+            "Elites and bosses nearby.",
+        )
+        self.proximity_critters = SettingsToggle()
+        self._bind_bool(self.proximity_critters, "alerts/proximity_critters")
+        self._add_setting(
+            form,
+            "Wild critters",
+            self.proximity_critters,
+            "Critters entering range.",
+        )
+        self.proximity_duration = QtWidgets.QComboBox()
+        for label, value in PROXIMITY_DURATION_CHOICES:
+            self.proximity_duration.addItem(label, value)
+        self.proximity_duration.currentIndexChanged.connect(
+            self._on_proximity_duration_changed
+        )
+        self._add_setting(
+            form,
+            "Toast duration",
+            self.proximity_duration,
+            "How long toasts stay visible.",
+        )
+        layout.addWidget(proximity)
 
         note = QtWidgets.QLabel(
-            "Alerts need live cast data from the native bridge and are not "
-            "available yet."
+            "Uses the same XY/Z cull ranges as Map → Live detection limits. "
+            "Target cast warnings need live cast data from the native bridge "
+            "and are not available yet."
         )
         note.setWordWrap(True)
         note.setObjectName("settingsDeferredNote")
         layout.addWidget(note)
         return self._finish(page, layout)
-
-    @staticmethod
-    def _disabled_checkbox(checked: bool = False) -> QtWidgets.QCheckBox:
-        checkbox = QtWidgets.QCheckBox()
-        checkbox.setChecked(checked)
-        checkbox.setEnabled(False)
-        checkbox.setToolTip("Not available yet")
-        return checkbox
-
-    @staticmethod
-    def _disabled_combo(*items: str) -> QtWidgets.QComboBox:
-        combo = QtWidgets.QComboBox()
-        combo.addItems(items)
-        combo.setEnabled(False)
-        combo.setToolTip("Not available yet")
-        return combo
-
-    @staticmethod
-    def _disabled_slider(value: int) -> QtWidgets.QSlider:
-        slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-        slider.setRange(25, 150)
-        slider.setValue(value)
-        slider.setEnabled(False)
-        slider.setToolTip("Not available yet")
-        return slider
 
     def _on_steam_api_key_changed(self) -> None:
         if self._suppress:
@@ -802,6 +1269,11 @@ class SettingsPanel(QtCore.QObject):
             return
         self._set_int("map/zoom_radius", ZOOM_CHOICES[index][1])
 
+    def _on_overlay_opacity_changed(self, value: int) -> None:
+        if self._suppress:
+            return
+        self._set_int("map/overlay_opacity", max(5, min(100, int(value))))
+
     def _on_fog_tier_changed(self, index: int) -> None:
         if self._suppress or not (0 <= index < self.fog_max_tier.count()):
             return
@@ -815,3 +1287,29 @@ class SettingsPanel(QtCore.QObject):
         if self._suppress or not (0 <= index < len(DISTANCE_ROUND_CHOICES)):
             return
         self._set_int("party/distance_round_m", DISTANCE_ROUND_CHOICES[index][1])
+
+    def _on_dps_rows_changed(self, index: int) -> None:
+        if self._suppress or not (0 <= index < len(DPS_ROW_CHOICES)):
+            return
+        self._set_int("combat/dps_visible_rows", DPS_ROW_CHOICES[index])
+
+    def _on_combat_refresh_changed(self, index: int) -> None:
+        if self._suppress or not (0 <= index < len(COMBAT_REFRESH_CHOICES)):
+            return
+        self._set_int("combat/refresh_ms", COMBAT_REFRESH_CHOICES[index][1])
+
+    def _on_combat_default_view_changed(self, index: int) -> None:
+        if self._suppress or not (0 <= index < self.combat_default_view.count()):
+            return
+        view = self.combat_default_view.itemData(index)
+        if view is None:
+            return
+        self._settings.setValue("combat/default_view", str(view))
+        self._emit_changed()
+
+    def _on_proximity_duration_changed(self, index: int) -> None:
+        if self._suppress or not (0 <= index < len(PROXIMITY_DURATION_CHOICES)):
+            return
+        self._set_int(
+            "alerts/proximity_duration_s", PROXIMITY_DURATION_CHOICES[index][1]
+        )

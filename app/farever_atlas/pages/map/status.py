@@ -8,7 +8,9 @@ from pathlib import Path
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from ...config import (
+    CLASS_BLANK_RELATIVE_PATH,
     CLASS_ICON_FILES,
+    CURRENCY_ICON_FILES,
     discover_project_asset,
     fmt_hp,
     fmt_number,
@@ -208,7 +210,7 @@ class CharacterStatusWidget(QtWidgets.QWidget):
             widget.setToolTip(tooltip)
 
     def _apply_class_blank_icon(self) -> None:
-        blank_path = discover_project_asset("classBlank.webp")
+        blank_path = discover_project_asset(CLASS_BLANK_RELATIVE_PATH)
         pixmap = QtGui.QPixmap(str(blank_path)) if blank_path else QtGui.QPixmap()
         if pixmap.isNull():
             self.class_icon.setPixmap(QtGui.QPixmap())
@@ -371,7 +373,7 @@ class PartyMemberStatusWidget(QtWidgets.QWidget):
         style.unpolish(self)
         style.polish(self)
         self.title.setText("EMPTY")
-        blank_path = discover_project_asset("classBlank.webp")
+        blank_path = discover_project_asset(CLASS_BLANK_RELATIVE_PATH)
         blank_pixmap = (
             QtGui.QPixmap(str(blank_path)) if blank_path else QtGui.QPixmap()
         )
@@ -653,12 +655,7 @@ class RiftStatusWidget(QtWidgets.QWidget):
 class CurrencyStatusWidget(QtWidgets.QWidget):
     """Compact 2x2 purse strip: Gold | Craft / Demonic Souls | Nightblood."""
 
-    _CELLS: tuple[tuple[str, str], ...] = (
-        ("Gold", "currency_gold.png"),
-        ("CraftPoint", "currency_craft.png"),
-        ("DemonicSoul", "currency_demonic_soul.png"),
-        ("Nightblood", "currency_nightblood.png"),
-    )
+    _CELLS: tuple[tuple[str, str], ...] = tuple(CURRENCY_ICON_FILES.items())
     _LABELS: dict[str, str] = {
         "Gold": "Gold",
         "CraftPoint": "Craft",

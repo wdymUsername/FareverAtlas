@@ -31,21 +31,78 @@ def _resolve_asset_root() -> Path:
 PROJECT_ROOT = _resolve_project_root()
 ASSET_ROOT = _resolve_asset_root()
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+
+# --- Shipped asset paths (relative to ASSET_ROOT) ---
 DEFAULT_MAP_RELATIVE_PATH = Path("map/w1_siagarta.webp")
 NATIVE_CALIBRATION_RELATIVE_PATH = Path("map/w1_siagarta.json")
-ACTIVITY_ICON_ATLAS_RELATIVE_PATH = Path("data/icons/activities.png")
-RIFT_ICON_NAME = "rift_icon_128.png"
+FOW_REGIONS_RELATIVE_PATH = Path("map/w1_siagarta_fow.json")
+FOW_PATTERN_RELATIVE_PATH = Path("map/pattern_fog_of_war_512.webp")
+
+# World / CastleDB extracts
+POIS_RELATIVE_PATH = Path("data/w1_siagarta/pois.json")
+CRITTER_SPAWNS_RELATIVE_PATH = Path("data/w1_siagarta/critter_spawns.json")
+PATROL_PATHS_RELATIVE_PATH = Path("data/w1_siagarta/patrol_paths.json")
+DISPLAY_NAMES_RELATIVE_PATH = Path("data/display_names.json")
+UNIT_TRAITS_RELATIVE_PATH = Path("data/unit_traits.json")
+CURRENCY_CAPS_RELATIVE_PATH = Path("data/currency_caps.json")
+
+# Markers / classes / currency (shipped under ui/)
+ACTIVITY_ICON_ATLAS_RELATIVE_PATH = Path("ui/markers/activities.webp")
+# Fallback when loading from an installed Farever game tree (not ASSET_ROOT).
+GAME_ACTIVITY_ICON_ATLAS_RELATIVE_PATH = Path("data/icons/activities.png")
+PLAYER_CURSOR_RELATIVE_PATH = Path("ui/markers/player_cursor.webp")
+RIFT_ICON_RELATIVE_PATH = Path("ui/markers/rift_icon.webp")
+CLASS_BLANK_RELATIVE_PATH = Path("ui/classes/classBlank.webp")
 CLASS_ICON_FILES = {
-    "priest": "classPriest.webp",
-    "mage": "classMage.webp",
-    "warrior": "classWarrior.webp",
-    "rogue": "classRogue.webp",
+    "priest": "ui/classes/classPriest.webp",
+    "mage": "ui/classes/classMage.webp",
+    "warrior": "ui/classes/classWarrior.webp",
+    "rogue": "ui/classes/classRogue.webp",
 }
 LOOSE_KIND_ICON_FILES = {
-    "red_orb": "redOrb.webp",
-    "plant": "plant.webp",
-    "ore": "ore.webp",
+    "red_orb": "ui/markers/red_orb.webp",
+    "plant": "ui/markers/plant.webp",
+    "ore": "ui/markers/ore.webp",
 }
+CURRENCY_ICON_FILES = {
+    "Gold": "ui/currency/currency_gold.webp",
+    "CraftPoint": "ui/currency/currency_craft.webp",
+    "DemonicSoul": "ui/currency/currency_demonic_soul.webp",
+    "Nightblood": "ui/currency/currency_nightblood.webp",
+}
+
+# UI chrome / planner
+UI_POWER_RELATIVE_PATH = Path("ui/chrome/power.svg")
+UI_RELOAD_RELATIVE_PATH = Path("ui/chrome/reload.svg")
+UI_RELOAD_HOVER_RELATIVE_PATH = Path("ui/chrome/reload_hover.svg")
+UI_SETTINGS_RELATIVE_PATH = Path("ui/chrome/settings.svg")
+UI_SETTINGS_HOVER_RELATIVE_PATH = Path("ui/chrome/settings_hover.svg")
+UI_HELP_RELATIVE_PATH = Path("ui/chrome/help.svg")
+UI_HELP_HOVER_RELATIVE_PATH = Path("ui/chrome/help_hover.svg")
+UI_FOG_RELATIVE_PATH = Path("ui/chrome/fog.svg")
+UI_COLLECT_RELATIVE_PATH = Path("ui/chrome/collect.svg")
+UI_WAYPOINT_RELATIVE_PATH = Path("ui/chrome/waypoint.svg")
+UI_GITHUB_RELATIVE_PATH = Path("ui/chrome/github.svg")
+UI_MAP_RECENTER_RELATIVE_PATH = Path("ui/chrome/map_recenter.svg")
+UI_LEVEL_PLUS_RELATIVE_PATH = Path("ui/chrome/level_plus.svg")
+UI_LEVEL_MINUS_RELATIVE_PATH = Path("ui/chrome/level_minus.svg")
+UI_CLOSE_RELATIVE_PATH = Path("ui/chrome/window_close.svg")
+UI_CLOSE_HOVER_RELATIVE_PATH = Path("ui/chrome/window_close_hover.svg")
+UI_MINIMIZE_RELATIVE_PATH = Path("ui/chrome/window_minimize.svg")
+UI_MINIMIZE_HOVER_RELATIVE_PATH = Path("ui/chrome/window_minimize_hover.svg")
+UI_MAXIMIZE_RELATIVE_PATH = Path("ui/chrome/window_maximize.svg")
+UI_MAXIMIZE_HOVER_RELATIVE_PATH = Path("ui/chrome/window_maximize_hover.svg")
+UI_RESTORE_RELATIVE_PATH = Path("ui/chrome/window_restore.svg")
+UI_RESTORE_HOVER_RELATIVE_PATH = Path("ui/chrome/window_restore_hover.svg")
+PLANNER_TALENT_SILVER_RELATIVE_PATH = Path(
+    "ui/planner/planner_talent_placeholder_silver.svg"
+)
+PLANNER_TALENT_GOLD_RELATIVE_PATH = Path(
+    "ui/planner/planner_talent_placeholder_gold.svg"
+)
+
+# Back-compat alias used by older call sites / packaging notes.
+RIFT_ICON_NAME = str(RIFT_ICON_RELATIVE_PATH)
 WAYPOINT_WORLD = "W1_Siagarta"
 WAYPOINT_FILE_NAME = "user_waypoints_siagarta.json"
 WAYPOINT_STORE_PATH = PROJECT_ROOT / "user_data" / "waypoints" / WAYPOINT_FILE_NAME
@@ -142,22 +199,8 @@ def discover_game_dir() -> Path | None:
         if (candidate / "Farever.exe").is_file():
             return candidate.resolve()
 
-    # Optional override under this checkout/exe user_data/ (migrates legacy names).
+    # Optional override under this checkout/exe user_data/.
     conf = PROJECT_ROOT / "user_data" / "game_dir.conf"
-    if not conf.is_file():
-        for legacy in (
-            PROJECT_ROOT / "user_data" / "nyx_game_dir.conf",
-            PROJECT_ROOT / "nyx_game_dir.conf",
-            PROJECT_ROOT / "game_dir.conf",
-        ):
-            if not legacy.is_file():
-                continue
-            try:
-                conf.parent.mkdir(parents=True, exist_ok=True)
-                legacy.replace(conf)
-            except OSError:
-                conf = legacy
-            break
     if conf.is_file():
         try:
             line = conf.read_text(encoding="utf-8").splitlines()[0].strip()
@@ -205,7 +248,7 @@ def discover_project_asset(relative: str | Path) -> Path | None:
 
 
 def discover_rift_icon() -> Path | None:
-    return discover_project_asset(RIFT_ICON_NAME)
+    return discover_project_asset(RIFT_ICON_RELATIVE_PATH)
 
 
 def safe_float(value: Any, default: float = 0.0) -> float:

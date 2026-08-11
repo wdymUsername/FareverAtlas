@@ -11,7 +11,6 @@ from ...config import PROJECT_ROOT
 
 FOW_LAYERS_DIR = PROJECT_ROOT / "user_data" / "map"
 FOW_LAYERS_PATH = FOW_LAYERS_DIR / "fow_layers_siagarta.json"
-LEGACY_Z4_TRANSFORM_PATH = FOW_LAYERS_DIR / "z4_transform_siagarta.json"
 
 # Z0 = user custom FOW; Baked = release shipping clear zone; Z1–Z4 = --dev edit layers.
 FOW_LAYER_ORDER = (
@@ -69,23 +68,6 @@ FOW_LAYER_LABELS = {
     "Z2_Eksod": "Eksod",
     "Z3": "Crimson Island",
     "Z4": "Ebral",
-}
-
-_LEGACY_TIER_CHILDREN = {
-    "Z1": (
-        "Z1_Primevalley",
-        "Z1_Honeywoods",
-        "Z1_Meridion",
-        "Z1_Enripit",
-        "Z1_Bel_Etir",
-        "Z1_Slime",
-    ),
-    "Z2": (
-        "Z2_Azuram",
-        "Z2_Krisomal",
-        "Z2_Nescent",
-        "Z2_Eksod",
-    ),
 }
 
 
@@ -188,50 +170,18 @@ def _default_layers() -> dict[str, FowLayerState]:
 def load_fow_layers(path: Path | None = None) -> dict[str, FowLayerState]:
     layers = _default_layers()
     target = path or FOW_LAYERS_PATH
-    if target.is_file():
-        try:
-            doc = json.loads(target.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            doc = {}
-        raw_layers = doc.get("layers") if isinstance(doc, dict) else None
-        if isinstance(raw_layers, dict):
-            for tier in FOW_LAYER_ORDER:
-                entry = raw_layers.get(tier)
-                if isinstance(entry, dict):
-                    layers[tier] = _state_from_entry(entry)
-            # Migrate legacy whole-tier Z1/Z2 entries onto their subzones.
-            for parent, children in _LEGACY_TIER_CHILDREN.items():
-                legacy = raw_layers.get(parent)
-                if not isinstance(legacy, dict):
-                    continue
-                legacy_state = _state_from_entry(legacy)
-                for child in children:
-                    if child in raw_layers and isinstance(raw_layers.get(child), dict):
-                        continue
-                    layers[child] = FowLayerState(
-                        enabled=legacy_state.enabled,
-                        inverted=legacy_state.inverted,
-                        transform=FowLayerTransform(
-                            tx=legacy_state.transform.tx,
-                            ty=legacy_state.transform.ty,
-                            sx=legacy_state.transform.sx,
-                            sy=legacy_state.transform.sy,
-                            ox=legacy_state.transform.ox,
-                            oy=legacy_state.transform.oy,
-                        ),
-                    )
-    elif LEGACY_Z4_TRANSFORM_PATH.is_file():
-        # Migrate older Z4-only transform file.
-        try:
-            legacy = json.loads(LEGACY_Z4_TRANSFORM_PATH.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            legacy = {}
-        if isinstance(legacy, dict):
-            layers["Z4"] = FowLayerState(
-                enabled=False,
-                inverted=False,
-                transform=_parse_transform(legacy),
-            )
+    if not target.is_file():
+        return layers
+    try:
+        doc = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return layers
+    raw_layers = doc.get("layers") if isinstance(doc, dict) else None
+    if isinstance(raw_layers, dict):
+        for tier in FOW_LAYER_ORDER:
+            entry = raw_layers.get(tier)
+            if isinstance(entry, dict):
+                layers[tier] = _state_from_entry(entry)
     return layers
 
 
@@ -261,11 +211,3 @@ def save_fow_layers(
     except OSError:
         return False
     return True
-
-
-# Back-compat aliases used by older call sites.
-Z4Transform = FowLayerTransform
-load_z4_transform = lambda path=None: load_fow_layers(path)["Z4"].transform  # noqa: E731
-save_z4_transform = lambda transform, path=None: save_fow_layers(  # noqa: E731
-    {**load_fow_layers(path), "Z4": FowLayerState(transform=transform)}, path
-)

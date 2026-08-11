@@ -7,20 +7,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from .config import ASSET_ROOT, PROJECT_ROOT, discover_project_asset
+from .config import CURRENCY_CAPS_RELATIVE_PATH, discover_project_asset
 
 
 def _caps_path() -> Path | None:
-    asset = discover_project_asset("currency_caps.json")
-    if asset is not None and asset.is_file():
-        return asset
-    for candidate in (
-        ASSET_ROOT / "currency_caps.json",
-        PROJECT_ROOT / "assets" / "currency_caps.json",
-    ):
-        if candidate.is_file():
-            return candidate
-    return None
+    return discover_project_asset(CURRENCY_CAPS_RELATIVE_PATH)
 
 
 @lru_cache(maxsize=1)

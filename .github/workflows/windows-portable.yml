@@ -31,6 +31,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Full history required for accurate Nightly-0.{commits}-{tip}.
+          fetch-depth: 0
+
+      - name: Stamp Nightly version
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH=app python -m farever_atlas.versioning --stamp
+          PYTHONPATH=app python -m farever_atlas.versioning --print
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -97,7 +107,9 @@ jobs:
         run: |
           set -euo pipefail
           tag=""
-          if [[ "${{ github.event_name }}" == "schedule" || "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          # Publish Nightly on schedule, manual runs, and pushes to main.
+          # Pull requests stay artifact-only.
+          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
             tag="Nightly"
           fi
           sha="$(git rev-parse --short HEAD)"
@@ -110,7 +122,7 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
           if [[ -n "${tag}" ]]; then
-            echo "Publishing Nightly release (sha=${sha})"
+            echo "Publishing Nightly release (sha=${sha}, event=${{ github.event_name }})"
           else
             echo "No Nightly publish for event ${{ github.event_name }}; artifact only"
           fi
@@ -122,6 +134,7 @@ jobs:
         with:
           tag_name: Nightly
           name: Nightly
+          target_commitish: ${{ github.sha }}
           prerelease: false
           make_latest: true
           generate_release_notes: false
@@ -129,6 +142,24 @@ jobs:
           files: |
             dist/FareverAtlas.exe
             dist/FareverAtlas.exe.sha256
+
+      - name: Point Nightly tag at this commit
+        if: steps.release.outputs.id != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.release.outputs.id }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # softprops leaves an existing Nightly tag where it was; force-move it.
+          repo="${{ github.repository }}"
+          gh api -X PATCH "repos/${repo}/git/refs/tags/Nightly" \
+            -f sha="${COMMIT_SHA}" \
+            -F force=true >/dev/null
+          gh api -X PATCH "repos/${repo}/releases/${RELEASE_ID}" \
+            --input - <<< "{\"target_commitish\":\"${COMMIT_SHA}\"}" >/dev/null
+          echo "Nightly tag -> $(gh api "repos/${repo}/git/ref/tags/Nightly" --jq .object.sha)"
 
       - name: Refresh Nightly published timestamp
         if: steps.release.outputs.id != ''

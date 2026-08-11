@@ -5,7 +5,7 @@ Extracts minimap tiles for a world, stitches them into one image, and writes
 Atlas-native calibration derived from the tile grid (not eye-fit).
 
     python tools/build_map_assets.py
-    python tools/build_map_assets.py --pak /path/to/res.map.pak --scale 0.5
+    python tools/build_map_assets.py --pak /path/to/res.map.pak --scale 0.35
 
 Outputs (default):
     assets/map/w1_siagarta.webp
@@ -170,20 +170,6 @@ def discover_game_dir() -> Path | None:
         if (candidate / "Farever.exe").is_file():
             return candidate.resolve()
     conf = ROOT / "user_data" / "game_dir.conf"
-    if not conf.is_file():
-        for legacy in (
-            ROOT / "user_data" / "nyx_game_dir.conf",
-            ROOT / "nyx_game_dir.conf",
-            ROOT / "game_dir.conf",
-        ):
-            if not legacy.is_file():
-                continue
-            try:
-                conf.parent.mkdir(parents=True, exist_ok=True)
-                legacy.replace(conf)
-            except OSError:
-                conf = legacy
-            break
     if conf.is_file():
         try:
             line = conf.read_text(encoding="utf-8").splitlines()[0].strip()
@@ -438,7 +424,9 @@ def build(
     image_path = out_dir / f"{world_key}.webp"
     meta_path = out_dir / f"{world_key}.json"
     save_webp(image, image_path, quality)
-    meta_path.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    meta_path.write_text(
+        json.dumps(meta, separators=(",", ":")) + "\n", encoding="utf-8"
+    )
     print(f"[+] {image_path} ({image_path.stat().st_size:,} bytes)", file=sys.stderr)
     print(f"[+] {meta_path}", file=sys.stderr)
 
@@ -459,8 +447,8 @@ def main() -> int:
     parser.add_argument(
         "--scale",
         type=float,
-        default=0.5,
-        help="Tile downsample factor (1.0 = full 1024px tiles → 11264²)",
+        default=0.35,
+        help="Tile downsample factor (1.0 = full 1024px tiles → 11264²; 0.35 → ~3938²)",
     )
     parser.add_argument(
         "--quality",

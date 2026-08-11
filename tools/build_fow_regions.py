@@ -10,15 +10,15 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ZONE_DIR = ROOT / "extracted/res.map/Level/World/W1_Siagarta.dat/minimap/zones"
-POI_PATH = ROOT / "assets/pois_W1_Siagarta.json"
+POI_PATH = ROOT / "assets/data/w1_siagarta/pois.json"
 OUT_JSON = ROOT / "assets/map/w1_siagarta_fow.json"
 PATTERN_SRC = ROOT / "extracted/res/UI/Map/Pattern_fog_of_war_512.png"
-PATTERN_DST = ROOT / "assets/map/pattern_fog_of_war_512.png"
+PATTERN_DST = ROOT / "assets/map/pattern_fog_of_war_512.webp"
 
 REGIONS = (
     ("Z1_Primevalley", "Primevalley", "Z1"),
@@ -174,11 +174,24 @@ def main() -> None:
         },
         "regions": regions,
     }
-    OUT_JSON.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    OUT_JSON.write_text(
+        json.dumps(doc, separators=(",", ":")) + "\n", encoding="utf-8"
+    )
     print(f"wrote {OUT_JSON}")
     if PATTERN_SRC.is_file():
-        shutil.copy2(PATTERN_SRC, PATTERN_DST)
-        print(f"copied {PATTERN_DST}")
+        try:
+            from PIL import Image
+        except ImportError:
+            print(
+                "Pillow required to write FOW pattern WebP "
+                "(pip install -r tools/requirements.txt)",
+                file=sys.stderr,
+            )
+        else:
+            Image.open(PATTERN_SRC).convert("RGB").save(
+                PATTERN_DST, "WEBP", quality=80, method=6
+            )
+            print(f"wrote {PATTERN_DST}")
 
 
 if __name__ == "__main__":

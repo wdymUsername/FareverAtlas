@@ -1,147 +1,18 @@
-"""Optional player, target, party, and combat windows."""
+"""Optional combat meter window."""
 
 from __future__ import annotations
 
-import math
 from typing import Any, Iterable
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from .config import (
-    cardinal,
-    fmt_hp,
     fmt_number,
-    map_heading_degrees,
     safe_float,
     safe_int,
 )
 from .pages.map.data import Snapshot
-from .window_base import PersistentWindow
-
-
-class StatusWindow(PersistentWindow):
-    def __init__(self, settings: QtCore.QSettings):
-        super().__init__(settings, "status")
-        self.setWindowTitle("Farever Atlas — Player / Target")
-        self.resize(520, 520)
-        central = QtWidgets.QWidget()
-        layout = QtWidgets.QVBoxLayout(central)
-        self.connection = QtWidgets.QLabel("Waiting for bridge output")
-        self.connection.setStyleSheet("font-weight: 600")
-        layout.addWidget(self.connection)
-
-        player_box = QtWidgets.QGroupBox("Player")
-        player_layout = QtWidgets.QFormLayout(player_box)
-        self.identity = QtWidgets.QLabel("—")
-        self.position = QtWidgets.QLabel("—")
-        self.heading = QtWidgets.QLabel("—")
-        self.hp = QtWidgets.QProgressBar()
-        self.hp.setRange(0, 1000)
-        self.resources = QtWidgets.QLabel("—")
-        player_layout.addRow("Identity", self.identity)
-        player_layout.addRow("Position", self.position)
-        player_layout.addRow("Heading", self.heading)
-        player_layout.addRow("Health", self.hp)
-        player_layout.addRow("Resources", self.resources)
-        layout.addWidget(player_box)
-
-        target_box = QtWidgets.QGroupBox("Target")
-        target_layout = QtWidgets.QFormLayout(target_box)
-        self.target_name = QtWidgets.QLabel("None")
-        self.target_hp = QtWidgets.QProgressBar()
-        self.target_hp.setRange(0, 1000)
-        self.target_cast = QtWidgets.QProgressBar()
-        self.target_cast.setRange(0, 1000)
-        target_layout.addRow("Target", self.target_name)
-        target_layout.addRow("Health", self.target_hp)
-        target_layout.addRow("Cast", self.target_cast)
-        layout.addWidget(target_box)
-
-        party_box = QtWidgets.QGroupBox("Party")
-        party_layout = QtWidgets.QVBoxLayout(party_box)
-        self.party = QtWidgets.QTableWidget(0, 4)
-        self.party.setHorizontalHeaderLabels(["Name", "Class", "HP", "Distance"])
-        self.party.horizontalHeader().setStretchLastSection(True)
-        self.party.verticalHeader().setVisible(False)
-        self.party.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
-        party_layout.addWidget(self.party)
-        layout.addWidget(party_box, 1)
-        self.setCentralWidget(central)
-
-    @QtCore.Slot(object)
-    def update_snapshot(self, snapshot: Snapshot) -> None:
-        self.connection.setText(snapshot.message)
-        state = snapshot.state or {}
-        player = state.get("player", {}) or {}
-        name = player.get("name") or "Unknown"
-        klass = player.get("class") or "Unknown class"
-        self.identity.setText(f"{name} — {klass}, level {safe_int(player.get('level'))}")
-        self.position.setText(
-            f"X {safe_float(player.get('x')):.2f}, "
-            f"Y {safe_float(player.get('y')):.2f}, "
-            f"Z {safe_float(player.get('z')):.2f}"
-        )
-        degrees = map_heading_degrees(player.get("heading"))
-        self.heading.setText(f"{degrees:.1f}° {cardinal(degrees)}")
-        hp_pct = max(0.0, min(1.0, safe_float(player.get("hp_pct"))))
-        self.hp.setValue(round(hp_pct * 1000))
-        self.hp.setFormat(
-            f"{fmt_number(player.get('hp'))} / {fmt_number(player.get('max_hp'))}  "
-            f"({hp_pct * 100:.1f}%)"
-        )
-        self.resources.setText(
-            f"Shield {fmt_number(player.get('shield'))}   "
-            f"Energy {fmt_number(player.get('energy'))}"
-        )
-
-        target = state.get("target", {}) or {}
-        if target.get("exists"):
-            self.target_name.setText(
-                f"{target.get('name') or 'Unknown'} — level {safe_int(target.get('level'))}"
-            )
-            target_pct = max(0.0, min(1.0, safe_float(target.get("hp_pct"))))
-            self.target_hp.setValue(round(target_pct * 1000))
-            self.target_hp.setFormat(
-                f"{fmt_number(target.get('hp'))} / {fmt_number(target.get('max_hp'))}  "
-                f"({target_pct * 100:.1f}%)"
-            )
-            if target.get("is_casting"):
-                cast_pct = max(0.0, min(1.0, safe_float(target.get("cast_progress"))))
-                self.target_cast.setValue(round(cast_pct * 1000))
-                self.target_cast.setFormat(
-                    f"{target.get('cast_skill') or 'Casting'} — "
-                    f"{safe_float(target.get('cast_remaining')):.1f}s"
-                )
-            else:
-                self.target_cast.setValue(0)
-                self.target_cast.setFormat("Idle")
-        else:
-            self.target_name.setText("None")
-            self.target_hp.setValue(0)
-            self.target_hp.setFormat("—")
-            self.target_cast.setValue(0)
-            self.target_cast.setFormat("—")
-
-        party = [item for item in (state.get("party", []) or []) if isinstance(item, dict)]
-        self.party.setRowCount(len(party))
-        px, py = safe_float(player.get("x")), safe_float(player.get("y"))
-        for row, member in enumerate(party):
-            hp = safe_float(member.get("hp"))
-            max_hp = safe_float(member.get("max_hp"))
-            hp_text = f"{fmt_hp(hp)} / {fmt_hp(max_hp)}" if max_hp > 0 else "—"
-            distance = math.hypot(
-                safe_float(member.get("x")) - px,
-                safe_float(member.get("y")) - py,
-            )
-            values = (
-                str(member.get("name") or "Unknown"),
-                str(member.get("class") or ""),
-                hp_text,
-                f"{distance:.1f} m",
-            )
-            for col, value in enumerate(values):
-                self.party.setItem(row, col, QtWidgets.QTableWidgetItem(value))
-        self.party.resizeColumnsToContents()
+from .window_base import PersistentWindow, apply_always_on_top
 
 
 class NumericTableItem(QtWidgets.QTableWidgetItem):
@@ -292,6 +163,44 @@ class CombatWindow(PersistentWindow):
         self.reset_button.clicked.connect(self._reset_current_view)
         self.compact_button.toggled.connect(self._set_compact)
         self.always_on_top.toggled.connect(self._set_always_on_top)
+        self.apply_settings_preferences(initial=True)
+
+    @staticmethod
+    def _setting_bool(settings: QtCore.QSettings, key: str, default: bool = False) -> bool:
+        value = settings.value(key, default)
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off"}:
+            return False
+        return default
+
+    def _refresh_interval_ms(self) -> int:
+        return max(
+            100,
+            min(2000, safe_int(self._settings.value("combat/refresh_ms"), 500)),
+        )
+
+    @QtCore.Slot()
+    def apply_settings_preferences(self, initial: bool = False) -> None:
+        compact = self._setting_bool(self._settings, "combat/compact", False)
+        always_on_top = self._setting_bool(
+            self._settings, "combat/always_on_top", False
+        )
+        view = str(
+            self._settings.value("combat/default_view", "damage") or "damage"
+        ).lower()
+        self.compact_button.blockSignals(True)
+        self.compact_button.setChecked(compact)
+        self.compact_button.blockSignals(False)
+        self._set_compact(compact, persist=False)
+        self.always_on_top.blockSignals(True)
+        self.always_on_top.setChecked(always_on_top)
+        self.always_on_top.blockSignals(False)
+        self._set_always_on_top(always_on_top, persist=False)
+        self.tabs.setCurrentIndex(1 if view == "healing" else 0)
 
     @staticmethod
     def _metric_baseline(
@@ -347,7 +256,7 @@ class CombatWindow(PersistentWindow):
         self._render_dps(dps)
 
     @QtCore.Slot(bool)
-    def _set_compact(self, compact: bool) -> None:
+    def _set_compact(self, compact: bool, *, persist: bool = True) -> None:
         for table in (self.damage, self.healing):
             for column in range(3, 7):
                 table.setColumnHidden(column, compact)
@@ -356,13 +265,14 @@ class CombatWindow(PersistentWindow):
         self.reset_button.setVisible(not compact)
         if compact:
             self.resize(470, 280)
+        if persist:
+            self._settings.setValue("combat/compact", bool(compact))
 
     @QtCore.Slot(bool)
-    def _set_always_on_top(self, enabled: bool) -> None:
-        self.setWindowFlag(
-            QtCore.Qt.WindowType.WindowStaysOnTopHint, enabled
-        )
-        self.show()
+    def _set_always_on_top(self, enabled: bool, *, persist: bool = True) -> None:
+        apply_always_on_top(self, enabled)
+        if persist:
+            self._settings.setValue("combat/always_on_top", bool(enabled))
 
     def _render_dps(self, dps: dict[str, Any]) -> None:
         elapsed = max(0.0, safe_float(dps.get("elapsed")) - self._baseline_elapsed)
@@ -424,7 +334,7 @@ class CombatWindow(PersistentWindow):
         combat_state = bool(dps.get("in_combat"))
         if (
             combat_state != self._last_combat_state
-            or now_ms - self._last_render_ms >= 500
+            or now_ms - self._last_render_ms >= self._refresh_interval_ms()
         ):
             self._render_dps(dps)
             self._last_render_ms = now_ms

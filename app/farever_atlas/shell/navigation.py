@@ -7,7 +7,13 @@ import math
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from .. import __version__
-from ..config import ASSET_ROOT, safe_float, safe_int
+from ..config import (
+    ASSET_ROOT,
+    UI_CLOSE_RELATIVE_PATH,
+    UI_GITHUB_RELATIVE_PATH,
+    safe_float,
+    safe_int,
+)
 from ..pages.map.data import Snapshot
 from ..settings_window import SettingsPanel
 from ..toast import notify
@@ -22,11 +28,11 @@ class MainNavigationOverlay(QtWidgets.QFrame):
     resetOverlaysRequested = QtCore.Signal()
 
     ENTRIES = (
-        ("General", "General", ""),
-        ("Map", "Map", "Map display and waypoint preferences."),
+        ("General", "General", "Application behavior and Steam friend lookup."),
+        ("Map", "Map", "Map display, fog, markers, and cull ranges."),
         ("Party", "Party", "Party cards, markers, and distance display."),
         ("Combat", "Combat", "Combat meter and compact DPS overlay."),
-        ("Alerts", "Alerts", "Target casts and notification preferences."),
+        ("Alerts", "Alerts", "Proximity toasts for elites, bosses, and critters."),
         ("Bridge Status", "Bridge Status", "Telemetry connection diagnostics."),
         ("About", "About", ""),
     )
@@ -73,11 +79,11 @@ class MainNavigationOverlay(QtWidgets.QFrame):
         self.settings_panel.resetOverlaysRequested.connect(
             self.resetOverlaysRequested.emit
         )
+        self.reset_all_settings = self.settings_panel.reset_all_settings
+        self.reset_all_settings.clicked.connect(self._reset_all_settings_clicked)
+
         settings_pages: list[QtWidgets.QWidget] = []
-        while self.settings_panel.tabs.count():
-            title = self.settings_panel.tabs.tabText(0)
-            page = self.settings_panel.tabs.widget(0)
-            self.settings_panel.tabs.removeTab(0)
+        for title, description, page in self.settings_panel.pages:
             wrapper = QtWidgets.QWidget()
             wrapper.setObjectName("mainNavigationPage")
             wrapper.setMinimumWidth(0)
@@ -91,6 +97,11 @@ class MainNavigationOverlay(QtWidgets.QFrame):
             heading = QtWidgets.QLabel(title)
             heading.setObjectName("mainNavigationHeading")
             wrapper_layout.addWidget(heading)
+            if description:
+                blurb = QtWidgets.QLabel(description)
+                blurb.setObjectName("mainNavigationBody")
+                blurb.setWordWrap(True)
+                wrapper_layout.addWidget(blurb)
             wrapper_layout.addWidget(page, 1)
             page.show()
             settings_pages.append(wrapper)
@@ -122,7 +133,7 @@ class MainNavigationOverlay(QtWidgets.QFrame):
                 self.sections.append(self._page(entry, title, description))
 
         sidebar_layout.addStretch(1)
-        version = QtWidgets.QLabel(f"v{__version__}")
+        version = QtWidgets.QLabel(__version__)
         version.setObjectName("mainNavigationVersion")
         sidebar_layout.addWidget(version)
         root.addWidget(sidebar)
@@ -141,7 +152,7 @@ class MainNavigationOverlay(QtWidgets.QFrame):
         close_button = QtWidgets.QToolButton()
         close_button.setObjectName("mainNavigationClose")
         close_button.setIcon(
-            QtGui.QIcon(str(ASSET_ROOT / "close.svg"))
+            QtGui.QIcon(str(ASSET_ROOT / UI_CLOSE_RELATIVE_PATH))
         )
         close_button.setIconSize(QtCore.QSize(15, 15))
         close_button.setFixedSize(26, 26)
@@ -178,6 +189,7 @@ class MainNavigationOverlay(QtWidgets.QFrame):
         self.content_scroll.verticalScrollBar().valueChanged.connect(
             self._sync_bookmark_to_scroll
         )
+        self._install_scroll_wheel_guards(self.content_body)
         content_layout.addWidget(self.content_scroll, 1)
         root.addWidget(content, 1)
 
@@ -186,6 +198,42 @@ class MainNavigationOverlay(QtWidgets.QFrame):
         escape = QtGui.QShortcut(QtGui.QKeySequence("Escape"), self)
         escape.setContext(QtCore.Qt.ShortcutContext.WidgetWithChildrenShortcut)
         escape.activated.connect(self.closeRequested)
+
+    def _install_scroll_wheel_guards(self, root: QtWidgets.QWidget) -> None:
+        """Keep mouse-wheel scrolling on the page, not on idle value widgets."""
+        wheel_types = (
+            QtWidgets.QAbstractSpinBox,
+            QtWidgets.QComboBox,
+            QtWidgets.QSlider,
+        )
+        for widget in root.findChildren(QtWidgets.QWidget):
+            if isinstance(widget, wheel_types):
+                widget.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
+                widget.installEventFilter(self)
+
+    def eventFilter(self, watched: QtCore.QObject, event: QtCore.QEvent) -> bool:  # noqa: N802
+        if event.type() == QtCore.QEvent.Type.Wheel and isinstance(
+            watched,
+            (
+                QtWidgets.QAbstractSpinBox,
+                QtWidgets.QComboBox,
+                QtWidgets.QSlider,
+            ),
+        ):
+            if not watched.hasFocus():
+                # Unfocused value widgets must not eat the wheel; scroll the page.
+                wheel = event  # type: QtGui.QWheelEvent
+                delta = wheel.angleDelta().y()
+                if delta == 0:
+                    delta = wheel.pixelDelta().y()
+                bar = self.content_scroll.verticalScrollBar()
+                step = max(24, bar.singleStep() * 3)
+                if delta > 0:
+                    bar.setValue(bar.value() - step)
+                elif delta < 0:
+                    bar.setValue(bar.value() + step)
+                return True
+        return super().eventFilter(watched, event)
 
     def _page(
         self,
@@ -306,24 +354,9 @@ class MainNavigationOverlay(QtWidgets.QFrame):
                 0,
                 QtCore.Qt.AlignmentFlag.AlignLeft,
             )
-
-            self.reset_all_settings = QtWidgets.QPushButton(
-                "Reset all settings to default"
-            )
-            self.reset_all_settings.setObjectName("resetAllSettingsButton")
-            self.reset_all_settings.setToolTip(
-                "Restore General, Map, Party, and DPS settings to defaults"
-            )
-            self.reset_all_settings.setProperty("confirmReset", False)
-            self.reset_all_settings.clicked.connect(self._reset_all_settings_clicked)
-            layout.addWidget(
-                self.reset_all_settings,
-                0,
-                QtCore.Qt.AlignmentFlag.AlignLeft,
-            )
         elif entry == "About":
             product = QtWidgets.QLabel(
-                f"<b>Farever Atlas</b> &nbsp;·&nbsp; v{__version__}"
+                f"<b>Farever Atlas</b> &nbsp;·&nbsp; {__version__}"
             )
             product.setObjectName("aboutProduct")
             product.setTextFormat(QtCore.Qt.TextFormat.RichText)
@@ -342,7 +375,7 @@ class MainNavigationOverlay(QtWidgets.QFrame):
             github_icon.setFixedSize(17, 17)
             github_icon.setPixmap(
                 QtGui.QPixmap(
-                    str(ASSET_ROOT / "github.svg")
+                    str(ASSET_ROOT / UI_GITHUB_RELATIVE_PATH)
                 ).scaled(
                     16,
                     16,
@@ -604,7 +637,7 @@ class MainNavigationOverlay(QtWidgets.QFrame):
             return
         button.setText("Reset all settings to default")
         button.setToolTip(
-            "Restore General, Map, Party, and DPS settings to defaults"
+            "Restore General, Map, Party, Combat, and Alerts settings to defaults"
         )
         button.setProperty("confirmReset", False)
         button.style().unpolish(button)

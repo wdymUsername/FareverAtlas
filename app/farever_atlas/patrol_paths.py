@@ -1,6 +1,6 @@
 """Static patrol polylines for ranked/spark and wild-critter spawners.
 
-Source of truth: ``assets/patrol_paths_W1_Siagarta.json``, rebuilt with
+Source of truth: ``assets/data/w1_siagarta/patrol_paths.json``, rebuilt with
 ``python tools/extract_patrol_paths.py``. Paths are authored map splines;
 the map only draws them when a live enemy/critter is associated.
 """
@@ -11,9 +11,9 @@ import json
 from functools import lru_cache
 from typing import Any
 
-from .config import ASSET_ROOT
+from .config import ASSET_ROOT, PATROL_PATHS_RELATIVE_PATH
 
-_PATHS_FILE = ASSET_ROOT / "patrol_paths_W1_Siagarta.json"
+_PATHS_FILE = ASSET_ROOT / PATROL_PATHS_RELATIVE_PATH
 
 
 @lru_cache(maxsize=1)

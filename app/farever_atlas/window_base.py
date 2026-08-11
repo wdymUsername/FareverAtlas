@@ -17,19 +17,76 @@ def _setting_bool(settings: QtCore.QSettings, key: str, default: bool) -> bool:
     return default
 
 
+def apply_always_on_top(
+    widget: QtWidgets.QWidget,
+    enabled: bool,
+    *,
+    activate: bool = True,
+) -> None:
+    """Toggle WindowStaysOnTopHint and re-show so WMs (incl. Linux) apply it.
+
+    Pass ``activate=False`` for game overlays that must not steal focus.
+    """
+    enabled = bool(enabled)
+    flag = QtCore.Qt.WindowType.WindowStaysOnTopHint
+    currently = bool(widget.windowFlags() & flag)
+    was_visible = widget.isVisible()
+    if currently != enabled:
+        widget.setWindowFlag(flag, enabled)
+        handle = widget.windowHandle()
+        if handle is not None:
+            handle.setFlag(flag, enabled)
+        if was_visible:
+            if not activate:
+                widget.setAttribute(
+                    QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating, True
+                )
+            widget.show()
+            if not activate:
+                widget.setAttribute(
+                    QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating, False
+                )
+    if enabled and widget.isVisible():
+        widget.raise_()
+        if activate:
+            widget.activateWindow()
+
+
 class PersistentWindow(QtWidgets.QMainWindow):
     def __init__(self, settings: QtCore.QSettings, settings_key: str):
         super().__init__()
         self._settings = settings
         self._settings_key = settings_key
+        self._geometry_save_timer = QtCore.QTimer(self)
+        self._geometry_save_timer.setSingleShot(True)
+        self._geometry_save_timer.setInterval(400)
+        self._geometry_save_timer.timeout.connect(self._persist_geometry)
         if _setting_bool(settings, "app/restore_window_positions", True):
             geometry = settings.value(f"windows/{settings_key}/geometry")
             if geometry is not None:
                 self.restoreGeometry(geometry)
 
+    def _persist_geometry(self) -> None:
+        if not _setting_bool(self._settings, "app/restore_window_positions", True):
+            return
+        self._settings.setValue(
+            f"windows/{self._settings_key}/geometry", self.saveGeometry()
+        )
+
+    def _schedule_geometry_save(self) -> None:
+        if not _setting_bool(self._settings, "app/restore_window_positions", True):
+            return
+        self._geometry_save_timer.start()
+
+    def moveEvent(self, event: QtGui.QMoveEvent) -> None:  # noqa: N802
+        super().moveEvent(event)
+        self._schedule_geometry_save()
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._schedule_geometry_save()
+
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # noqa: N802
-        if _setting_bool(self._settings, "app/restore_window_positions", True):
-            self._settings.setValue(
-                f"windows/{self._settings_key}/geometry", self.saveGeometry()
-            )
+        self._geometry_save_timer.stop()
+        self._persist_geometry()
         super().closeEvent(event)

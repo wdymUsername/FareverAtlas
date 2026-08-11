@@ -1,0 +1,123 @@
+name: Enforce Nightly-only
+
+# create/release workflows always load from the default branch, so this still
+# catches tags/releases even when an old commit's portable workflow fires.
+on:
+  create:
+  release:
+    types: [published, created, released, prereleased, edited]
+  schedule:
+    - cron: "30 0 * * *" # shortly after the Nightly cron
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/windows-portable.yml"
+      - ".github/workflows/enforce-nightly-only.yml"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/windows-portable.yml"
+      - ".github/workflows/enforce-nightly-only.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  reject-versioned-workflow:
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Forbid resurrecting versioned release triggers
+        shell: bash
+        run: |
+          set -euo pipefail
+          wf=".github/workflows/windows-portable.yml"
+          if [[ ! -f "$wf" ]]; then
+            echo "Missing $wf"
+            exit 1
+          fi
+          if grep -nE \
+            -e '^[[:space:]]*tags:[[:space:]]*$' \
+            -e '^[[:space:]]*tags:[[:space:]]*\[' \
+            -e "['\"]v\\*['\"]" \
+            -e '^[[:space:]]*release:[[:space:]]*$' \
+            -e 'types:[[:space:]]*\[.*published' \
+            "$wf"; then
+            echo "::error::$wf must not trigger on versioned tags or release events. Nightly-only."
+            exit 1
+          fi
+          if grep -nE 'tag_name:[[:space:]]*\$\{\{[[:space:]]*inputs\.tag' "$wf"; then
+            echo "::error::$wf must not publish arbitrary input tags. Use Nightly only."
+            exit 1
+          fi
+          echo "OK: portable workflow stays Nightly-only."
+
+  cleanup-stray-tags-and-releases:
+    if: >
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'create' ||
+      github.event_name == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete non-Nightly tags and releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF_TYPE: ${{ github.event.ref_type }}
+          EVENT_CREATE_REF: ${{ github.event.ref }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          delete_release_and_tag() {
+            local tag="$1"
+            [[ -z "$tag" || "$tag" == "Nightly" ]] && return 0
+            if gh release view "$tag" >/dev/null 2>&1; then
+              echo "Deleting release $tag"
+              gh release delete "$tag" --yes || true
+            fi
+            if gh api "repos/${GH_REPO}/git/ref/tags/${tag}" >/dev/null 2>&1; then
+              echo "Deleting tag $tag"
+              gh api -X DELETE "repos/${GH_REPO}/git/refs/tags/${tag}" || true
+            fi
+          }
+
+          if [[ "$EVENT_NAME" == "create" && "${EVENT_REF_TYPE:-}" == "tag" ]]; then
+            tag="${EVENT_CREATE_REF:-}"
+            tag="${tag#refs/tags/}"
+            if [[ -n "$tag" && "$tag" != "Nightly" ]]; then
+              echo "Stray tag create: $tag"
+              delete_release_and_tag "$tag"
+            fi
+          fi
+
+          if [[ "$EVENT_NAME" == "release" && -n "${RELEASE_TAG:-}" && "$RELEASE_TAG" != "Nightly" ]]; then
+            echo "Stray release: $RELEASE_TAG"
+            delete_release_and_tag "$RELEASE_TAG"
+          fi
+
+          while IFS= read -r tag; do
+            [[ -z "$tag" || "$tag" == "Nightly" ]] && continue
+            echo "Sweeping non-Nightly release: $tag"
+            delete_release_and_tag "$tag"
+          done < <(gh release list --limit 100 --json tagName --jq '.[].tagName')
+
+          while IFS= read -r ref; do
+            tag="${ref#refs/tags/}"
+            [[ -z "$tag" || "$tag" == "Nightly" ]] && continue
+            echo "Sweeping non-Nightly tag: $tag"
+            delete_release_and_tag "$tag"
+          done < <(gh api "repos/${GH_REPO}/git/matching-refs/tags" --jq '.[].ref')
+
+          if gh release view Nightly >/dev/null 2>&1; then
+            rid="$(gh api "repos/${GH_REPO}/releases/tags/Nightly" --jq .id)"
+            gh api -X PATCH "repos/${GH_REPO}/releases/${rid}" \
+              --input - <<<'{"make_latest":"true"}' >/dev/null
+            echo "Nightly marked make_latest"
+          fi
+
+          echo "Nightly-only enforcement complete."

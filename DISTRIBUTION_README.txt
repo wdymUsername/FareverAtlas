@@ -34,12 +34,12 @@ GitHub Actions also builds dist/FareverAtlas.exe
 
 Nightly release (rolling; attaches FareverAtlas.exe + .sha256):
 
-  - automatic: every day at 00:00 UTC
+  - automatic: every push to main (path-filtered), and daily at 00:00 UTC
   - manual: Actions → FareverAtlas.exe → Run workflow
 
 Download: https://github.com/wdymUsername/FareverAtlas/releases/tag/Nightly
 
-Push/PR CI runs still upload the FareverAtlas-windows-portable artifact
+Pull request CI still uploads the FareverAtlas-windows-portable artifact
 without updating Nightly.
 
 WINDOWS (SOURCE / VENV)

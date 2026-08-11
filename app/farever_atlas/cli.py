@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -20,6 +21,21 @@ from .portable import (
 )
 from .telemetry import DataHub
 from .waypoints import WaypointStore
+
+
+def _prefer_xcb_on_linux() -> None:
+    """Use XWayland when possible so always-on-top and geometry restore work.
+
+    Native Wayland ignores WindowStaysOnTopHint for normal xdg-toplevel windows
+    on Plasma/GNOME. Prefer xcb when an X display is available unless the user
+    already pinned QT_QPA_PLATFORM.
+    """
+    if sys.platform != "linux":
+        return
+    if os.environ.get("QT_QPA_PLATFORM"):
+        return
+    if os.environ.get("DISPLAY"):
+        os.environ["QT_QPA_PLATFORM"] = "xcb"
 
 
 def apply_palette(app: QtWidgets.QApplication) -> None:
@@ -54,22 +70,6 @@ def _load_settings() -> QtCore.QSettings:
         str(settings_ini_path()), QtCore.QSettings.Format.IniFormat
     )
     settings.setFallbacksEnabled(False)
-    if settings.allKeys():
-        return settings
-
-    # One-time migration from the old shared Qt org/app store (and earlier names).
-    for legacy_name in ("FareverAtlas", "FareverStandalone", "FareverMinimap"):
-        legacy = QtCore.QSettings("Local", legacy_name)
-        keys = legacy.allKeys()
-        if not keys:
-            continue
-        for key in keys:
-            settings.setValue(key, legacy.value(key))
-        settings.sync()
-        # Clear the shared store so a fresh clone does not re-import secrets.
-        legacy.clear()
-        legacy.sync()
-        break
     return settings
 
 
@@ -111,6 +111,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    _prefer_xcb_on_linux()
     args = parse_args()
     if args.test_toast and not args.dev:
         print("--test-toast requires --dev", file=sys.stderr)

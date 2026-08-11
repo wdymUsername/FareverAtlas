@@ -1,6 +1,6 @@
 """CastleDB in-game display labels for map tooltips.
 
-Source of truth: ``assets/display_names.json``, rebuilt with
+Source of truth: ``assets/data/display_names.json``, rebuilt with
 ``python tools/extract_display_names.py``.
 """
 
@@ -11,9 +11,9 @@ import re
 from functools import lru_cache
 from typing import Any
 
-from .config import ASSET_ROOT
+from .config import ASSET_ROOT, DISPLAY_NAMES_RELATIVE_PATH
 
-_NAMES_FILE = ASSET_ROOT / "display_names.json"
+_NAMES_FILE = ASSET_ROOT / DISPLAY_NAMES_RELATIVE_PATH
 _SIZE_TOKENS = ("Small", "Medium", "Large", "Big")
 
 # Prefab / Element.kind tokens → in-game chest labels.

@@ -9,6 +9,7 @@ from typing import Any
 from PySide6 import QtCore, QtWidgets
 
 from ...config import safe_float
+from ...critter_spawns import critter_spawns
 from ...cull_limits import DEFAULT_LOOT_XY_M, DEFAULT_LOOT_Z_M
 from ...display_names import (
     chest_label_from_id,
@@ -24,13 +25,13 @@ GATHER_KINDS = (
     ("ore", "Ore"),
     ("chest", "Chest"),
     ("red_orb", "Red Orb"),
-    ("pet", "Pets"),
+    ("critter", "Critters"),
 )
 
 # Static-only kinds have no live interactible feed; completion / codex gates them.
-_STATIC_GATHER_KINDS = frozenset({"red_orb", "pet"})
+_STATIC_GATHER_KINDS = frozenset({"red_orb"})
 _SIZED_GATHER_KINDS = frozenset({"plant", "ore", "gatherable"})
-_TYPED_GATHER_KINDS = frozenset({"plant", "ore", "chest"})
+_TYPED_GATHER_KINDS = frozenset({"plant", "ore", "chest", "critter"})
 
 GATHER_SIZES = (
     ("", "Any size"),
@@ -38,6 +39,28 @@ GATHER_SIZES = (
     ("medium", "Medium"),
     ("large", "Large"),
 )
+
+GATHER_COLLECTED = (
+    ("yes", "Yes"),
+    ("no", "No"),
+)
+
+# Default handoff radius when a spawn does not author roaming_range.
+_CRITTER_SPAWN_HANDOFF_M = 60.0
+
+# Family key → NODE GUIDE type label (Goat kinds read as "Ram" in game copy).
+_CRITTER_FAMILY_LABELS = {
+    "demondog": "Demon Dog",
+    "frog": "Frog",
+    "goat": "Ram",
+    "ladybug": "Ladybug",
+    "lizard": "Lizard",
+    "rabbit": "Rabbit",
+    "sheep": "Sheep",
+    "squirrel": "Squirrel",
+    "stinkbug": "Stink Bug",
+    "turtle": "Turtle",
+}
 
 # Size / filler tokens only — do not strip "world" (WorldChest) or material words.
 _SIZE_TYPE_TOKENS = frozenset(
@@ -80,6 +103,117 @@ _CHEST_TYPE_FALLBACKS = (
     "worldchest",
     "recipechest",
 )
+
+
+def _owned_companion_ids(state: dict[str, Any] | None) -> set[str]:
+    """Companion / Critter ids already unlocked (codex collection.pets).
+
+    Matches ``codex-browse`` owned_collection_ids: accept both bare unit kinds
+    and ``Critter_``-prefixed forms from the bridge payload.
+    """
+    if not isinstance(state, dict):
+        return set()
+    collection = state.get("collection")
+    if not isinstance(collection, dict):
+        return set()
+    raw = collection.get("pets") or []
+    owned: set[str] = set()
+    if not isinstance(raw, list):
+        return owned
+    for value in raw:
+        text = str(value).strip()
+        if not text:
+            continue
+        owned.add(text)
+        if text.startswith("Critter_"):
+            owned.add(text.removeprefix("Critter_"))
+        else:
+            owned.add(f"Critter_{text}")
+    return owned
+
+
+def _critter_unit_owned(unit_kind: str, owned: set[str]) -> bool:
+    text = str(unit_kind or "").strip()
+    if not text or not owned:
+        return False
+    if text in owned:
+        return True
+    if text.startswith("Critter_"):
+        return text.removeprefix("Critter_") in owned
+    return f"Critter_{text}" in owned
+
+
+def _critter_family_key(unit_kind: str) -> str:
+    """Species family from a unit id (Sheep_Beige → sheep, Goat_* → goat)."""
+    text = str(unit_kind or "").strip()
+    if text.startswith("Critter_"):
+        text = text.removeprefix("Critter_")
+    if not text:
+        return ""
+    head = text.replace("-", "_").split("_", 1)[0]
+    return head.lower()
+
+
+def _critter_family_label(family: str) -> str:
+    key = str(family or "").strip().lower()
+    if not key:
+        return "Unknown"
+    return _CRITTER_FAMILY_LABELS.get(key, key.title())
+
+
+def _spawn_kinds(spawn: dict[str, Any]) -> list[str]:
+    raw = spawn.get("kinds")
+    if isinstance(raw, list) and raw:
+        return [str(item).strip() for item in raw if str(item).strip()]
+    unit = str(spawn.get("unit") or "").strip()
+    return [unit] if unit else []
+
+
+def _spawn_key(spawn: dict[str, Any]) -> str:
+    x = safe_float(spawn.get("x"), math.nan)
+    y = safe_float(spawn.get("y"), math.nan)
+    tile = str(spawn.get("source_tile") or "").strip()
+    if tile:
+        return f"critter-spawn:{tile}:{x:.1f}:{y:.1f}"
+    return f"critter-spawn:{x:.1f}:{y:.1f}"
+
+
+def _spawn_handoff_m(spawn: dict[str, Any]) -> float:
+    radius = safe_float(spawn.get("roaming_range"), math.nan)
+    if math.isfinite(radius) and radius > 0:
+        return float(radius)
+    return _CRITTER_SPAWN_HANDOFF_M
+
+
+def _spawn_matches_family(spawn: dict[str, Any], family: str) -> bool:
+    wanted = str(family or "").strip().lower()
+    if not wanted:
+        return True
+    for kind in _spawn_kinds(spawn):
+        if _critter_family_key(kind) == wanted:
+            return True
+    return False
+
+
+def _spawn_has_unowned_kind(spawn: dict[str, Any], owned: set[str]) -> bool:
+    """True when ownership is unknown or any pool kind is still uncollected."""
+    if not owned:
+        return True
+    kinds = _spawn_kinds(spawn)
+    if not kinds:
+        return True
+    return any(not _critter_unit_owned(kind, owned) for kind in kinds)
+
+
+def _discover_critter_types() -> list[tuple[str, str]]:
+    found: dict[str, str] = {}
+    for spawn in critter_spawns():
+        for kind in _spawn_kinds(spawn):
+            family = _critter_family_key(kind)
+            if not family:
+                continue
+            found.setdefault(family, _critter_family_label(family))
+    return sorted(found.items(), key=lambda pair: pair[1].lower())
 
 
 def _node_size_label(item: dict[str, Any]) -> str:
@@ -173,6 +307,9 @@ def _pretty_type_label(type_key: str, sample_name: str = "") -> str:
     known = _TYPE_LABELS.get(key)
     if known:
         return known
+    critter = _CRITTER_FAMILY_LABELS.get(key)
+    if critter:
+        return critter
     chest = chest_label_from_id(key) or chest_label_from_id(sample_name)
     if chest:
         return chest
@@ -271,6 +408,23 @@ def _element_completed(poi_id: str, completed: set[str]) -> bool:
     return False
 
 
+def _gatherable_completed(item: dict[str, Any], completed: set[str]) -> bool:
+    """True when a chest / red orb is already done for this character."""
+    if not completed:
+        return False
+    for key in ("id", "name", "source"):
+        value = str(item.get(key) or "").strip()
+        if not value:
+            continue
+        if key == "source":
+            value = value.replace("\\", "/").rsplit("/", 1)[-1]
+            if value.lower().endswith(".prefab"):
+                value = value[: -len(".prefab")]
+        if _element_completed(value, completed):
+            return True
+    return False
+
+
 class GatherNavPanel(QtWidgets.QWidget):
     """Controls for NODE GUIDE navigation (floating map overlay)."""
 
@@ -287,14 +441,16 @@ class GatherNavPanel(QtWidgets.QWidget):
         super().__init__(parent)
         self.setObjectName("gatherNavPanel")
         self._compact = bool(compact)
+        self._full_height_hint = 0
 
         root = QtWidgets.QVBoxLayout(self)
+        root.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop)
         if self._compact:
-            root.setContentsMargins(0, 2, 0, 2)
-            root.setSpacing(5)
+            root.setContentsMargins(0, 0, 0, 0)
+            root.setSpacing(3)
         else:
             root.setContentsMargins(0, 8, 0, 0)
-            root.setSpacing(10)
+            root.setSpacing(8)
 
         if not self._compact:
             intro = QtWidgets.QLabel(
@@ -339,6 +495,23 @@ class GatherNavPanel(QtWidgets.QWidget):
         if large_index >= 0:
             self.size_combo.setCurrentIndex(large_index)
         root.addWidget(self.size_combo)
+
+        self.collected_label = QtWidgets.QLabel("COLLECTED")
+        self.collected_label.setObjectName(
+            "gatherNavFieldLabel" if self._compact else "waypointColumnHeader"
+        )
+        root.addWidget(self.collected_label)
+        self.collected_combo = QtWidgets.QComboBox()
+        self.collected_combo.setObjectName("gatherNavCombo")
+        for value, label in GATHER_COLLECTED:
+            self.collected_combo.addItem(label, value)
+        yes_index = self.collected_combo.findData("yes")
+        if yes_index >= 0:
+            self.collected_combo.setCurrentIndex(yes_index)
+        root.addWidget(self.collected_combo)
+
+        # Spare height sits between filters and status so Idle+actions pin bottom.
+        root.addStretch(1)
 
         self.status_frame = QtWidgets.QFrame()
         self.status_frame.setObjectName("gatherNavStatus")
@@ -400,15 +573,72 @@ class GatherNavPanel(QtWidgets.QWidget):
             controls.addWidget(self.skip_button)
             controls.addStretch(1)
             root.addLayout(controls)
-            root.addStretch(1)
+
+        # Keep filters from stretching; spare height stays above status/actions.
+        _fixed_v = QtWidgets.QSizePolicy.Policy.Fixed
+        _pref_v = QtWidgets.QSizePolicy.Policy.Preferred
+        for widget in (
+            kind_label,
+            self.kind_combo,
+            self.type_label,
+            self.type_combo,
+            self.size_label,
+            self.size_combo,
+            self.collected_label,
+            self.collected_combo,
+            self.enable_button,
+            self.skip_button,
+        ):
+            policy = widget.sizePolicy()
+            policy.setVerticalPolicy(_fixed_v)
+            widget.setSizePolicy(policy)
+        status_policy = self.status_frame.sizePolicy()
+        status_policy.setVerticalPolicy(_pref_v)
+        status_policy.setVerticalStretch(0)
+        self.status_frame.setSizePolicy(status_policy)
 
         self.enable_button.toggled.connect(self._on_enabled_toggled)
         self.skip_button.clicked.connect(self.skipRequested.emit)
         self.kind_combo.currentIndexChanged.connect(self._on_kind_changed)
         self.type_combo.currentIndexChanged.connect(self._on_filters_changed)
         self.size_combo.currentIndexChanged.connect(self._on_filters_changed)
+        self.collected_combo.currentIndexChanged.connect(self._on_filters_changed)
         self._type_options: list[tuple[str, str]] = []
+        # Tallest real layout is TYPE+SIZE (plant/ore) or TYPE+COLLECTED
+        # (critters) — never all three at once.
+        self._full_height_hint = self._measure_stable_height()
         self._sync_filter_visibility()
+
+    def _measure_stable_height(self) -> int:
+        """Sidebar height for the tallest TARGET layout (no unused filter row)."""
+        root = self.layout()
+        optional = (
+            self.type_label,
+            self.type_combo,
+            self.size_label,
+            self.size_combo,
+            self.collected_label,
+            self.collected_combo,
+        )
+        configs = (
+            # plant / ore: TYPE + SIZE
+            (True, True, True, True, False, False),
+            # chest / critter: TYPE + COLLECTED (critter) or TYPE only (chest)
+            (True, True, False, False, True, True),
+        )
+        tallest = 0
+        for visible in configs:
+            for widget, show in zip(optional, visible):
+                widget.setVisible(show)
+            if root is not None:
+                root.activate()
+            tallest = max(tallest, max(0, self.sizeHint().height()))
+        return tallest
+
+    def full_content_height(self) -> int:
+        """Stable height for the sidebar (tallest real filter stack)."""
+        natural = max(0, self.sizeHint().height())
+        return max(natural, int(self._full_height_hint or 0))
 
     def _on_enabled_toggled(self, checked: bool) -> None:
         self.enable_button.setText("Stop" if checked else "Start")
@@ -432,6 +662,10 @@ class GatherNavPanel(QtWidgets.QWidget):
         self.size_label.setVisible(sized)
         self.size_combo.setVisible(sized)
         self.size_combo.setEnabled(sized)
+        collected = kind == "critter"
+        self.collected_label.setVisible(collected)
+        self.collected_combo.setVisible(collected)
+        self.collected_combo.setEnabled(collected)
 
     def kind(self) -> str:
         return str(self.kind_combo.currentData() or "plant")
@@ -445,6 +679,12 @@ class GatherNavPanel(QtWidgets.QWidget):
         if self.kind() not in _SIZED_GATHER_KINDS:
             return ""
         return str(self.size_combo.currentData() or "")
+
+    def collected(self) -> str:
+        if self.kind() != "critter":
+            return "yes"
+        value = str(self.collected_combo.currentData() or "yes").strip().lower()
+        return value if value in {"yes", "no"} else "yes"
 
     def set_kind(self, kind: str) -> None:
         index = self.kind_combo.findData(kind)
@@ -492,6 +732,16 @@ class GatherNavPanel(QtWidgets.QWidget):
         if index >= 0:
             self.size_combo.setCurrentIndex(index)
 
+    def set_collected(self, collected: str) -> None:
+        value = str(collected or "yes").strip().lower()
+        if value not in {"yes", "no"}:
+            value = "yes"
+        index = self.collected_combo.findData(value)
+        if index >= 0:
+            self.collected_combo.blockSignals(True)
+            self.collected_combo.setCurrentIndex(index)
+            self.collected_combo.blockSignals(False)
+
     def set_enabled_checked(self, enabled: bool) -> None:
         if self.enable_button.isChecked() == bool(enabled):
             self.enable_button.setText("Stop" if enabled else "Start")
@@ -513,12 +763,15 @@ class GatherNavMixin:
 
     LIVE_MATCH_M = 12.0
     DEPLETED_GRACE_S = 0.75
+    # Critter spawns may stream late; wait longer before skipping an empty pool.
+    CRITTER_SPAWN_EMPTY_GRACE_S = 4.0
 
     def _init_gather_nav_state(self) -> None:
         self.gather_nav_enabled = False
         self.gather_nav_kind = "plant"
         self.gather_nav_type = ""
         self.gather_nav_size = "large"
+        self.gather_nav_collected = "yes"
         self.gather_nav_target: dict[str, Any] | None = None
         self.gather_nav_skipped: set[str] = set()
         self.gather_nav_depleted: set[str] = set()
@@ -539,6 +792,12 @@ class GatherNavMixin:
         kind = self.gather_nav_kind
         if kind not in _TYPED_GATHER_KINDS:
             panel.set_type_options([], selected="")
+            return
+        if kind == "critter":
+            options = _discover_critter_types()
+            selected = self.gather_nav_type
+            panel.set_type_options(options, selected=selected)
+            self.gather_nav_type = panel.node_type()
             return
         options = _discover_gather_types(self._gather_pois(), kind)
         # Keep known species/materials/chest families visible if POIs are thin.
@@ -573,6 +832,7 @@ class GatherNavMixin:
         self._refresh_gather_type_options()
         panel.set_type(self.gather_nav_type)
         panel.set_size(self.gather_nav_size)
+        panel.set_collected(self.gather_nav_collected)
         panel.set_enabled_checked(self.gather_nav_enabled)
         panel.enabledChanged.connect(self._set_gather_nav_enabled)
         panel.filtersChanged.connect(self._on_gather_nav_filters_changed)
@@ -617,9 +877,13 @@ class GatherNavMixin:
             self._refresh_gather_type_options()
         self.gather_nav_type = panel.node_type()
         self.gather_nav_size = panel.size()
+        self.gather_nav_collected = panel.collected()
         self._settings.setValue("map/gather_nav_kind", self.gather_nav_kind)
         self._settings.setValue("map/gather_nav_type", self.gather_nav_type)
         self._settings.setValue("map/gather_nav_size", self.gather_nav_size)
+        self._settings.setValue(
+            "map/gather_nav_collected", self.gather_nav_collected
+        )
         if self.gather_nav_enabled:
             self.gather_nav_skipped.clear()
             self.gather_nav_depleted.clear()
@@ -633,7 +897,10 @@ class GatherNavMixin:
 
     def _ensure_gather_loot_filter_visible(self) -> None:
         kind = self.gather_nav_kind
-        button = getattr(self, "loot_filters", {}).get(kind)
+        if kind == "critter":
+            button = getattr(self, "critters_filter", None)
+        else:
+            button = getattr(self, "loot_filters", {}).get(kind)
         if button is None or button.isChecked():
             return
         button.blockSignals(True)
@@ -732,15 +999,21 @@ class GatherNavMixin:
             self._set_active_custom_waypoint(None)
 
         self.gather_nav_enabled = True
+        self.gather_nav_kind = "critter"
         if hasattr(self, "_stop_gather_sidebar_idle_timer_only"):
             self._stop_gather_sidebar_idle_timer_only()
         self._gather_missing_since = None
         self._gather_missing_key = None
         if hasattr(self, "_set_gather_sidebar_collapsed"):
             self._set_gather_sidebar_collapsed(False)
+        self._ensure_gather_loot_filter_visible()
         panel = self._gather_nav_panel()
         if panel is not None:
+            panel.set_kind("critter")
+            self._refresh_gather_type_options()
+            panel.set_collected(self.gather_nav_collected)
             panel.set_enabled_checked(True)
+            self._settings.setValue("map/gather_nav_kind", "critter")
 
         unit_kind = str(critter.get("kind") or "").strip()
         name = (
@@ -768,6 +1041,8 @@ class GatherNavMixin:
             "source": "live",
             "forced": True,
             "size": "",
+            "family": _critter_family_key(unit_kind),
+            "unit_kind": unit_kind,
         }
         self._push_gather_target_to_radar()
         self._refresh_gather_nav_panel()
@@ -779,6 +1054,138 @@ class GatherNavMixin:
         if not isinstance(nodes, list):
             return []
         return [item for item in nodes if isinstance(item, dict)]
+
+    def _gather_critter_candidates(
+        self,
+        player: dict[str, float],
+        snapshot: Any = None,
+    ) -> list[dict[str, Any]]:
+        """Nearest matching critter spawn points for NODE GUIDE.
+
+        Navigate to authored spawn positions first. When the player reaches the
+        spawn's roaming range, ``_sync_gather_target_live`` hands off to the
+        live wild critter. COLLECTED=No keeps shared spawn pools that still
+        have at least one unowned kind.
+        """
+        px = safe_float(player.get("x"), math.nan)
+        py = safe_float(player.get("y"), math.nan)
+        if not (math.isfinite(px) and math.isfinite(py)):
+            return []
+        owned = _owned_companion_ids(self._gather_snapshot_state(snapshot))
+        type_filter = str(self.gather_nav_type or "").strip().lower()
+        include_collected = str(self.gather_nav_collected or "yes").strip().lower() != "no"
+        candidates: list[dict[str, Any]] = []
+        for spawn in critter_spawns():
+            if not _spawn_matches_family(spawn, type_filter):
+                continue
+            if not include_collected and not _spawn_has_unowned_kind(spawn, owned):
+                continue
+            key = _spawn_key(spawn)
+            if key in self.gather_nav_skipped or key in self.gather_nav_depleted:
+                continue
+            x = safe_float(spawn.get("x"), math.nan)
+            y = safe_float(spawn.get("y"), math.nan)
+            z = safe_float(spawn.get("z"), 0.0)
+            if not (math.isfinite(x) and math.isfinite(y)):
+                continue
+            if self._is_gather_position_depleted(x, y):
+                continue
+            kinds = _spawn_kinds(spawn)
+            family = ""
+            if type_filter:
+                family = type_filter
+            elif kinds:
+                family = _critter_family_key(kinds[0])
+            label = _critter_family_label(family) if family else "Critter"
+            if bool(spawn.get("spark")) and "spark" not in label.lower():
+                label = f"Sparkling {label}"
+            handoff_m = _spawn_handoff_m(spawn)
+            distance = math.hypot(x - px, y - py)
+            candidates.append(
+                {
+                    "key": key,
+                    "kind": "critter",
+                    "name": f"{label} spawn",
+                    "size": "",
+                    "x": x,
+                    "y": y,
+                    "z": z,
+                    "poi_id": None,
+                    "live_id": None,
+                    "distance": distance,
+                    "source": "spawn",
+                    "spawn_key": key,
+                    "spawn_x": x,
+                    "spawn_y": y,
+                    "handoff_m": handoff_m,
+                    "family": family,
+                    "pool_kinds": kinds,
+                    "spark": bool(spawn.get("spark")),
+                }
+            )
+        candidates.sort(
+            key=lambda item: (
+                safe_float(item.get("distance"), math.inf),
+                0 if item.get("spark") else 1,
+                str(item.get("name") or ""),
+            )
+        )
+        return candidates
+
+    def _critter_live_matches_filters(
+        self,
+        live: dict[str, Any],
+        *,
+        owned: set[str],
+        family: str = "",
+    ) -> bool:
+        unit_kind = str(live.get("kind") or "").strip()
+        if not unit_kind:
+            return False
+        type_filter = str(family or self.gather_nav_type or "").strip().lower()
+        if type_filter and _critter_family_key(unit_kind) != type_filter:
+            return False
+        include_collected = (
+            str(self.gather_nav_collected or "yes").strip().lower() != "no"
+        )
+        if not include_collected and _critter_unit_owned(unit_kind, owned):
+            return False
+        return True
+
+    def _attach_live_critter_to_target(
+        self,
+        target: dict[str, Any],
+        live: dict[str, Any],
+        player: dict[str, float],
+    ) -> None:
+        live_id = str(live.get("id") or "").strip()
+        unit_kind = str(live.get("kind") or "").strip()
+        x = safe_float(live.get("x"), target.get("x"))
+        y = safe_float(live.get("y"), target.get("y"))
+        z = safe_float(live.get("z"), target.get("z"))
+        name = format_unit_tooltip_name(unit_kind) if unit_kind else "Critter"
+        if bool(live.get("spark")) and "spark" not in name.lower():
+            name = f"Sparkling {name}"
+        spawn_key = str(target.get("spawn_key") or target.get("key") or "")
+        target.update(
+            {
+                "key": f"critter:{live_id}" if live_id else target.get("key"),
+                "live_id": live_id or None,
+                "x": x,
+                "y": y,
+                "z": z,
+                "name": name,
+                "source": "live",
+                "unit_kind": unit_kind,
+                "spawn_key": spawn_key or None,
+                "distance": math.hypot(
+                    x - safe_float(player.get("x")),
+                    y - safe_float(player.get("y")),
+                ),
+            }
+        )
+        self._gather_missing_since = None
+        self._gather_missing_key = None
 
     def _gather_player_position(self) -> dict[str, float] | None:
         getter = getattr(self, "_current_player_position", None)
@@ -917,11 +1324,18 @@ class GatherNavMixin:
         key = str(target.get("key") or "")
         if key:
             self.gather_nav_depleted.add(key)
+        spawn_key = str(target.get("spawn_key") or "")
+        if spawn_key:
+            self.gather_nav_depleted.add(spawn_key)
         live_id = str(target.get("live_id") or "")
         if live_id:
             self.gather_nav_depleted.add(f"live:{live_id}")
-        tx = safe_float(target.get("x"), math.nan)
-        ty = safe_float(target.get("y"), math.nan)
+        # Prefer authored spawn coords so the next retarget skips this pool.
+        tx = safe_float(target.get("spawn_x"), math.nan)
+        ty = safe_float(target.get("spawn_y"), math.nan)
+        if not (math.isfinite(tx) and math.isfinite(ty)):
+            tx = safe_float(target.get("x"), math.nan)
+            ty = safe_float(target.get("y"), math.nan)
         if not (math.isfinite(tx) and math.isfinite(ty)):
             return
         self.gather_nav_depleted_positions.append((tx, ty))
@@ -954,8 +1368,6 @@ class GatherNavMixin:
             for item in self._gather_live_nodes(snapshot)
             if self._matches_gather_kind(item)
         ]
-        if not all_live:
-            return
         revived_keys: set[str] = set()
         for poi in self._gather_pois(snapshot):
             key = _static_key(poi)
@@ -964,7 +1376,7 @@ class GatherNavMixin:
                 safe_float(poi.get("y"), math.nan),
             ):
                 continue
-            if self._live_covers(poi, all_live) is None:
+            if not all_live or self._live_covers(poi, all_live) is None:
                 continue
             revived_keys.add(key)
             px = safe_float(poi.get("x"), math.nan)
@@ -977,18 +1389,37 @@ class GatherNavMixin:
                 ]
         if revived_keys:
             self.gather_nav_depleted -= revived_keys
-        # Revive live-id marks that are present again.
+        # Revive live-id marks that are present again (loot + wild critters).
         live_ids = {
             str(item.get("id") or "")
             for item in all_live
             if str(item.get("id") or "")
         }
+        for critter in self._gather_critters(snapshot):
+            critter_id = str(critter.get("id") or "").strip()
+            if not critter_id:
+                continue
+            live_ids.add(critter_id)
+            cx = safe_float(critter.get("x"), math.nan)
+            cy = safe_float(critter.get("y"), math.nan)
+            if math.isfinite(cx) and math.isfinite(cy):
+                self.gather_nav_depleted_positions = [
+                    (dx, dy)
+                    for dx, dy in self.gather_nav_depleted_positions
+                    if math.hypot(cx - dx, cy - dy) > self.LIVE_MATCH_M
+                ]
         self.gather_nav_depleted = {
             key
             for key in self.gather_nav_depleted
             if not (
-                key.startswith("live:")
-                and key.removeprefix("live:") in live_ids
+                (
+                    key.startswith("live:")
+                    and key.removeprefix("live:") in live_ids
+                )
+                or (
+                    key.startswith("critter:")
+                    and key.removeprefix("critter:") in live_ids
+                )
             )
         }
 
@@ -997,9 +1428,8 @@ class GatherNavMixin:
         player: dict[str, float],
         snapshot: Any = None,
     ) -> list[dict[str, Any]]:
-        if self.gather_nav_kind == "pet":
-            # Placeholder for the future pet Codex / map markers.
-            return []
+        if self.gather_nav_kind == "critter":
+            return self._gather_critter_candidates(player, snapshot)
 
         state = self._gather_snapshot_state(snapshot)
         completed = _completion_ids(state)
@@ -1023,12 +1453,12 @@ class GatherNavMixin:
 
         for poi in self._gather_pois(snapshot):
             kind = str(poi.get("kind") or "").strip().lower()
-            if kind not in {"plant", "ore", "chest", "gatherable", "red_orb", "pet"}:
+            if kind not in {"plant", "ore", "chest", "gatherable", "red_orb"}:
                 continue
             if not self._matches_gather_filters(poi):
                 continue
             poi_id = str(poi.get("id") or "").strip()
-            if kind in {"red_orb", "chest"} and _element_completed(poi_id, completed):
+            if kind in {"red_orb", "chest"} and _gatherable_completed(poi, completed):
                 continue
             key = _static_key(poi)
             if key in self.gather_nav_skipped or key in self.gather_nav_depleted:
@@ -1079,10 +1509,9 @@ class GatherNavMixin:
                 live_id = str(live.get("id") or "")
                 if live_id and live_id in covered_live_ids:
                     continue
-                # Opened world/recipe chests stay in the live feed; name is the POI id.
-                live_name = str(live.get("name") or "").strip()
+                # Opened world/recipe chests stay in the live feed; skip completed.
                 if str(live.get("kind") or "").strip().lower() == "chest" and (
-                    _element_completed(live_name, completed)
+                    _gatherable_completed(live, completed)
                 ):
                     continue
                 key = _live_key(live)
@@ -1131,16 +1560,6 @@ class GatherNavMixin:
                 detail="Player coordinates unavailable — wait for the bridge.",
             )
             return
-        if self.gather_nav_kind == "pet":
-            self._clear_gather_nav_target()
-            self._refresh_gather_nav_panel(
-                title="Pets soon",
-                detail=(
-                    "Pet markers and Codex completion will plug in here — "
-                    "routing is not available yet."
-                ),
-            )
-            return
         self._revive_depleted_from_live(snapshot)
         candidates = self._gather_candidates(player, snapshot)
         if not candidates:
@@ -1153,15 +1572,31 @@ class GatherNavMixin:
                 "plant": "plant",
                 "ore": "ore",
                 "chest": "chest",
+                "critter": "critter",
             }.get(self.gather_nav_kind, self.gather_nav_kind)
             type_note = ""
             if self.gather_nav_type:
                 type_note = f" {_pretty_type_label(self.gather_nav_type)}"
             detail = (
-                "No uncollected red orbs found for this character "
-                "(completed ones stay muted on the map)."
-                if self.gather_nav_kind == "red_orb"
-                else f"No matching{type_note} {label}{size_note} nodes found."
+                (
+                    "No uncollected red orbs found for this character "
+                    "(completed ones stay muted on the map)."
+                    if self.gather_nav_kind == "red_orb"
+                    else (
+                        "No uncollected chests found for this character "
+                        "(opened ones stay muted on the map)."
+                        if self.gather_nav_kind == "chest"
+                        else (
+                            (
+                                f"No matching{type_note} critter spawn points found."
+                                if self.gather_nav_type
+                                else "No matching critter spawn points found."
+                            )
+                            if self.gather_nav_kind == "critter"
+                            else f"No matching{type_note} {label}{size_note} nodes found."
+                        )
+                    )
+                )
             )
             self._refresh_gather_nav_panel(title="No nodes", detail=detail)
             return
@@ -1201,7 +1636,10 @@ class GatherNavMixin:
                     target["z"] = safe_float(live.get("z"), target.get("z"))
                     unit_kind = str(live.get("kind") or "")
                     if unit_kind:
-                        target["name"] = format_unit_tooltip_name(unit_kind)
+                        name = format_unit_tooltip_name(unit_kind)
+                        if bool(live.get("spark")) and "spark" not in name.lower():
+                            name = f"Sparkling {name}"
+                        target["name"] = name
                     target["distance"] = math.hypot(
                         safe_float(target.get("x")) - safe_float(player.get("x")),
                         safe_float(target.get("y")) - safe_float(player.get("y")),
@@ -1210,10 +1648,68 @@ class GatherNavMixin:
                     self._gather_missing_since = None
                     self._gather_missing_key = None
                     return
-            target["distance"] = math.hypot(
-                safe_float(target.get("x")) - safe_float(player.get("x")),
-                safe_float(target.get("y")) - safe_float(player.get("y")),
+                # Live id missing — collected detection owns advance.
+                target["distance"] = math.hypot(
+                    safe_float(target.get("x")) - safe_float(player.get("x")),
+                    safe_float(target.get("y")) - safe_float(player.get("y")),
+                )
+                return
+
+            # Spawn target: stay locked on the spawn until the player arrives,
+            # then hand off to a matching live critter near that spawn.
+            spawn_x = safe_float(target.get("spawn_x"), target.get("x"))
+            spawn_y = safe_float(target.get("spawn_y"), target.get("y"))
+            handoff_m = safe_float(target.get("handoff_m"), _CRITTER_SPAWN_HANDOFF_M)
+            if not math.isfinite(handoff_m) or handoff_m <= 0:
+                handoff_m = _CRITTER_SPAWN_HANDOFF_M
+            player_to_spawn = math.hypot(
+                spawn_x - safe_float(player.get("x")),
+                spawn_y - safe_float(player.get("y")),
             )
+            target["distance"] = player_to_spawn
+            target["x"] = spawn_x
+            target["y"] = spawn_y
+            if player_to_spawn > handoff_m:
+                self._gather_missing_since = None
+                self._gather_missing_key = None
+                return
+
+            owned = _owned_companion_ids(self._gather_snapshot_state(snapshot))
+            family = str(target.get("family") or self.gather_nav_type or "")
+            best: dict[str, Any] | None = None
+            best_dist = handoff_m
+            for live in self._gather_critters(snapshot):
+                if not self._critter_live_matches_filters(
+                    live, owned=owned, family=family
+                ):
+                    continue
+                lx = safe_float(live.get("x"), math.nan)
+                ly = safe_float(live.get("y"), math.nan)
+                if not (math.isfinite(lx) and math.isfinite(ly)):
+                    continue
+                dist = math.hypot(lx - spawn_x, ly - spawn_y)
+                if dist > best_dist:
+                    continue
+                best = live
+                best_dist = dist
+            if best is not None:
+                self._attach_live_critter_to_target(target, best, player)
+                return
+
+            # Arrived at spawn but no matching live yet — deplete after grace.
+            key = str(target.get("key") or "")
+            now = time.monotonic()
+            if self._gather_missing_key != key:
+                self._gather_missing_key = key
+                self._gather_missing_since = now
+            elif (
+                self._gather_missing_since is not None
+                and now - self._gather_missing_since
+                >= self.CRITTER_SPAWN_EMPTY_GRACE_S
+            ):
+                self._mark_gather_depleted(target, snapshot)
+                self._clear_gather_nav_target()
+                self._gather_nav_retarget(force=True, snapshot=snapshot)
             return
         if kind in _STATIC_GATHER_KINDS:
             target["distance"] = math.hypot(
@@ -1313,17 +1809,24 @@ class GatherNavMixin:
                 and now - self._gather_missing_since >= self.DEPLETED_GRACE_S
             )
         if kind == "red_orb":
-            poi_id = str(target.get("poi_id") or "").strip()
-            if not poi_id:
-                return False
             completed = _completion_ids(self._gather_snapshot_state(snapshot))
-            return _element_completed(poi_id, completed)
+            return _gatherable_completed(
+                {
+                    "id": str(target.get("poi_id") or ""),
+                    "name": str(target.get("name") or ""),
+                },
+                completed,
+            )
         if kind == "chest":
-            poi_id = str(target.get("poi_id") or "").strip()
-            if poi_id:
-                completed = _completion_ids(self._gather_snapshot_state(snapshot))
-                if _element_completed(poi_id, completed):
-                    return True
+            completed = _completion_ids(self._gather_snapshot_state(snapshot))
+            if _gatherable_completed(
+                {
+                    "id": str(target.get("poi_id") or ""),
+                    "name": str(target.get("name") or ""),
+                },
+                completed,
+            ):
+                return True
             # Live-only orphans (or progress not refreshed yet) fall through.
 
         live_id = str(target.get("live_id") or "")
