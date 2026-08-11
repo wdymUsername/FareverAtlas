@@ -379,6 +379,19 @@ class DataHub(QtCore.QObject):
                     "speed": speed,
                     "paused": bool(native_tod.get("paused")),
                 }
+        ui: dict[str, Any] = {"open": False, "windows": []}
+        native_ui = payload.get("ui")
+        if isinstance(native_ui, dict):
+            windows_raw = native_ui.get("windows")
+            windows: list[str] = []
+            if isinstance(windows_raw, list):
+                for name in windows_raw:
+                    if isinstance(name, str) and name.strip():
+                        windows.append(name.strip())
+            ui = {
+                "open": bool(native_ui.get("open")) or bool(windows),
+                "windows": windows,
+            }
         return {
             "schema": 1,
             "bridge_version": payload.get("bridge_version"),
@@ -395,6 +408,7 @@ class DataHub(QtCore.QObject):
             "interactibles": interactibles,
             "instance": instance,
             "time_of_day": time_of_day,
+            "ui": ui,
             "completed_elements": payload.get("completed_elements", []),
             "completed_activities": payload.get("completed_activities", []),
             "player": {

@@ -27,6 +27,21 @@ def _setting_bool(settings: QtCore.QSettings, key: str, default: bool) -> bool:
     return default
 
 
+def _snapshot_game_ui_open(snapshot: Snapshot) -> bool:
+    """True when the game has a blocking UI window open (map, inventory, …)."""
+    if not snapshot.connected:
+        return False
+    ui = snapshot.state.get("ui") if isinstance(snapshot.state, dict) else None
+    if isinstance(ui, dict):
+        if bool(ui.get("open")):
+            return True
+        windows = ui.get("windows")
+        return isinstance(windows, list) and any(
+            isinstance(name, str) and name.strip() for name in windows
+        )
+    return False
+
+
 class Controller(QtCore.QObject):
     def __init__(
         self,
@@ -50,6 +65,8 @@ class Controller(QtCore.QObject):
         self.dev_mode = dev_mode
         self.boot = boot or {}
         self.reloading = False
+        self._overlay_enabled = False
+        self._game_ui_open = False
 
         self.map_window = AtlasWindow(
             settings,
@@ -91,10 +108,29 @@ class Controller(QtCore.QObject):
 
     @QtCore.Slot(object)
     def _overlay_snapshot(self, snapshot: Snapshot) -> None:
+        self._set_game_ui_open(_snapshot_game_ui_open(snapshot))
         if not self.overlay_window.isVisible():
             return
         self.overlay_window.update_snapshot(snapshot)
         self.sync_overlay_view()
+
+    def _set_game_ui_open(self, open_ui: bool) -> None:
+        open_ui = bool(open_ui)
+        if open_ui == self._game_ui_open:
+            return
+        self._game_ui_open = open_ui
+        self._sync_overlay_visibility()
+
+    def _sync_overlay_visibility(self) -> None:
+        """Show companion overlays only when enabled and no game UI is up."""
+        show = self._overlay_enabled and not self._game_ui_open
+        was_visible = self.overlay_window.isVisible()
+        self.overlay_window.set_overlay_visible(show)
+        if show and not was_visible:
+            latest = getattr(self.map_window, "latest_snapshot", None)
+            if latest is not None:
+                self.overlay_window.update_snapshot(latest)
+            self.sync_overlay_view()
 
     @QtCore.Slot()
     def sync_overlay_view(self) -> None:
@@ -113,21 +149,19 @@ class Controller(QtCore.QObject):
             opacity = 100
         if not enabled:
             unlocked = False
+        self._overlay_enabled = enabled
         self.overlay_window.attach_source_radar(self.map_window.radar)
         self.overlay_window.set_opacity_percent(opacity)
         self.overlay_window.set_unlocked(unlocked)
-        self.overlay_window.set_overlay_visible(enabled)
-        if enabled:
-            latest = getattr(self.map_window, "latest_snapshot", None)
-            if latest is not None:
-                self.overlay_window.update_snapshot(latest)
-            self.sync_overlay_view()
+        self._sync_overlay_visibility()
 
     @QtCore.Slot()
     def _overlay_closed_by_user(self) -> None:
         self.settings.setValue("map/overlay_enabled", False)
         self.settings.setValue("map/overlay_unlocked", False)
+        self._overlay_enabled = False
         self.overlay_window.set_unlocked(False)
+        self._sync_overlay_visibility()
         # Keep settings UI in sync if the panel is open.
         panel = getattr(
             getattr(self.map_window, "main_navigation_overlay", None),

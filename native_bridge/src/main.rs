@@ -480,6 +480,8 @@ mod windows_bridge {
     const GAME_UI_GAME_ROOT_FIELD_INDEX: usize = 33;
     const GAME_UI_ROOT_TYPE_INDEX: usize = 1_327;
     const GAME_UI_ROOT_HUD_FIELD_INDEX: usize = 163;
+    // ui.BaseUI.windows — open TitleWindow list (map, inventory, escape, …).
+    const BASE_UI_WINDOWS_FIELD_INDEX: usize = 17;
     const BASE_UI_WIDGETS_FIELD_INDEX: usize = 22;
     const WIDGET_CONTAINER_FIELD_INDEX: usize = 177;
     const H2D_OBJECT_TYPE_INDEX: usize = 260;
@@ -853,6 +855,7 @@ mod windows_bridge {
         special_energy_offset: usize,
         special_energy_regen_offset: usize,
         widgets_offset: usize,
+        game_ui_windows_offset: usize,
         game_ui_game_root_offset: usize,
         game_ui_root_hud_offset: usize,
         widget_container_offset: usize,
@@ -2589,6 +2592,11 @@ mod windows_bridge {
             types_address + GAME_UI_TYPE_INDEX * 32,
             BASE_UI_WIDGETS_FIELD_INDEX,
         )?;
+        let game_ui_windows_offset = object_field_offset(
+            process,
+            types_address + GAME_UI_TYPE_INDEX * 32,
+            BASE_UI_WINDOWS_FIELD_INDEX,
+        )?;
         let game_ui_game_root_offset = object_field_offset(
             process,
             types_address + GAME_UI_TYPE_INDEX * 32,
@@ -2834,6 +2842,7 @@ mod windows_bridge {
             special_energy_offset,
             special_energy_regen_offset,
             widgets_offset,
+            game_ui_windows_offset,
             game_ui_game_root_offset,
             game_ui_root_hud_offset,
             widget_container_offset,
@@ -2987,6 +2996,13 @@ mod windows_bridge {
         paused: bool,
     }
 
+    struct UiSample {
+        /// True when `ui.BaseUI.windows` holds any open game UI window.
+        open: bool,
+        /// Short class names (e.g. `MapWindow`), for debugging / filtering.
+        windows: Vec<String>,
+    }
+
     struct CurrencySample {
         kind: String,
         amount: i64,
@@ -3027,6 +3043,7 @@ mod windows_bridge {
         party_heroes: Vec<usize>,
         instance: InstanceSample,
         time_of_day: Option<TimeOfDaySample>,
+        ui: UiSample,
         completed_elements: Vec<String>,
         completed_activities: Vec<String>,
     }
@@ -4580,6 +4597,129 @@ mod windows_bridge {
             || error.contains("HashLink main context")
     }
 
+    fn read_object_type_name(process: &OwnedHandle, object_address: usize) -> Result<String, String> {
+        let type_address =
+            read_u64_le(&read_process_bytes(process, object_address, 8)?, 0)? as usize;
+        if type_address == 0 {
+            return Err("object type is null".to_owned());
+        }
+        let live_type = read_process_bytes(process, type_address, 16)?;
+        if read_u32_le(&live_type, 0)? != 11 {
+            return Err("object is not a HashLink object type".to_owned());
+        }
+        let object_metadata_address = read_u64_le(&live_type, 8)? as usize;
+        let object_metadata = read_process_bytes(process, object_metadata_address, 24)?;
+        let name_address = read_u64_le(&object_metadata, 16)? as usize;
+        if name_address == 0 {
+            return Err("object type name is null".to_owned());
+        }
+        let bytes = read_process_bytes(process, name_address, 192)?;
+        let units = bytes
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .take_while(|&unit| unit != 0)
+            .collect::<Vec<_>>();
+        let name = wide_string(&units);
+        if name.is_empty() || name.len() > 96 {
+            return Err("object type name failed bounds".to_owned());
+        }
+        Ok(name)
+    }
+
+    /// Open game UI windows (`ui.BaseUI.windows`). Soft-fails to empty.
+    ///
+    /// Presence in this short ArrayObj is the game's own answer to "is a
+    /// blocking UI open" (map, inventory, escape menu, bank, …). Chat and HUD
+    /// widgets live elsewhere and do not count.
+    fn read_open_ui_windows(
+        process: &OwnedHandle,
+        code: &CodeAnchor,
+        game_app: usize,
+    ) -> UiSample {
+        let empty = UiSample {
+            open: false,
+            windows: Vec::new(),
+        };
+        let root = &code.player_root;
+        let Ok(gui) = read_object_pointer_field(process, game_app, root.gui_offset) else {
+            return empty;
+        };
+        if gui == 0 {
+            return empty;
+        }
+        let Ok(gui_type_bytes) = read_process_bytes(process, gui, 8) else {
+            return empty;
+        };
+        let Ok(gui_type) = read_u64_le(&gui_type_bytes, 0).map(|value| value as usize) else {
+            return empty;
+        };
+        if gui_type != code.types_address + GAME_UI_TYPE_INDEX * 32 {
+            return empty;
+        }
+        let Ok(windows) = read_object_pointer_field(process, gui, root.game_ui_windows_offset)
+        else {
+            return empty;
+        };
+        if windows == 0 {
+            return empty;
+        }
+        let Ok(windows_type_bytes) = read_process_bytes(process, windows, 8) else {
+            return empty;
+        };
+        let Ok(windows_type) = read_u64_le(&windows_type_bytes, 0).map(|value| value as usize) else {
+            return empty;
+        };
+        if windows_type != code.types_address + ARRAY_OBJ_TYPE_INDEX * 32 {
+            return empty;
+        }
+        let Ok(length_bytes) = read_process_bytes(process, windows + root.array_length_offset, 4)
+        else {
+            return empty;
+        };
+        let Ok(length) = read_u32_le(&length_bytes, 0).map(|value| value as usize) else {
+            return empty;
+        };
+        // Open windows stay few; a huge length is a bad read, not a cluttered HUD.
+        if length == 0 || length > 128 {
+            return empty;
+        }
+        let Ok(storage) = read_object_pointer_field(process, windows, root.array_storage_offset)
+        else {
+            return empty;
+        };
+        if storage == 0 {
+            return empty;
+        }
+        let Ok(entries) = read_process_bytes(process, storage + 24, length * 8) else {
+            return empty;
+        };
+        let mut names = Vec::new();
+        let mut any = false;
+        for index in 0..length {
+            let Ok(window) = read_u64_le(&entries, index * 8).map(|value| value as usize) else {
+                continue;
+            };
+            if window == 0 {
+                continue;
+            }
+            any = true;
+            let Ok(full_name) = read_object_type_name(process, window) else {
+                continue;
+            };
+            let short = full_name
+                .strip_prefix("ui.win.")
+                .unwrap_or(full_name.as_str())
+                .to_owned();
+            if !short.is_empty() && !names.contains(&short) {
+                names.push(short);
+            }
+        }
+        UiSample {
+            open: any,
+            windows: names,
+        }
+    }
+
     fn sample_party_member(
         process: &OwnedHandle,
         code: &CodeAnchor,
@@ -4993,6 +5133,7 @@ mod windows_bridge {
         let currency_counters = read_currency_counters(process, code, root, player);
         let instance = read_instance_context(process, code, hero);
         let time_of_day = read_time_of_day(process, code, hero);
+        let ui = read_open_ui_windows(process, code, game_app);
         let camera_yaw = read_camera_yaw(process, code, game_app, x, y);
         Ok(TelemetrySample {
             game_app,
@@ -5026,6 +5167,7 @@ mod windows_bridge {
             party_heroes: active_party_heroes,
             instance,
             time_of_day,
+            ui,
             completed_elements: completed_elements_cache.clone(),
             completed_activities: completed_activities_cache.clone(),
         })
@@ -5434,6 +5576,17 @@ mod windows_bridge {
                             ),
                             None => "null".to_owned(),
                         };
+                        let ui_windows_json = sample
+                            .ui
+                            .windows
+                            .iter()
+                            .map(|name| json_string(name))
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        let ui_json = format!(
+                            "{{\"open\":{},\"windows\":[{ui_windows_json}]}}",
+                            if sample.ui.open { "true" } else { "false" },
+                        );
                         let camera_yaw_json = if sample.camera_yaw.is_finite() {
                             format!("{}", sample.camera_yaw)
                         } else {
@@ -5461,7 +5614,7 @@ mod windows_bridge {
                             .join(",");
                         (
                             format!(
-                                "{{\"schema\":1,\"bridge_version\":\"{BRIDGE_VERSION}\",\"state\":\"connected\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"game_app_address\":\"0x{:x}\",\"player_address\":\"0x{:x}\",\"hero_address\":\"0x{:x}\",\"player\":{{\"name\":{},\"uid\":{},\"class\":{},\"level\":{},\"in_combat\":{},\"vitality\":{},\"health\":{},\"max_health\":{},\"health_regen\":{},\"shield\":{},\"shield_ratio\":{},\"shield_capacity\":{},\"shield_gauge_visible\":{},\"raw_shield\":{},\"shield_gauge_available\":{},\"special_energy\":{},\"special_energy_regen\":{},\"currencies\":[{currencies_json}],\"currency_counters\":{{{currency_counters_json}}}}},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}},\"rotation_z\":{},\"camera_yaw\":{camera_yaw_json},\"party\":[{}],\"enemies\":[{}],\"critters\":[{}],\"players\":[{}],\"interactibles\":[{}],\"instance\":{instance_json},\"time_of_day\":{time_of_day_json},\"completed_elements\":[{}],\"completed_activities\":[{}],\"dps\":{{\"mode\":\"observed_nearby\",\"fight_id\":{},\"current\":{},\"total\":{},\"elapsed\":{},\"in_combat\":{},\"damage_skills\":[{{\"skill\":\"Observed nearby damage\",\"total\":{},\"hits\":0,\"crits\":0,\"max\":0}}],\"healing_skills\":[]}}}}\n",
+                                "{{\"schema\":1,\"bridge_version\":\"{BRIDGE_VERSION}\",\"state\":\"connected\",\"sequence\":{sequence},\"timestamp_ms\":{timestamp_ms},\"game_app_address\":\"0x{:x}\",\"player_address\":\"0x{:x}\",\"hero_address\":\"0x{:x}\",\"player\":{{\"name\":{},\"uid\":{},\"class\":{},\"level\":{},\"in_combat\":{},\"vitality\":{},\"health\":{},\"max_health\":{},\"health_regen\":{},\"shield\":{},\"shield_ratio\":{},\"shield_capacity\":{},\"shield_gauge_visible\":{},\"raw_shield\":{},\"shield_gauge_available\":{},\"special_energy\":{},\"special_energy_regen\":{},\"currencies\":[{currencies_json}],\"currency_counters\":{{{currency_counters_json}}}}},\"position\":{{\"x\":{},\"y\":{},\"z\":{}}},\"rotation_z\":{},\"camera_yaw\":{camera_yaw_json},\"party\":[{}],\"enemies\":[{}],\"critters\":[{}],\"players\":[{}],\"interactibles\":[{}],\"instance\":{instance_json},\"time_of_day\":{time_of_day_json},\"ui\":{ui_json},\"completed_elements\":[{}],\"completed_activities\":[{}],\"dps\":{{\"mode\":\"observed_nearby\",\"fight_id\":{},\"current\":{},\"total\":{},\"elapsed\":{},\"in_combat\":{},\"damage_skills\":[{{\"skill\":\"Observed nearby damage\",\"total\":{},\"hits\":0,\"crits\":0,\"max\":0}}],\"healing_skills\":[]}}}}\n",
                                 sample.game_app,
                                 sample.player,
                                 sample.hero,
