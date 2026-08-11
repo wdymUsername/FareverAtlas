@@ -24,7 +24,6 @@ COLLECTION_CATEGORIES = (
 CODEX_SUBCATEGORIES = (
     ("monsters", "Monsters"),
     ("activities", "Activities"),
-    ("dungeons", "Dungeons"),
 )
 
 # Matches in-game filter chip order (Skover) then remaining types.
@@ -137,15 +136,381 @@ def load_unit_portraits() -> dict[str, str]:
     }
 
 
+@lru_cache(maxsize=1)
+def _dungeon_portraits_payload() -> dict[str, Any]:
+    path = discover_project_asset("dungeon_portraits.json")
+    if path is None:
+        path = ASSET_ROOT / "dungeon_portraits.json"
+    if not path.is_file():
+        return {}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return payload if isinstance(payload, dict) else {}
+
+
+@lru_cache(maxsize=1)
+def load_dungeon_portraits() -> dict[str, str]:
+    portraits = _dungeon_portraits_payload().get("portraits")
+    if not isinstance(portraits, dict):
+        return {}
+    return {
+        str(entry_id): str(rel)
+        for entry_id, rel in portraits.items()
+        if str(entry_id) and str(rel)
+    }
+
+
+@lru_cache(maxsize=1)
+def load_dungeon_headers() -> dict[str, str]:
+    headers = _dungeon_portraits_payload().get("headers")
+    if not isinstance(headers, dict):
+        return {}
+    return {
+        str(entry_id): str(rel)
+        for entry_id, rel in headers.items()
+        if str(entry_id) and str(rel)
+    }
+
+
+@lru_cache(maxsize=1)
+def load_codex_drops() -> dict[str, Any]:
+    path = discover_project_asset("codex_drops.json")
+    if path is None:
+        path = ASSET_ROOT / "codex_drops.json"
+    if not path.is_file():
+        return {"entries": {}, "items": {}}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        return {"entries": {}, "items": {}}
+    entries = payload.get("entries") if isinstance(payload.get("entries"), dict) else {}
+    items = payload.get("items") if isinstance(payload.get("items"), dict) else {}
+    return {"entries": entries, "items": items}
+
+
+def _normalize_drop_row(entry: Any) -> dict[str, Any] | None:
+    if isinstance(entry, str) and entry:
+        return {"id": entry}
+    if not isinstance(entry, dict):
+        return None
+    item_id = str(entry.get("id") or "")
+    if not item_id:
+        return None
+    row: dict[str, Any] = {"id": item_id}
+    if "chance" in entry and entry.get("chance") is not None:
+        try:
+            row["chance"] = float(entry["chance"])
+        except (TypeError, ValueError):
+            pass
+    return row
+
+
+def drop_sections_for(entry_id: str) -> list[dict[str, Any]] | None:
+    """Dungeon sectioned drops, or None when the entry is a flat monster list."""
+    data = load_codex_drops()
+    entries = data.get("entries") if isinstance(data.get("entries"), dict) else {}
+    raw = entries.get(entry_id)
+    if not isinstance(raw, dict):
+        return None
+    sections_raw = raw.get("sections")
+    if not isinstance(sections_raw, list):
+        return None
+    sections: list[dict[str, Any]] = []
+    for section in sections_raw:
+        if not isinstance(section, dict):
+            continue
+        items_raw = section.get("items") if isinstance(section.get("items"), list) else []
+        items = [
+            row
+            for row in (_normalize_drop_row(entry) for entry in items_raw)
+            if row is not None
+        ]
+        if not items:
+            continue
+        out: dict[str, Any] = {
+            "id": str(section.get("id") or ""),
+            "label": str(section.get("label") or ""),
+            "items": items,
+        }
+        note = str(section.get("note") or "").strip()
+        if note:
+            out["note"] = note
+        faction = str(section.get("faction") or "").strip()
+        if faction:
+            out["faction"] = faction
+        sections.append(out)
+    return sections or None
+
+
+def drop_rows_for(entry_id: str) -> list[dict[str, Any]]:
+    """Drop rows for a codex entry: [{id, chance?}, ...] (legacy string ids ok)."""
+    sections = drop_sections_for(entry_id)
+    if sections is not None:
+        rows: list[dict[str, Any]] = []
+        for section in sections:
+            rows.extend(section.get("items") or [])
+        return rows
+
+    data = load_codex_drops()
+    entries = data.get("entries") if isinstance(data.get("entries"), dict) else {}
+    raw = entries.get(entry_id) or []
+    if not isinstance(raw, list):
+        return []
+    rows = [
+        row
+        for row in (_normalize_drop_row(entry) for entry in raw)
+        if row is not None
+    ]
+    return rows
+
+
+def drop_item_ids_for(entry_id: str) -> list[str]:
+    return [str(row["id"]) for row in drop_rows_for(entry_id) if row.get("id")]
+
+
+def drop_search_text_from_rows(rows: list[dict[str, Any]]) -> str:
+    """Lowercase blob of drop item ids + display names for search matching."""
+    parts: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        item_id = str(row.get("id") or "").strip()
+        if not item_id or item_id in seen:
+            continue
+        seen.add(item_id)
+        parts.append(item_id)
+        meta = drop_item_meta(item_id)
+        name = str(meta.get("name") or "").strip()
+        if not name:
+            name = display_name_for(item_id, kind="item")
+        if name:
+            parts.append(name)
+    return " ".join(parts).lower()
+
+
+def format_drop_chance(chance: float | None) -> str:
+    if chance is None:
+        return ""
+    try:
+        value = float(chance)
+    except (TypeError, ValueError):
+        return ""
+    if value < 0:
+        return ""
+    pct = value * 100.0
+    if pct >= 10:
+        return f"{pct:.0f}%"
+    if pct >= 1:
+        return f"{pct:.1f}%"
+    if pct >= 0.1:
+        return f"{pct:.2f}%"
+    if pct >= 0.01:
+        return f"{pct:.3f}%"
+    return f"{pct:.4f}%"
+
+
+def drop_item_meta(item_id: str) -> dict[str, str]:
+    data = load_codex_drops()
+    items = data.get("items") if isinstance(data.get("items"), dict) else {}
+    raw = items.get(item_id)
+    if not isinstance(raw, dict):
+        return {
+            "rarity": "",
+            "portrait": "",
+            "type": "",
+            "faction": "",
+            "name": "",
+        }
+    return {
+        "rarity": str(raw.get("rarity") or ""),
+        "portrait": str(raw.get("portrait") or ""),
+        "type": str(raw.get("type") or ""),
+        "faction": str(raw.get("faction") or ""),
+        "name": str(raw.get("name") or ""),
+    }
+
+
+# Codex drop filter chips (mock order).
+DROP_FILTER_CATEGORIES: tuple[tuple[str, str], ...] = (
+    ("all", "All"),
+    ("weapons", "Weapons"),
+    ("armor", "Armor"),
+    ("materials", "Materials"),
+    ("misc", "Misc"),
+)
+
+_DROP_WEAPON_TYPES = frozenset(
+    {
+        "Sword",
+        "Mace",
+        "Axe",
+        "DualSwords",
+        "DualMaces",
+        "DualAxes",
+        "Daggers",
+        "Fists",
+        "GreatSword",
+        "GreatAxe",
+        "GreatMace",
+        "Spear",
+        "Crescent",
+        "Staff",
+        "Bow",
+        "Book",
+        "Halos",
+        "Scepter",
+        "Thrown",
+        "Shield",
+        "CaptureNet",
+        "OHWeapon",
+        "THWeapon",
+        "DualWeapon",
+        "LongWeapon",
+        "MainhandWeapon",
+        "OffhandWeapon",
+        "Relic",
+    }
+)
+_DROP_ARMOR_TYPES = frozenset(
+    {
+        "Armor",
+        "Head",
+        "Shoulders",
+        "Chest",
+        "Hands",
+        "Waist",
+        "Legs",
+        "Feet",
+        "Back",
+        "Gear",
+        "GearNeck",
+        "GearFinger",
+        "GearTrinket",
+    }
+)
+_DROP_MATERIAL_TYPES = frozenset(
+    {
+        "CraftingComponent",
+        "Ore",
+        "Cloth",
+        "Leather",
+        "Misc",
+        "Bag",
+        "Soulstone",
+    }
+)
+_DROP_MOUNT_TYPES = frozenset({"Mount"})
+_DROP_GLIDER_TYPES = frozenset({"GearGlider"})
+_DROP_CONSUMABLE_TYPES = frozenset(
+    {
+        "Food",
+        "Consumable",
+        "HealthPotion",
+        "Potion",
+        "Elixir",
+        "SkillPointBook",
+        "Mastery",
+    }
+)
+_DROP_CURRENCY_TYPES = frozenset({"Currency"})
+_DROP_RARITY_RANK = {
+    "Legendary": 0,
+    "Epic": 1,
+    "Rare": 2,
+    "Uncommon": 3,
+    "Common": 4,
+}
+# Unfiltered (All) grid order: weapons → mounts → gliders → armor → …
+_DROP_SORT_GROUP_RANK = {
+    "weapons": 0,
+    "mounts": 1,
+    "gliders": 2,
+    "armor": 3,
+    "materials": 4,
+    "consumables": 5,
+    "currency": 6,
+    "misc": 7,
+}
+
+
+def drop_filter_category(item_type: str) -> str:
+    """Map CastleDB item.type → weapons | armor | materials | misc."""
+    value = str(item_type or "")
+    if value in _DROP_WEAPON_TYPES:
+        return "weapons"
+    if value in _DROP_ARMOR_TYPES:
+        return "armor"
+    if value in _DROP_MATERIAL_TYPES:
+        return "materials"
+    return "misc"
+
+
+def drop_sort_group(item_type: str) -> str:
+    """Finer group used to order the unfiltered All drops grid."""
+    value = str(item_type or "")
+    if value in _DROP_WEAPON_TYPES:
+        return "weapons"
+    if value in _DROP_MOUNT_TYPES:
+        return "mounts"
+    if value in _DROP_GLIDER_TYPES:
+        return "gliders"
+    if value in _DROP_ARMOR_TYPES:
+        return "armor"
+    if value in _DROP_MATERIAL_TYPES:
+        return "materials"
+    if value in _DROP_CONSUMABLE_TYPES:
+        return "consumables"
+    if value in _DROP_CURRENCY_TYPES:
+        return "currency"
+    return "misc"
+
+
+def drop_sort_group_rank(item_type: str) -> int:
+    return _DROP_SORT_GROUP_RANK.get(drop_sort_group(item_type), 99)
+
+
+def drop_rarity_rank(rarity: str) -> int:
+    return _DROP_RARITY_RANK.get(str(rarity or ""), 5)
+
+
 def portrait_path_for(entry_id: str) -> Path | None:
-    portraits = load_unit_portraits()
-    rel = portraits.get(entry_id)
-    if not rel and not entry_id.startswith("Critter_"):
-        rel = portraits.get(f"Critter_{entry_id}")
-    if not rel and entry_id.startswith("Critter_"):
-        rel = portraits.get(entry_id.removeprefix("Critter_"))
+    dungeon_portraits = load_dungeon_portraits()
+    rel = dungeon_portraits.get(entry_id)
+    if not rel:
+        portraits = load_unit_portraits()
+        rel = portraits.get(entry_id)
+        if not rel and not entry_id.startswith("Critter_"):
+            rel = portraits.get(f"Critter_{entry_id}")
+        if not rel and entry_id.startswith("Critter_"):
+            rel = portraits.get(entry_id.removeprefix("Critter_"))
     if not rel:
         return None
+    path = ASSET_ROOT / "portraits" / rel
+    return path if path.is_file() else None
+
+
+def dungeon_header_path_for(entry_id: str) -> Path | None:
+    rel = load_dungeon_headers().get(entry_id)
+    if not rel:
+        return None
+    path = ASSET_ROOT / "portraits" / rel
+    return path if path.is_file() else None
+
+
+def dungeon_description_for(entry_id: str) -> str:
+    names = _display_names()
+    dungeons = names.get("dungeons") if isinstance(names.get("dungeons"), dict) else {}
+    entry = dungeons.get(entry_id)
+    if isinstance(entry, dict):
+        desc = entry.get("desc")
+        if isinstance(desc, str) and desc.strip():
+            return desc.strip()
+    return ""
+
+
+def item_portrait_path_for(item_id: str) -> Path | None:
+    meta = drop_item_meta(item_id)
+    rel = meta.get("portrait") or ""
+    if not rel:
+        # Fall back to unit/collection portrait map (mounts, gliders, gear).
+        return portrait_path_for(item_id)
     path = ASSET_ROOT / "portraits" / rel
     return path if path.is_file() else None
 
@@ -176,6 +541,13 @@ def display_name_for(entry_id: str, *, kind: str = "auto") -> str:
     names = _display_names()
     units = names.get("units") if isinstance(names.get("units"), dict) else {}
     items = names.get("items") if isinstance(names.get("items"), dict) else {}
+    dungeons = names.get("dungeons") if isinstance(names.get("dungeons"), dict) else {}
+    if kind in ("dungeon", "auto") and entry_id in dungeons:
+        label = dungeons[entry_id]
+        if isinstance(label, str) and label.strip():
+            return label.strip()
+        if isinstance(label, dict) and label.get("name"):
+            return str(label["name"])
     if kind in ("monster", "auto") and entry_id in units:
         entry = units[entry_id]
         if isinstance(entry, dict) and entry.get("name"):
@@ -280,6 +652,20 @@ def region_entry_ids(
         raw = region.get(subcategory) or []
         return [str(value) for value in raw if str(value)]
     return []
+
+
+def all_dungeon_ids(catalog: dict[str, Any] | None = None) -> list[str]:
+    """Merged dungeon list across all regions (deduped, catalog order)."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for region in regions(catalog):
+        for entry_id in region.get("dungeons") or []:
+            value = str(entry_id)
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            out.append(value)
+    return out
 
 
 def owned_collection_ids(snapshot_state: dict[str, Any] | None, category: str) -> set[str]:

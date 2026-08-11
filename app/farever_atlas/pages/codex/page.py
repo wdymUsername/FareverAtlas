@@ -9,10 +9,16 @@ from PySide6 import QtCore, QtWidgets
 from .catalog import (
     CODEX_SUBCATEGORIES,
     COLLECTION_CATEGORIES,
+    all_dungeon_ids,
     codex_unit_progress,
     collection_ids,
     completed_activity_ids,
     display_name_for,
+    drop_rows_for,
+    drop_search_text_from_rows,
+    drop_sections_for,
+    dungeon_description_for,
+    dungeon_header_path_for,
     load_codex_catalog,
     ordered_type_ids,
     owned_collection_ids,
@@ -24,6 +30,8 @@ from .catalog import (
     unit_type_id,
 )
 from .widgets import CodexBrowsePanel, CodexEntry
+
+_CODEX_MODES = ("collection", "codex", "dungeons")
 
 
 class CodexPageMixin:
@@ -71,20 +79,45 @@ class CodexPageMixin:
             QtCore.Qt.CursorShape.PointingHandCursor
         )
 
+        self.codex_dungeons_mode_button = QtWidgets.QToolButton(self.codex_toolbar)
+        self.codex_dungeons_mode_button.setObjectName("codexModeButton")
+        self.codex_dungeons_mode_button.setText("Dungeons")
+        self.codex_dungeons_mode_button.setCheckable(True)
+        self.codex_dungeons_mode_button.setFixedHeight(28)
+        self.codex_dungeons_mode_button.setCursor(
+            QtCore.Qt.CursorShape.PointingHandCursor
+        )
+
         self.codex_mode_group.addButton(self.codex_collection_mode_button)
         self.codex_mode_group.addButton(self.codex_regions_mode_button)
+        self.codex_mode_group.addButton(self.codex_dungeons_mode_button)
         toolbar_layout.addWidget(self.codex_collection_mode_button)
         toolbar_layout.addWidget(self.codex_regions_mode_button)
+        toolbar_layout.addWidget(self.codex_dungeons_mode_button)
 
-        self.codex_category_combo = QtWidgets.QComboBox(self.codex_toolbar)
+        # Mode-specific nav lives in a stack so show/hide never reflows the bar.
+        self.codex_nav_stack = QtWidgets.QStackedWidget(self.codex_toolbar)
+        self.codex_nav_stack.setObjectName("codexNavStack")
+        self.codex_nav_stack.setFixedHeight(28)
+
+        collection_nav = QtWidgets.QWidget()
+        collection_nav_layout = QtWidgets.QHBoxLayout(collection_nav)
+        collection_nav_layout.setContentsMargins(0, 0, 0, 0)
+        collection_nav_layout.setSpacing(7)
+        self.codex_category_combo = QtWidgets.QComboBox(collection_nav)
         self.codex_category_combo.setObjectName("codexNavCombo")
         self.codex_category_combo.setFixedHeight(28)
         self.codex_category_combo.setMinimumWidth(120)
         for category_id, label in COLLECTION_CATEGORIES:
             self.codex_category_combo.addItem(label, category_id)
-        toolbar_layout.addWidget(self.codex_category_combo)
+        collection_nav_layout.addWidget(self.codex_category_combo)
+        collection_nav_layout.addStretch(1)
 
-        self.codex_region_combo = QtWidgets.QComboBox(self.codex_toolbar)
+        codex_nav = QtWidgets.QWidget()
+        codex_nav_layout = QtWidgets.QHBoxLayout(codex_nav)
+        codex_nav_layout.setContentsMargins(0, 0, 0, 0)
+        codex_nav_layout.setSpacing(7)
+        self.codex_region_combo = QtWidgets.QComboBox(codex_nav)
         self.codex_region_combo.setObjectName("codexNavCombo")
         self.codex_region_combo.setFixedHeight(28)
         self.codex_region_combo.setMinimumWidth(180)
@@ -93,17 +126,26 @@ class CodexPageMixin:
                 str(region.get("name") or region.get("id")),
                 str(region.get("id")),
             )
-        toolbar_layout.addWidget(self.codex_region_combo)
-
-        self.codex_subcategory_combo = QtWidgets.QComboBox(self.codex_toolbar)
+        codex_nav_layout.addWidget(self.codex_region_combo)
+        self.codex_subcategory_combo = QtWidgets.QComboBox(codex_nav)
         self.codex_subcategory_combo.setObjectName("codexNavCombo")
         self.codex_subcategory_combo.setFixedHeight(28)
         self.codex_subcategory_combo.setMinimumWidth(110)
         for subcategory_id, label in CODEX_SUBCATEGORIES:
             self.codex_subcategory_combo.addItem(label, subcategory_id)
-        toolbar_layout.addWidget(self.codex_subcategory_combo)
+        codex_nav_layout.addWidget(self.codex_subcategory_combo)
+        codex_nav_layout.addStretch(1)
 
-        toolbar_layout.addStretch(1)
+        dungeons_nav = QtWidgets.QWidget()
+        dungeons_nav_layout = QtWidgets.QHBoxLayout(dungeons_nav)
+        dungeons_nav_layout.setContentsMargins(0, 0, 0, 0)
+        dungeons_nav_layout.addStretch(1)
+
+        self.codex_nav_stack.addWidget(collection_nav)  # 0
+        self.codex_nav_stack.addWidget(codex_nav)  # 1
+        self.codex_nav_stack.addWidget(dungeons_nav)  # 2
+        self.codex_nav_stack.setMinimumWidth(300)
+        toolbar_layout.addWidget(self.codex_nav_stack, 1)
 
         self.codex_summary_label = QtWidgets.QLabel("")
         self.codex_summary_label.setObjectName("codexSummaryLabel")
@@ -128,6 +170,9 @@ class CodexPageMixin:
         self.codex_regions_mode_button.clicked.connect(
             lambda: self._set_codex_mode("codex")
         )
+        self.codex_dungeons_mode_button.clicked.connect(
+            lambda: self._set_codex_mode("dungeons")
+        )
         self.codex_category_combo.currentIndexChanged.connect(
             self._codex_collection_category_changed
         )
@@ -143,22 +188,38 @@ class CodexPageMixin:
         self._refresh_codex_list(force=True)
 
     def _set_codex_mode(self, mode: str) -> None:
-        mode = "codex" if mode == "codex" else "collection"
+        if mode not in _CODEX_MODES:
+            mode = "collection"
         if self._codex_mode == mode:
-            self.codex_collection_mode_button.setChecked(mode == "collection")
-            self.codex_regions_mode_button.setChecked(mode == "codex")
+            self._sync_codex_mode_buttons()
             return
         self._codex_mode = mode
-        self.codex_collection_mode_button.setChecked(mode == "collection")
-        self.codex_regions_mode_button.setChecked(mode == "codex")
+        self._sync_codex_mode_buttons()
         self._sync_codex_toolbar_visibility()
-        self._refresh_codex_list(force=True)
+        if hasattr(self, "codex_browse"):
+            self.codex_browse.filter_popup.hide()
+            self.codex_browse.filter_button.setChecked(False)
+            self.codex_browse.filter_popup.clear_filters()
+            self.codex_browse.search_edit.blockSignals(True)
+            self.codex_browse.search_edit.clear()
+            self.codex_browse.search_edit.blockSignals(False)
+        self._refresh_codex_list(force=True, reset_selection=True)
+
+    def _sync_codex_mode_buttons(self) -> None:
+        self.codex_collection_mode_button.setChecked(self._codex_mode == "collection")
+        self.codex_regions_mode_button.setChecked(self._codex_mode == "codex")
+        self.codex_dungeons_mode_button.setChecked(self._codex_mode == "dungeons")
 
     def _sync_codex_toolbar_visibility(self) -> None:
-        collection_mode = self._codex_mode == "collection"
-        self.codex_category_combo.setVisible(collection_mode)
-        self.codex_region_combo.setVisible(not collection_mode)
-        self.codex_subcategory_combo.setVisible(not collection_mode)
+        index = {"collection": 0, "codex": 1, "dungeons": 2}.get(self._codex_mode, 0)
+        self.codex_nav_stack.setCurrentIndex(index)
+        if hasattr(self, "codex_browse"):
+            if self._codex_mode == "dungeons":
+                self.codex_browse.search_edit.setPlaceholderText(
+                    "Search dungeons or items …"
+                )
+            else:
+                self.codex_browse.search_edit.setPlaceholderText("Search …")
 
     def _codex_collection_category_changed(self, _index: int = 0) -> None:
         category = self.codex_category_combo.currentData()
@@ -225,7 +286,9 @@ class CodexPageMixin:
             pass
         self._refresh_codex_list(force=False)
 
-    def _refresh_codex_list(self, *, force: bool = False) -> None:
+    def _refresh_codex_list(
+        self, *, force: bool = False, reset_selection: bool = False
+    ) -> None:
         if not hasattr(self, "codex_browse"):
             return
         state = self._codex_snapshot_state()
@@ -234,9 +297,11 @@ class CodexPageMixin:
             return
         self._codex_progress_signature = signature
 
-        selected = self.codex_browse.selected_id
+        selected = None if reset_selection else self.codex_browse.selected_id
         if self._codex_mode == "collection":
             entries, summary, meta = self._build_collection_entries(state)
+        elif self._codex_mode == "dungeons":
+            entries, summary, meta = self._build_dungeon_entries(state)
         else:
             entries, summary, meta = self._build_region_entries(state)
 
@@ -248,22 +313,36 @@ class CodexPageMixin:
             entries,
             type_ids=type_ids,
             select_id=selected,
+            columns=4,
+            show_titles=True,
         )
         self.codex_summary_label.setText(summary)
-        if self.codex_browse.selected_id:
-            self._codex_entry_selected(self.codex_browse.selected_id)
+        # Detail is refreshed via CodexBrowsePanel.entrySelected from set_entries.
 
     def _codex_entry_selected(self, entry_id: str) -> None:
         meta = self._codex_entry_meta.get(entry_id)
         if not meta:
             self.codex_browse.detail.clear()
             return
+        drop_sections = meta.get("drop_sections")
+        if not isinstance(drop_sections, list):
+            drop_sections = drop_sections_for(entry_id)
+        drop_rows = meta.get("drop_rows")
+        if not isinstance(drop_rows, list):
+            drop_rows = drop_rows_for(entry_id)
+        header = meta.get("header_path")
+        completion = meta.get("completion")
         self.codex_browse.detail.show_entry(
             str(meta.get("title") or entry_id),
             flavor=str(meta.get("flavor") or ""),
             kills_text=str(meta.get("kills_text") or ""),
             status_text=str(meta.get("status_text") or ""),
             mastered=bool(meta.get("mastered")),
+            show_status=bool(meta.get("show_status", True)),
+            completion=bool(completion) if completion is not None else None,
+            header_path=str(header) if header else None,
+            drop_rows=[row for row in drop_rows if isinstance(row, dict)],
+            drop_sections=drop_sections if isinstance(drop_sections, list) else None,
         )
 
     def _build_collection_entries(
@@ -299,6 +378,7 @@ class CodexPageMixin:
                 "kills_text": "Owned" if is_owned else "Not owned",
                 "status_text": "Collected" if is_owned else "Missing",
                 "mastered": is_owned,
+                "drop_rows": [],
             }
         rows.sort(key=lambda row: (row.complete, row.title.lower()))
         summary = f"{owned_count} / {len(ids)}"
@@ -331,12 +411,10 @@ class CodexPageMixin:
                 if complete:
                     done_count += 1
                 title = display_name_for(unit_id, kind="monster")
-                # Unrevealed: hide the real name in the grid tooltip/detail until known.
-                display_title = title if revealed else "???"
                 rows.append(
                     CodexEntry(
                         unit_id,
-                        display_title,
+                        title,
                         overlay,
                         complete,
                         revealed,
@@ -345,7 +423,7 @@ class CodexPageMixin:
                     )
                 )
                 meta[unit_id] = {
-                    "title": display_title if revealed else "Unknown",
+                    "title": title,
                     "flavor": "",
                     "kills_text": f"{kills} Killed" if revealed else "",
                     "status_text": (
@@ -354,8 +432,10 @@ class CodexPageMixin:
                         else (f"{min(kills, maximum)} / {maximum}" if revealed else "Locked")
                     ),
                     "mastered": complete,
+                    "drop_rows": drop_rows_for(unit_id) if revealed else [],
                 }
         else:
+            # Activities (dungeons live in the top-level Dungeons mode).
             completed = completed_activity_ids(state)
             for entry_id in ids:
                 complete = entry_id in completed
@@ -380,7 +460,55 @@ class CodexPageMixin:
                     "kills_text": "Completed" if complete else "Not completed",
                     "status_text": "Done" if complete else "Open",
                     "mastered": complete,
+                    "drop_rows": [],
                 }
+
+        rows.sort(key=lambda row: (row.complete, row.title.lower()))
+        summary = f"{done_count} / {len(ids)}"
+        return rows, summary, meta
+
+    def _build_dungeon_entries(
+        self,
+        state: dict[str, Any],
+    ) -> tuple[list[CodexEntry], str, dict[str, dict[str, Any]]]:
+        ids = all_dungeon_ids(self._codex_catalog)
+        completed = completed_activity_ids(state)
+        rows: list[CodexEntry] = []
+        meta: dict[str, dict[str, Any]] = {}
+        done_count = 0
+        for entry_id in ids:
+            complete = entry_id in completed
+            if complete:
+                done_count += 1
+            title = display_name_for(entry_id, kind="dungeon")
+            status = "mastered" if complete else "unknown"
+            drop_sections = drop_sections_for(entry_id)
+            drop_rows = drop_rows_for(entry_id)
+            header = dungeon_header_path_for(entry_id)
+            rows.append(
+                CodexEntry(
+                    entry_id,
+                    title,
+                    "",
+                    complete,
+                    True,
+                    "",
+                    status,
+                    drop_search_text_from_rows(drop_rows),
+                )
+            )
+            meta[entry_id] = {
+                "title": title,
+                "flavor": dungeon_description_for(entry_id),
+                "kills_text": "",
+                "status_text": "",
+                "show_status": False,
+                "completion": complete,
+                "mastered": complete,
+                "header_path": str(header) if header else "",
+                "drop_rows": drop_rows,
+                "drop_sections": drop_sections,
+            }
 
         rows.sort(key=lambda row: (row.complete, row.title.lower()))
         summary = f"{done_count} / {len(ids)}"

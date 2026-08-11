@@ -1,23 +1,23 @@
 """Centralized Qt style sheets for Farever Atlas."""
 
 MAP_WINDOW_STYLESHEET = r"""
-/* Discreet scrollbars — thin handle, no arrows, transparent track. */
+/* Discreet scrollbars — hairline handle, idle nearly invisible, no arrows. */
 QScrollBar:vertical {
-    width: 7px;
-    margin: 1px 0;
+    width: 5px;
+    margin: 3px 1px 3px 0;
     background: transparent;
     border: none;
 }
 QScrollBar::handle:vertical {
-    min-height: 24px;
-    border-radius: 3px;
-    background: #425463;
+    min-height: 32px;
+    border-radius: 2px;
+    background: rgba(158, 176, 192, 0.18);
 }
 QScrollBar::handle:vertical:hover {
-    background: #587083;
+    background: rgba(158, 176, 192, 0.38);
 }
 QScrollBar::handle:vertical:pressed {
-    background: #6a8496;
+    background: rgba(158, 176, 192, 0.52);
 }
 QScrollBar::add-line:vertical,
 QScrollBar::sub-line:vertical,
@@ -31,21 +31,21 @@ QScrollBar::sub-page:vertical {
     background: transparent;
 }
 QScrollBar:horizontal {
-    height: 7px;
-    margin: 0 1px;
+    height: 5px;
+    margin: 0 3px 1px 3px;
     background: transparent;
     border: none;
 }
 QScrollBar::handle:horizontal {
-    min-width: 24px;
-    border-radius: 3px;
-    background: #425463;
+    min-width: 32px;
+    border-radius: 2px;
+    background: rgba(158, 176, 192, 0.18);
 }
 QScrollBar::handle:horizontal:hover {
-    background: #587083;
+    background: rgba(158, 176, 192, 0.38);
 }
 QScrollBar::handle:horizontal:pressed {
-    background: #6a8496;
+    background: rgba(158, 176, 192, 0.52);
 }
 QScrollBar::add-line:horizontal,
 QScrollBar::sub-line:horizontal,
@@ -204,6 +204,10 @@ QWidget#playersToolbar {
     border: 1px solid #273340;
     border-radius: 7px;
 }
+QWidget#codexNavStack {
+    background: transparent;
+    border: none;
+}
 QToolButton#codexModeButton {
     color: #8493a2;
     background: transparent;
@@ -257,20 +261,26 @@ QScrollArea#codexTileGridScroll {
 QLineEdit#codexSearchEdit,
 QToolButton#codexFilterButton {
     color: #dce6ee;
-    background: #10171e;
-    border: 1px solid #344352;
-    border-radius: 4px;
+    background: #121920;
+    border: 1px solid #24303a;
+    border-radius: 3px;
     padding: 0 7px;
     font-size: 10px;
     font-weight: 600;
     min-height: 26px;
 }
 QLineEdit#codexSearchEdit:hover,
-QLineEdit#codexSearchEdit:focus,
-QToolButton#codexFilterButton:hover,
+QLineEdit#codexSearchEdit:focus {
+    border-color: #4a6174;
+    background: #172129;
+}
+QToolButton#codexFilterButton:hover {
+    border-color: #4a6174;
+    background: #172129;
+}
 QToolButton#codexFilterButton:checked {
-    border-color: #587083;
-    background: #141e27;
+    border-color: #3979a9;
+    background: #1a2834;
 }
 QFrame#codexFilterPopup {
     background: #18212a;
@@ -308,43 +318,55 @@ QToolButton#codexFilterChip:checked {
     border-color: #3979a9;
     font-weight: 600;
 }
-QPushButton#codexTile {
+QFrame#codexTile {
     background: #121920;
-    border: 1px solid #2a3846;
-    border-radius: 4px;
+    border: 1px solid #24303a;
+    border-radius: 3px;
     padding: 0;
-    text-align: center;
 }
-QPushButton#codexTile:hover {
+QFrame#codexTile:hover {
     border-color: #4a6174;
     background: #172129;
 }
-QPushButton#codexTile:checked {
+QFrame#codexTile[selected="true"] {
     border-color: #3979a9;
     background: #1a2834;
 }
-QPushButton#codexTile[complete="true"] {
-    border-color: #2d4536;
+QFrame#codexTile[complete="true"] {
+    border-color: #2a3c32;
     background: #152019;
 }
-QPushButton#codexTile[complete="true"]:checked {
+QFrame#codexTile[complete="true"][selected="true"] {
     border-color: #3979a9;
 }
-QPushButton#codexTile[revealed="false"] {
+QFrame#codexTile[revealed="false"] {
     background: #0e1318;
     border-color: #1e2832;
+}
+QFrame#codexTile QLabel#codexTileIcon {
+    background: transparent;
+    border: none;
+    border-radius: 2px;
 }
 QLabel#codexTileIcon {
     color: #9aabba;
     font-size: 22px;
     font-weight: 700;
     background: #0c1116;
-    border: 1px solid #24303a;
-    border-radius: 3px;
+    border: none;
+    border-radius: 2px;
 }
-QPushButton#codexTile[revealed="false"] QLabel#codexTileIcon {
+QFrame#codexTile[revealed="false"] QLabel#codexTileIcon {
     background: #0a0e12;
-    border-color: #1e2832;
+}
+QLabel#codexTileTitle {
+    color: #dce6ee;
+    font-size: 10px;
+    font-weight: 600;
+    background: transparent;
+    border: none;
+    padding: 0 1px;
+    margin: 0;
 }
 QLabel#codexTileProgress {
     color: #9aabba;
@@ -356,7 +378,21 @@ QLabel#codexTileProgress {
 QWidget#codexDetailPanel {
     background: #121920;
     border: 1px solid #273340;
-    border-radius: 6px;
+    border-left: 1px solid #273340;
+    border-radius: 0 6px 6px 0;
+}
+QWidget#codexDetailMetaStack {
+    background: transparent;
+    border: none;
+}
+QLabel#codexDetailHeader {
+    background: #0e1318;
+    border: 1px solid #273340;
+    border-radius: 4px;
+}
+QLabel#codexDetailHeader[empty="true"] {
+    background: transparent;
+    border: 1px solid transparent;
 }
 QLabel#codexDetailTitle {
     color: #eef3f7;
@@ -376,6 +412,32 @@ QLabel#codexDetailKills {
     color: #dce6ee;
     font-size: 12px;
     font-weight: 600;
+    background: transparent;
+    border: none;
+}
+QWidget#codexDetailCompletion {
+    background: transparent;
+    border: none;
+}
+QLabel#codexDetailCompletionIcon {
+    background: transparent;
+    border: none;
+}
+QLabel#codexDetailCompletionTitle {
+    font-size: 13px;
+    font-weight: 700;
+    background: transparent;
+    border: none;
+}
+QLabel#codexDetailCompletionTitle[state="complete"] {
+    color: #5fbf7a;
+}
+QLabel#codexDetailCompletionTitle[state="incomplete"] {
+    color: #d16a6a;
+}
+QLabel#codexDetailCompletionSubtitle {
+    color: #8493a2;
+    font-size: 11px;
     background: transparent;
     border: none;
 }
@@ -403,10 +465,47 @@ QLabel#codexDetailSection {
     border: none;
     padding-top: 4px;
 }
+QLabel#codexDropSectionLabel {
+    color: #9aabba;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+    background: transparent;
+    border: none;
+    padding: 0;
+}
+QLabel#codexDropSectionNote {
+    color: #6f7f8d;
+    font-size: 10px;
+    font-weight: 500;
+    background: transparent;
+    border: none;
+    padding: 0 0 2px 0;
+}
+QFrame#codexDropSectionRule {
+    background: #2a3846;
+    border: none;
+    max-height: 1px;
+}
+QWidget#codexDropsGrid {
+    background: transparent;
+    border: none;
+}
 QLabel#codexDropSlot {
     background: #0e1318;
     border: 1px solid #2a3846;
     border-radius: 3px;
+    color: #9aabba;
+    font-size: 11px;
+    font-weight: 700;
+}
+QScrollArea#codexDropsScroll {
+    background: transparent;
+    border: none;
+}
+QWidget#codexDropsHost {
+    background: transparent;
 }
 QLabel#playersSummaryLabel {
     color: #dce6ee;
