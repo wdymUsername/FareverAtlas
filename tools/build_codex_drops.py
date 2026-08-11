@@ -899,7 +899,7 @@ def main() -> int:
         OUT_ITEM_MAP.write_text(
             json.dumps(
                 {"schema": 1, "size": args.size, "portraits": portraits},
-                indent=2,
+                separators=(",", ":"),
                 ensure_ascii=False,
             )
             + "\n",
@@ -923,7 +923,7 @@ def main() -> int:
         "items": items_payload,
     }
     OUT_DROPS.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+        json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
 

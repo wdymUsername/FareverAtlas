@@ -180,7 +180,10 @@ def main() -> int:
         "size": args.size,
         "portraits": entry_to_asset,
     }
-    OUT_MAP.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    OUT_MAP.write_text(
+        json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
     print(
         f"entries={len(entry_to_asset)} converted={converted} "
         f"unique_sources={len(source_to_asset)} missing={missing} -> {OUT_MAP}"

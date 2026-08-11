@@ -321,7 +321,8 @@ def main() -> int:
         },
     }
     OUT_MAP.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n",
+        encoding="utf-8",
     )
     print(f"wrote {len(mapping)} icons -> {OUT_MAP} (missing={missing})")
     return 0 if missing == 0 else 1
