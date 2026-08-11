@@ -17,8 +17,16 @@ def _setting_bool(settings: QtCore.QSettings, key: str, default: bool) -> bool:
     return default
 
 
-def apply_always_on_top(widget: QtWidgets.QWidget, enabled: bool) -> None:
-    """Toggle WindowStaysOnTopHint and re-show so WMs (incl. Linux) apply it."""
+def apply_always_on_top(
+    widget: QtWidgets.QWidget,
+    enabled: bool,
+    *,
+    activate: bool = True,
+) -> None:
+    """Toggle WindowStaysOnTopHint and re-show so WMs (incl. Linux) apply it.
+
+    Pass ``activate=False`` for game overlays that must not steal focus.
+    """
     enabled = bool(enabled)
     flag = QtCore.Qt.WindowType.WindowStaysOnTopHint
     currently = bool(widget.windowFlags() & flag)
@@ -29,10 +37,19 @@ def apply_always_on_top(widget: QtWidgets.QWidget, enabled: bool) -> None:
         if handle is not None:
             handle.setFlag(flag, enabled)
         if was_visible:
+            if not activate:
+                widget.setAttribute(
+                    QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating, True
+                )
             widget.show()
+            if not activate:
+                widget.setAttribute(
+                    QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating, False
+                )
     if enabled and widget.isVisible():
         widget.raise_()
-        widget.activateWindow()
+        if activate:
+            widget.activateWindow()
 
 
 class PersistentWindow(QtWidgets.QMainWindow):

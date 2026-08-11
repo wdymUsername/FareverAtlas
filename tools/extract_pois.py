@@ -425,7 +425,7 @@ def main() -> int:
         added += 1
         print(f"add chest {nid} @ ({pref['x']}, {pref['y']}, {pref['z']})")
 
-    changed = fixed + snapped + added
+    changed = fixed + snapped + added + z_lifted
     shipped = [_ship_poi(poi) if isinstance(poi, dict) else poi for poi in pois]
     OUT_PATH.write_text(
         json.dumps(shipped, separators=(",", ":")) + "\n", encoding="utf-8"

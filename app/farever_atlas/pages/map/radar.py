@@ -383,6 +383,67 @@ class RadarWidget(QtWidgets.QWidget):
 
         self.setMouseTracking(True)
         self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        # Overlay mirrors disable pan/zoom/tooltips; paint path stays identical.
+        self.interaction_enabled = True
+        # When True, world scale fills the widget height so small overlay windows
+        # still show the full zoom radius without cropping markers.
+        self.scale_to_viewport = False
+
+    def sync_view_from(self, source: "RadarWidget") -> None:
+        """Copy camera + display filters from another radar (strict overlay mirror)."""
+        # Zoom is overlay-owned; do not copy radius_m / target_radius_m.
+        self.view_center_world = (
+            None
+            if source.view_center_world is None
+            else (float(source.view_center_world[0]), float(source.view_center_world[1]))
+        )
+        self._follow_target_key = source._follow_target_key
+        self._follow_target_name = source._follow_target_name
+        self._offline_center_world = (
+            None
+            if source._offline_center_world is None
+            else (
+                float(source._offline_center_world[0]),
+                float(source._offline_center_world[1]),
+            )
+        )
+        self.heading_up = bool(source.heading_up)
+        self.show_texture = bool(source.show_texture)
+        self.show_route_line = bool(source.show_route_line)
+        self.show_party_members = bool(source.show_party_members)
+        self.show_party_names = bool(source.show_party_names)
+        self.show_party_health_rings = bool(source.show_party_health_rings)
+        self.dim_invalid_party_members = bool(source.dim_invalid_party_members)
+        self.show_enemies = bool(source.show_enemies)
+        self.show_critters = bool(source.show_critters)
+        self.show_patrol_paths = bool(source.show_patrol_paths)
+        self.show_players = bool(source.show_players)
+        self.show_player_names = bool(source.show_player_names)
+        self.show_pois = bool(source.show_pois)
+        self.show_custom_waypoints = bool(source.show_custom_waypoints)
+        self.poi_kind_visibility = dict(source.poi_kind_visibility)
+        self.loot_kind_visibility = dict(source.loot_kind_visibility)
+        self.loot_kind_icon_mode = dict(source.loot_kind_icon_mode)
+        self.enemy_xy_m = float(source.enemy_xy_m)
+        self.enemy_z_fade = float(source.enemy_z_fade)
+        self.critter_xy_m = float(source.critter_xy_m)
+        self.critter_z_fade = float(source.critter_z_fade)
+        self.patrol_xy_m = float(source.patrol_xy_m)
+        self.patrol_z_m = float(source.patrol_z_m)
+        self.patrol_leash_m = float(source.patrol_leash_m)
+        self.loot_live_range_m = float(source.loot_live_range_m)
+        self.loot_live_z_cull_m = float(source.loot_live_z_cull_m)
+        self.z_indicator_threshold = float(source.z_indicator_threshold)
+        self.custom_waypoints = [dict(item) for item in source.custom_waypoints]
+        self.active_custom_waypoint_id = source.active_custom_waypoint_id
+        self.active_gather_target = (
+            None
+            if source.active_gather_target is None
+            else dict(source.active_gather_target)
+        )
+        # Match the smoothed player pose so the overlay does not lag independently.
+        self._display_player = dict(source._display_player)
+        self.update()
 
     def set_snapshot(self, snapshot: Snapshot) -> None:
         pois_changed = snapshot.pois is not self.pois
@@ -1393,6 +1454,11 @@ class RadarWidget(QtWidgets.QWidget):
         self.update()
 
     def _pixels_per_metre(self) -> float:
+        if self.scale_to_viewport:
+            # Fit the configured radius across the shorter viewport edge so a
+            # small overlay still shows the same world extent uncropped.
+            span_px = float(min(max(self.width(), 1), max(self.height(), 1)))
+            return span_px / (2.0 * max(self.radius_m, 1.0))
         return self.ZOOM_REFERENCE_HEIGHT_PX / (2.0 * max(self.radius_m, 1.0))
 
 
@@ -2457,6 +2523,9 @@ class RadarWidget(QtWidgets.QWidget):
         )
 
     def wheelEvent(self, event: QtGui.QWheelEvent) -> None:  # noqa: N802
+        if not self.interaction_enabled:
+            event.ignore()
+            return
         if self._event_is_over_child_ui(event.globalPosition().toPoint()):
             event.accept()
             return
@@ -2468,6 +2537,9 @@ class RadarWidget(QtWidgets.QWidget):
         super().wheelEvent(event)
 
     def contextMenuEvent(self, event: QtGui.QContextMenuEvent) -> None:  # noqa: N802
+        if not self.interaction_enabled:
+            event.ignore()
+            return
         if self._event_is_over_child_ui(event.globalPos()):
             event.accept()
             return
@@ -2498,6 +2570,9 @@ class RadarWidget(QtWidgets.QWidget):
         super().contextMenuEvent(event)
 
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # noqa: N802
+        if not self.interaction_enabled:
+            event.ignore()
+            return
         if self._event_is_over_child_ui(event.globalPosition().toPoint()):
             event.accept()
             return
@@ -2592,6 +2667,9 @@ class RadarWidget(QtWidgets.QWidget):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:  # noqa: N802
+        if not self.interaction_enabled:
+            event.ignore()
+            return
         if self._event_is_over_child_ui(event.globalPosition().toPoint()):
             event.accept()
             return
@@ -2794,6 +2872,9 @@ class RadarWidget(QtWidgets.QWidget):
         super().mouseMoveEvent(event)
 
     def leaveEvent(self, event: QtCore.QEvent) -> None:  # noqa: N802
+        if not self.interaction_enabled:
+            super().leaveEvent(event)
+            return
         self._hovered_custom_waypoint_id = None
         self._hovered_enemy_id = None
         self._hovered_interactible_id = None
@@ -2814,6 +2895,9 @@ class RadarWidget(QtWidgets.QWidget):
         super().leaveEvent(event)
 
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:  # noqa: N802
+        if not self.interaction_enabled:
+            event.ignore()
+            return
         if self._event_is_over_child_ui(event.globalPosition().toPoint()):
             # A drag may begin on the map and end over an overlay. End the map
             # gesture cleanly without letting the release activate map UI.
@@ -4368,7 +4452,12 @@ class RadarWidget(QtWidgets.QWidget):
         # The map is permanently north-up. Keep all cardinal directions
         # visible around the viewport; north is emphasized in bold red.
         cardinal_font = painter.font()
-        cardinal_font.setPointSizeF(max(cardinal_font.pointSizeF(), 10.0))
+        if self.scale_to_viewport:
+            # Keep N/E/S/W inside small overlay frames.
+            point = max(7.0, min(10.0, min(viewport.width(), viewport.height()) * 0.035))
+            cardinal_font.setPointSizeF(point)
+        else:
+            cardinal_font.setPointSizeF(max(cardinal_font.pointSizeF(), 10.0))
 
         cardinal_rects = {
             "N": QtCore.QRectF(viewport.center().x() - 14.0, viewport.top() + 7.0, 28.0, 20.0),
