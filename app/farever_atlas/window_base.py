@@ -32,6 +32,7 @@ def apply_always_on_top(
     currently = bool(widget.windowFlags() & flag)
     was_visible = widget.isVisible()
     if currently != enabled:
+        geometry = widget.saveGeometry() if was_visible else None
         widget.setWindowFlag(flag, enabled)
         handle = widget.windowHandle()
         if handle is not None:
@@ -46,6 +47,8 @@ def apply_always_on_top(
                 widget.setAttribute(
                     QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating, False
                 )
+            if geometry is not None:
+                widget.restoreGeometry(geometry)
     if enabled and widget.isVisible():
         widget.raise_()
         if activate:
@@ -57,14 +60,38 @@ class PersistentWindow(QtWidgets.QMainWindow):
         super().__init__()
         self._settings = settings
         self._settings_key = settings_key
+        self._geometry_restored = False
         self._geometry_save_timer = QtCore.QTimer(self)
         self._geometry_save_timer.setSingleShot(True)
         self._geometry_save_timer.setInterval(400)
         self._geometry_save_timer.timeout.connect(self._persist_geometry)
-        if _setting_bool(settings, "app/restore_window_positions", True):
-            geometry = settings.value(f"windows/{settings_key}/geometry")
+
+    def finish_geometry(self, *, default_width: int, default_height: int) -> None:
+        """Restore saved layout after flags are final, else apply defaults.
+
+        Subclasses must call this *after* ``setWindowFlags`` / frameless hints.
+        Calling ``resize`` or changing flags before restore clobbers the
+        saved position (and is why overlay/main forgot their layout).
+        """
+        restored = False
+        if _setting_bool(self._settings, "app/restore_window_positions", True):
+            geometry = self._settings.value(f"windows/{self._settings_key}/geometry")
             if geometry is not None:
-                self.restoreGeometry(geometry)
+                restored = bool(self.restoreGeometry(geometry))
+        self._geometry_restored = restored
+        if not restored:
+            self.resize(int(default_width), int(default_height))
+
+    def reapply_saved_geometry(self) -> bool:
+        """Re-apply saved geometry after a flag change that may have dropped it."""
+        if not _setting_bool(self._settings, "app/restore_window_positions", True):
+            return False
+        geometry = self._settings.value(f"windows/{self._settings_key}/geometry")
+        if geometry is None:
+            return False
+        restored = bool(self.restoreGeometry(geometry))
+        self._geometry_restored = restored or self._geometry_restored
+        return restored
 
     def _persist_geometry(self) -> None:
         if not _setting_bool(self._settings, "app/restore_window_positions", True):

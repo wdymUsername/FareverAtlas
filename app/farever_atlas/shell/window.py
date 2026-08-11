@@ -71,6 +71,7 @@ class AtlasWindow(
     onlineModeChanged = QtCore.Signal(bool)
     uiReloadRequested = QtCore.Signal()
     mapViewChanged = QtCore.Signal()
+    aboutToClose = QtCore.Signal()
     PARTY_SLOT_COUNT = 3
 
     # (visible radius in metres, displayed zoom multiplier).
@@ -117,8 +118,8 @@ class AtlasWindow(
         super().__init__(settings, "map")
         self.setWindowFlag(QtCore.Qt.WindowType.FramelessWindowHint, True)
         self.setWindowTitle("Farever Atlas")
-        self.resize(620, 680)
         self.setMinimumSize(420, 360)
+        self.finish_geometry(default_width=620, default_height=680)
         self.map_message = map_message
         self.waypoint_store = waypoint_store
         self.dev_mode = bool(dev_mode)
@@ -2635,4 +2636,8 @@ class AtlasWindow(
         self._sync_party_status_visibility()
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # noqa: N802
+        # Companion top-levels (map overlay, combat meter) are normal Windows
+        # after dropping Qt.Tool; close them with the shell or they keep the
+        # process alive and stay on screen.
+        self.aboutToClose.emit()
         super().closeEvent(event)

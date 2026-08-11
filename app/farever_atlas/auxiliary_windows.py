@@ -103,8 +103,8 @@ class CombatWindow(PersistentWindow):
     def __init__(self, settings: QtCore.QSettings):
         super().__init__(settings, "combat")
         self.setWindowTitle("Farever Atlas — Combat Meter")
-        self.resize(760, 470)
         self.setMinimumSize(430, 240)
+        self.finish_geometry(default_width=760, default_height=470)
         self._latest_dps: dict[str, Any] = {}
         self._fight_id = -1
         self._baseline_elapsed = 0.0

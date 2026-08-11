@@ -105,6 +105,8 @@ def _wire_windows(
     map_window.onlineModeChanged.connect(hub.set_online)
     map_window.combatMeterRequested.connect(controller.show_combat_meter)
     map_window.mapViewChanged.connect(controller.sync_overlay_view)
+    if hasattr(map_window, "aboutToClose"):
+        map_window.aboutToClose.connect(controller.shutdown_windows)
     map_window.main_navigation_overlay.settingsChanged.connect(
         combat_window.apply_settings_preferences
     )
@@ -130,6 +132,8 @@ def _unwire_windows(
     _safe_disconnect(map_window.onlineModeChanged, hub.set_online)
     _safe_disconnect(map_window.combatMeterRequested, controller.show_combat_meter)
     _safe_disconnect(map_window.mapViewChanged, controller.sync_overlay_view)
+    if hasattr(map_window, "aboutToClose"):
+        _safe_disconnect(map_window.aboutToClose, controller.shutdown_windows)
     overlay = getattr(map_window, "main_navigation_overlay", None)
     if overlay is not None:
         _safe_disconnect(

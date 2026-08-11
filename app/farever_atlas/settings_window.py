@@ -170,6 +170,10 @@ def apply_settings_defaults(settings: QtCore.QSettings) -> None:
     settings.setValue("map/overlay_unlocked", False)
     settings.setValue("map/overlay_opacity", 100)
     settings.setValue("map/overlay_zoom_radius", 200)
+    settings.setValue("map/overlay_follow_game", False)
+    settings.setValue("map/overlay_hide_when_unfocused", False)
+    settings.setValue("map/overlay_follow_offset", "24,24")
+    settings.setValue("map/overlay_lock_hotkey", "Insert")
     for key, (default, _minimum, _maximum) in CULL_SETTING_KEYS.items():
         settings.setValue(key, default)
     settings.setValue("party/show_empty_slots", True)
@@ -259,6 +263,18 @@ class SettingsPanel(QtCore.QObject):
             self.overlay_unlocked.setChecked(
                 _as_bool(self._settings.value("map/overlay_unlocked"), False)
             )
+            self.overlay_follow_game.setChecked(
+                _as_bool(self._settings.value("map/overlay_follow_game"), False)
+            )
+            self.overlay_hide_when_unfocused.setChecked(
+                _as_bool(
+                    self._settings.value("map/overlay_hide_when_unfocused"), False
+                )
+            )
+            hotkey = str(
+                self._settings.value("map/overlay_lock_hotkey", "Insert") or "Insert"
+            )
+            self.overlay_lock_hotkey.setKeySequence(QtGui.QKeySequence(hotkey))
             opacity = max(
                 5,
                 min(100, _as_int(self._settings.value("map/overlay_opacity"), 100)),
@@ -457,6 +473,9 @@ class SettingsPanel(QtCore.QObject):
         enabled = bool(self.overlay_enabled.isChecked())
         self.overlay_unlocked.setEnabled(enabled)
         self.overlay_opacity.setEnabled(enabled)
+        self.overlay_follow_game.setEnabled(enabled)
+        self.overlay_hide_when_unfocused.setEnabled(enabled)
+        self.overlay_lock_hotkey.setEnabled(enabled)
         if not enabled and self.overlay_unlocked.isChecked():
             blocked = self.overlay_unlocked.blockSignals(True)
             self.overlay_unlocked.setChecked(False)
@@ -823,7 +842,7 @@ class SettingsPanel(QtCore.QObject):
             form,
             "Overlay opacity",
             self.overlay_opacity,
-            "Overlay window transparency (5–100%). Use + / − on the overlay to zoom.",
+            "Overlay window transparency (5–100%).",
         )
         self.overlay_unlocked = SettingsToggle()
         self._bind_bool(self.overlay_unlocked, "map/overlay_unlocked")
@@ -832,6 +851,36 @@ class SettingsPanel(QtCore.QObject):
             "Unlock overlay move/resize",
             self.overlay_unlocked,
             "Temporarily accepts mouse so you can drag or resize the overlay.",
+        )
+        self.overlay_follow_game = SettingsToggle()
+        self._bind_bool(self.overlay_follow_game, "map/overlay_follow_game")
+        self._add_setting(
+            form,
+            "Follow game window",
+            self.overlay_follow_game,
+            "Keep the overlay at a fixed offset inside the Farever game window.",
+        )
+        self.overlay_hide_when_unfocused = SettingsToggle()
+        self._bind_bool(
+            self.overlay_hide_when_unfocused, "map/overlay_hide_when_unfocused"
+        )
+        self._add_setting(
+            form,
+            "Hide when game unfocused",
+            self.overlay_hide_when_unfocused,
+            "Hide the overlay unless the Farever game window is focused.",
+        )
+        self.overlay_lock_hotkey = QtWidgets.QKeySequenceEdit()
+        self.overlay_lock_hotkey.setClearButtonEnabled(True)
+        self.overlay_lock_hotkey.setMaximumWidth(180)
+        self.overlay_lock_hotkey.keySequenceChanged.connect(
+            self._on_overlay_lock_hotkey_changed
+        )
+        self._add_setting(
+            form,
+            "Overlay lock hotkey",
+            self.overlay_lock_hotkey,
+            "Global shortcut to lock/unlock the overlay (default Insert). Works in-game.",
         )
         layout.addWidget(display)
 
@@ -1273,6 +1322,15 @@ class SettingsPanel(QtCore.QObject):
         if self._suppress:
             return
         self._set_int("map/overlay_opacity", max(5, min(100, int(value))))
+
+    def _on_overlay_lock_hotkey_changed(
+        self, sequence: QtGui.QKeySequence
+    ) -> None:
+        if self._suppress:
+            return
+        text = sequence.toString(QtGui.QKeySequence.SequenceFormat.PortableText)
+        self._settings.setValue("map/overlay_lock_hotkey", text or "")
+        self._emit_changed()
 
     def _on_fog_tier_changed(self, index: int) -> None:
         if self._suppress or not (0 <= index < self.fog_max_tier.count()):

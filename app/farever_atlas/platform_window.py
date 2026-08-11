@@ -22,6 +22,7 @@ def ensure_no_activate_hint(widget: QtWidgets.QWidget) -> None:
     flag = QtCore.Qt.WindowType.WindowDoesNotAcceptFocus
     if not (widget.windowFlags() & flag):
         was_visible = widget.isVisible()
+        geometry = widget.saveGeometry() if was_visible else None
         widget.setWindowFlag(flag, True)
         handle = widget.windowHandle()
         if handle is not None:
@@ -30,6 +31,393 @@ def ensure_no_activate_hint(widget: QtWidgets.QWidget) -> None:
             widget.setAttribute(QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
             widget.show()
             widget.setAttribute(QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating, False)
+            if geometry is not None:
+                widget.restoreGeometry(geometry)
+
+
+def clear_window_attention(widget: QtWidgets.QWidget) -> None:
+    """Drop urgency / DEMANDS_ATTENTION so Plasma panels can auto-hide.
+
+    Live overlay windows were observed with::
+
+        _NET_WM_STATE = DEMANDS_ATTENTION, ABOVE, STAYS_ON_TOP
+
+    Plasma keeps auto-hide panels visible while any window demands attention
+    (Task Manager "Unhide when a window wants attention"). Always-on-top alone
+    is fine; urgency is not.
+    """
+    app = QtWidgets.QApplication.instance()
+    if app is not None:
+        try:
+            # msec=0 cancels any current attention indication.
+            app.alert(widget, 0)
+        except Exception:
+            pass
+    handle = widget.windowHandle()
+    if handle is not None:
+        try:
+            # Qt 6: clears the platform urgency hint when supported.
+            handle.setFlag(QtCore.Qt.WindowType.WindowDoesNotAcceptFocus, True)
+        except Exception:
+            pass
+    if sys.platform.startswith("linux"):
+        _xcb_net_wm_state(widget, add=False, atom_name="_NET_WM_STATE_DEMANDS_ATTENTION")
+        # Keep the overlay out of the task manager attention path entirely.
+        _xcb_net_wm_state(widget, add=True, atom_name="_NET_WM_STATE_SKIP_TASKBAR")
+        _xcb_net_wm_state(widget, add=True, atom_name="_NET_WM_STATE_SKIP_PAGER")
+        _xcb_force_normal_window_type(widget)
+
+
+def window_demands_attention(widget: QtWidgets.QWidget) -> bool:
+    """True if the window currently has ``_NET_WM_STATE_DEMANDS_ATTENTION``."""
+    if not sys.platform.startswith("linux"):
+        return False
+    xid = _hwnd(widget)
+    conn = _qt_xcb_connection()
+    xcb, _shape = _xcb_libs()
+    if xid is None or conn is None or xcb is None:
+        return False
+
+    conn_p = ctypes.c_void_p(conn)
+
+    class _AtomReply(ctypes.Structure):
+        _fields_ = [
+            ("response_type", ctypes.c_uint8),
+            ("pad0", ctypes.c_uint8),
+            ("sequence", ctypes.c_uint16),
+            ("length", ctypes.c_uint32),
+            ("atom", ctypes.c_uint32),
+        ]
+
+    class _PropReply(ctypes.Structure):
+        _fields_ = [
+            ("response_type", ctypes.c_uint8),
+            ("format", ctypes.c_uint8),
+            ("sequence", ctypes.c_uint16),
+            ("length", ctypes.c_uint32),
+            ("type", ctypes.c_uint32),
+            ("bytes_after", ctypes.c_uint32),
+            ("value_len", ctypes.c_uint32),
+            ("pad1", ctypes.c_uint8 * 12),
+        ]
+
+    try:
+        xcb.xcb_intern_atom.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint8,
+            ctypes.c_uint16,
+            ctypes.c_char_p,
+        ]
+        xcb.xcb_intern_atom.restype = ctypes.c_uint32
+        xcb.xcb_intern_atom_reply.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+        ]
+        xcb.xcb_intern_atom_reply.restype = ctypes.POINTER(_AtomReply)
+
+        def intern(name: str) -> int | None:
+            raw = name.encode("ascii")
+            cookie = xcb.xcb_intern_atom(conn_p, 0, len(raw), raw)
+            reply = xcb.xcb_intern_atom_reply(conn_p, cookie, None)
+            if not reply:
+                return None
+            atom = int(reply.contents.atom)
+            try:
+                ctypes.CDLL("libc.so.6").free(reply)
+            except Exception:
+                pass
+            return atom or None
+
+        state_atom = intern("_NET_WM_STATE")
+        demands_atom = intern("_NET_WM_STATE_DEMANDS_ATTENTION")
+        if state_atom is None or demands_atom is None:
+            return False
+
+        XCB_ATOM_ATOM = 4
+        xcb.xcb_get_property.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint8,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+        ]
+        xcb.xcb_get_property.restype = ctypes.c_uint32
+        xcb.xcb_get_property_reply.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+        ]
+        xcb.xcb_get_property_reply.restype = ctypes.POINTER(_PropReply)
+        xcb.xcb_get_property_value.argtypes = [ctypes.POINTER(_PropReply)]
+        xcb.xcb_get_property_value.restype = ctypes.c_void_p
+
+        cookie = xcb.xcb_get_property(
+            conn_p,
+            0,
+            ctypes.c_uint32(xid),
+            ctypes.c_uint32(state_atom),
+            XCB_ATOM_ATOM,
+            0,
+            64,
+        )
+        reply = xcb.xcb_get_property_reply(conn_p, cookie, None)
+        if not reply:
+            return False
+        try:
+            length = int(reply.contents.value_len)
+            if length <= 0 or int(reply.contents.format) != 32:
+                return False
+            value_ptr = xcb.xcb_get_property_value(reply)
+            if not value_ptr:
+                return False
+            atoms = (ctypes.c_uint32 * length).from_address(int(value_ptr))
+            target = ctypes.c_uint32(demands_atom).value
+            return any(int(atoms[i]) == target for i in range(length))
+        finally:
+            try:
+                ctypes.CDLL("libc.so.6").free(reply)
+            except Exception:
+                pass
+    except Exception:
+        return False
+
+
+def _xcb_net_wm_state(
+    widget: QtWidgets.QWidget, *, add: bool, atom_name: str
+) -> None:
+    """Add/remove a _NET_WM_STATE atom via Qt's xcb connection (not Xlib)."""
+    xid = _hwnd(widget)
+    conn = _qt_xcb_connection()
+    xcb, _shape = _xcb_libs()
+    if xid is None or conn is None or xcb is None:
+        return
+
+    conn_p = ctypes.c_void_p(conn)
+
+    # xcb_intern_atom(conn, only_if_exists, name_len, name) -> cookie
+    xcb.xcb_intern_atom.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint8,
+        ctypes.c_uint16,
+        ctypes.c_char_p,
+    ]
+    xcb.xcb_intern_atom.restype = ctypes.c_uint32  # cookie (we use reply API)
+
+    class _AtomReply(ctypes.Structure):
+        _fields_ = [
+            ("response_type", ctypes.c_uint8),
+            ("pad0", ctypes.c_uint8),
+            ("sequence", ctypes.c_uint16),
+            ("length", ctypes.c_uint32),
+            ("atom", ctypes.c_uint32),
+        ]
+
+    xcb.xcb_intern_atom_reply.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+    ]
+    xcb.xcb_intern_atom_reply.restype = ctypes.POINTER(_AtomReply)
+
+    def intern(name: str) -> int | None:
+        raw = name.encode("ascii")
+        cookie = xcb.xcb_intern_atom(conn_p, 0, len(raw), raw)
+        reply = xcb.xcb_intern_atom_reply(conn_p, cookie, None)
+        if not reply:
+            return None
+        atom = int(reply.contents.atom)
+        # xcb_intern_atom_reply allocates; free with libc free.
+        try:
+            ctypes.CDLL("libc.so.6").free(reply)
+        except Exception:
+            pass
+        return atom or None
+
+    try:
+        state_atom = intern("_NET_WM_STATE")
+        prop_atom = intern(atom_name)
+        if state_atom is None or prop_atom is None:
+            return
+
+        # xcb_client_message_event_t
+        class _ClientMessage(ctypes.Structure):
+            _fields_ = [
+                ("response_type", ctypes.c_uint8),
+                ("format", ctypes.c_uint8),
+                ("sequence", ctypes.c_uint16),
+                ("window", ctypes.c_uint32),
+                ("type", ctypes.c_uint32),
+                ("data32", ctypes.c_uint32 * 5),
+            ]
+
+        XCB_CLIENT_MESSAGE = 33
+        XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT = 1 << 20
+        XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY = 1 << 19
+        event_mask = (
+            XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY
+        )
+
+        msg = _ClientMessage()
+        msg.response_type = XCB_CLIENT_MESSAGE
+        msg.format = 32
+        msg.sequence = 0
+        msg.window = ctypes.c_uint32(xid)
+        msg.type = ctypes.c_uint32(state_atom)
+        msg.data32[0] = 1 if add else 0
+        msg.data32[1] = ctypes.c_uint32(prop_atom)
+        msg.data32[2] = 0
+        msg.data32[3] = 1  # source: application
+        msg.data32[4] = 0
+
+        # Root window: xcb_setup_roots_iterator is heavy; Qt's screen root via
+        # xcb_get_setup is awkward in ctypes. Use xcb_change_property path on
+        # the window itself as a fallback is wrong for STATE; send to root.
+        # Query tree for parent=root.
+        class _TreeReply(ctypes.Structure):
+            _fields_ = [
+                ("response_type", ctypes.c_uint8),
+                ("pad0", ctypes.c_uint8),
+                ("sequence", ctypes.c_uint16),
+                ("length", ctypes.c_uint32),
+                ("root", ctypes.c_uint32),
+                ("parent", ctypes.c_uint32),
+                ("children_len", ctypes.c_uint16),
+                ("pad1", ctypes.c_uint16),
+            ]
+
+        xcb.xcb_query_tree.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        xcb.xcb_query_tree.restype = ctypes.c_uint32
+        xcb.xcb_query_tree_reply.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+        ]
+        xcb.xcb_query_tree_reply.restype = ctypes.POINTER(_TreeReply)
+        tree_cookie = xcb.xcb_query_tree(conn_p, ctypes.c_uint32(xid))
+        tree = xcb.xcb_query_tree_reply(conn_p, tree_cookie, None)
+        if not tree:
+            return
+        root = int(tree.contents.root)
+        try:
+            ctypes.CDLL("libc.so.6").free(tree)
+        except Exception:
+            pass
+
+        xcb.xcb_send_event.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint8,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_char_p,
+        ]
+        xcb.xcb_send_event.restype = ctypes.c_uint32
+        xcb.xcb_flush.argtypes = [ctypes.c_void_p]
+        xcb.xcb_flush.restype = ctypes.c_int
+
+        payload = ctypes.string_at(ctypes.byref(msg), ctypes.sizeof(msg))
+        xcb.xcb_send_event(
+            conn_p,
+            0,
+            ctypes.c_uint32(root),
+            ctypes.c_uint32(event_mask),
+            payload,
+        )
+        xcb.xcb_flush(conn_p)
+    except Exception:
+        return
+
+
+def _xcb_force_normal_window_type(widget: QtWidgets.QWidget) -> None:
+    """Drop KDE OVERRIDE from _NET_WM_WINDOW_TYPE; keep NORMAL only.
+
+    Frameless Qt windows often advertise::
+
+        _KDE_NET_WM_WINDOW_TYPE_OVERRIDE, _NET_WM_WINDOW_TYPE_NORMAL
+
+    Keep a plain NORMAL type so Plasma treats the overlay like a regular
+    top-level window (still frameless via Motif/Qt hints).
+    """
+    xid = _hwnd(widget)
+    conn = _qt_xcb_connection()
+    xcb, _shape = _xcb_libs()
+    if xid is None or conn is None or xcb is None:
+        return
+
+    conn_p = ctypes.c_void_p(conn)
+
+    class _AtomReply(ctypes.Structure):
+        _fields_ = [
+            ("response_type", ctypes.c_uint8),
+            ("pad0", ctypes.c_uint8),
+            ("sequence", ctypes.c_uint16),
+            ("length", ctypes.c_uint32),
+            ("atom", ctypes.c_uint32),
+        ]
+
+    xcb.xcb_intern_atom.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint8,
+        ctypes.c_uint16,
+        ctypes.c_char_p,
+    ]
+    xcb.xcb_intern_atom.restype = ctypes.c_uint32
+    xcb.xcb_intern_atom_reply.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+    ]
+    xcb.xcb_intern_atom_reply.restype = ctypes.POINTER(_AtomReply)
+
+    def intern(name: str) -> int | None:
+        raw = name.encode("ascii")
+        cookie = xcb.xcb_intern_atom(conn_p, 0, len(raw), raw)
+        reply = xcb.xcb_intern_atom_reply(conn_p, cookie, None)
+        if not reply:
+            return None
+        atom = int(reply.contents.atom)
+        try:
+            ctypes.CDLL("libc.so.6").free(reply)
+        except Exception:
+            pass
+        return atom or None
+
+    try:
+        type_atom = intern("_NET_WM_WINDOW_TYPE")
+        normal_atom = intern("_NET_WM_WINDOW_TYPE_NORMAL")
+        if type_atom is None or normal_atom is None:
+            return
+        XCB_PROP_MODE_REPLACE = 0
+        XCB_ATOM_ATOM = 4
+        xcb.xcb_change_property.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint8,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_uint8,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+        ]
+        xcb.xcb_change_property.restype = ctypes.c_uint32
+        xcb.xcb_flush.argtypes = [ctypes.c_void_p]
+        xcb.xcb_flush.restype = ctypes.c_int
+        value = ctypes.c_uint32(normal_atom)
+        xcb.xcb_change_property(
+            conn_p,
+            XCB_PROP_MODE_REPLACE,
+            ctypes.c_uint32(xid),
+            ctypes.c_uint32(type_atom),
+            XCB_ATOM_ATOM,
+            32,
+            1,
+            ctypes.byref(value),
+        )
+        xcb.xcb_flush(conn_p)
+    except Exception:
+        return
 
 
 def set_overlay_hit_testing(
@@ -48,6 +436,7 @@ def set_overlay_hit_testing(
     transparent = QtCore.Qt.WindowType.WindowTransparentForInput
     if widget.windowFlags() & transparent:
         was_visible = widget.isVisible()
+        geometry = widget.saveGeometry() if was_visible else None
         widget.setWindowFlag(transparent, False)
         handle = widget.windowHandle()
         if handle is not None:
@@ -56,6 +445,8 @@ def set_overlay_hit_testing(
             widget.setAttribute(QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
             widget.show()
             widget.setAttribute(QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating, False)
+            if geometry is not None:
+                widget.restoreGeometry(geometry)
 
     if sys.platform == "win32":
         _apply_windows_noactivate(widget)
