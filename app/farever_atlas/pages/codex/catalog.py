@@ -7,7 +7,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from ...config import ASSET_ROOT, discover_project_asset
+from ...config import (
+    ASSET_ROOT,
+    DISPLAY_NAMES_RELATIVE_PATH,
+    discover_project_asset,
+)
 
 
 COLLECTION_CATEGORIES = (
@@ -93,9 +97,9 @@ def load_codex_catalog() -> dict[str, Any]:
 
 @lru_cache(maxsize=1)
 def _display_names() -> dict[str, Any]:
-    path = discover_project_asset("display_names.json")
+    path = discover_project_asset(DISPLAY_NAMES_RELATIVE_PATH)
     if path is None:
-        path = ASSET_ROOT / "display_names.json"
+        path = ASSET_ROOT / DISPLAY_NAMES_RELATIVE_PATH
     if not path.is_file():
         return {}
     payload = json.loads(path.read_text(encoding="utf-8"))
