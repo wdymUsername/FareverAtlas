@@ -579,6 +579,9 @@ class AtlasWindow(
         self.main_navigation_overlay.settingsChanged.connect(
             self._apply_user_settings
         )
+        self.main_navigation_overlay.settingsChanged.connect(
+            self._sync_overlay_lock_button
+        )
         self.main_navigation_overlay.resetWindowsRequested.connect(
             self._reset_window_layouts
         )
@@ -774,6 +777,18 @@ class AtlasWindow(
             icon_pair = (self.help_icon_normal, self.help_icon_hover)
         elif watched is getattr(self, "reload_ui_button", None):
             icon_pair = (self.reload_ui_icon_normal, self.reload_ui_icon_hover)
+        elif watched is getattr(self, "overlay_lock_button", None):
+            unlocked = bool(self.overlay_lock_button.isChecked())
+            if unlocked:
+                icon_pair = (
+                    self.overlay_unlock_icon_normal,
+                    self.overlay_unlock_icon_hover,
+                )
+            else:
+                icon_pair = (
+                    self.overlay_lock_icon_normal,
+                    self.overlay_lock_icon_hover,
+                )
         elif watched is getattr(self, "main_menu_button", None):
             icon_pair = (self.main_menu_icon_normal, self.main_menu_icon_hover)
         elif watched in getattr(self, "_window_button_icon_pairs", {}):
@@ -2119,6 +2134,7 @@ class AtlasWindow(
         self._controls_changed()
         if isinstance(self.latest_snapshot.state, dict):
             self.update_snapshot(self.latest_snapshot)
+        self._sync_overlay_lock_button()
 
     def _reset_window_layouts(self) -> None:
         for key in list(self._settings.allKeys()):
@@ -2577,14 +2593,18 @@ class AtlasWindow(
             player = {}
         player_x = safe_float(player.get("x"), math.nan)
         player_y = safe_float(player.get("y"), math.nan)
+        player_z = safe_float(player.get("z"), math.nan)
         if (
             snapshot.connected
             and math.isfinite(player_x)
             and math.isfinite(player_y)
+            and math.isfinite(player_z)
         ):
-            position_text = f"X {player_x:.1f}   Y {player_y:.1f}"
+            position_text = (
+                f"X {player_x:.1f}   Y {player_y:.1f}   Z {player_z:.1f}"
+            )
         else:
-            position_text = "X —   Y —"
+            position_text = "X —   Y —   Z —"
         if self.position.text() != position_text:
             self.position.setText(position_text)
 

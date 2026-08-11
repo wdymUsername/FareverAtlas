@@ -91,6 +91,7 @@ QMenuBar#fareverMenuBar::item:pressed {
     background: #314454;
 }
 QToolButton#mainMenuButton,
+QToolButton#overlayLockButton,
 QToolButton#reloadUiButton {
     background: transparent;
     border: none;
@@ -99,10 +100,19 @@ QToolButton#reloadUiButton {
 }
 QToolButton#mainMenuButton:hover,
 QToolButton#mainMenuButton:pressed,
+QToolButton#overlayLockButton:hover,
+QToolButton#overlayLockButton:pressed,
 QToolButton#reloadUiButton:hover,
 QToolButton#reloadUiButton:pressed {
     background: transparent;
     border: none;
+}
+QToolButton#overlayLockButton:checked {
+    background: #285f8b;
+    border: none;
+}
+QToolButton#overlayLockButton:disabled {
+    opacity: 0.45;
 }
 QToolButton#reloadUiButton:disabled {
     opacity: 0.45;
@@ -1603,6 +1613,8 @@ QWidget#minimapCanvas {
 }
 QWidget#minimapFooter {
     background: transparent;
+    min-height: 28px;
+    max-height: 28px;
 }
 QLabel#connectionStatus {
     color: #8a7348;

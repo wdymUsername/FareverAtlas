@@ -7,10 +7,21 @@ from PySide6 import QtCore, QtWidgets
 from ..pages.map.status import GameTimeStatusWidget
 
 
+# Keep the shell footer the same height on every page. Map-only controls
+# (zoom, coords, help, game time) hide off the map page; without a fixed
+# height the bar would shrink around the remaining connection label.
+FOOTER_HEIGHT = 28
+
+
 def build_footer() -> QtWidgets.QWidget:
     """Time of day, bridge status, view mode, zoom, and coords."""
     footer = QtWidgets.QWidget()
     footer.setObjectName("minimapFooter")
+    footer.setFixedHeight(FOOTER_HEIGHT)
+    footer.setSizePolicy(
+        QtWidgets.QSizePolicy.Policy.Preferred,
+        QtWidgets.QSizePolicy.Policy.Fixed,
+    )
     footer_layout = QtWidgets.QHBoxLayout(footer)
     footer_layout.setContentsMargins(5, 0, 5, 0)
     footer_layout.setSpacing(8)
@@ -49,7 +60,7 @@ def build_footer() -> QtWidgets.QWidget:
         | QtCore.Qt.AlignmentFlag.AlignVCenter
     )
 
-    position = QtWidgets.QLabel("X —   Y —")
+    position = QtWidgets.QLabel("X —   Y —   Z —")
     position.setObjectName("positionStatus")
     position.setAlignment(
         QtCore.Qt.AlignmentFlag.AlignRight

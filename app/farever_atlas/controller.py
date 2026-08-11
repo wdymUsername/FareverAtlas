@@ -170,6 +170,8 @@ class Controller(QtCore.QObject):
         )
         if panel is not None and hasattr(panel, "reload_from_settings"):
             panel.reload_from_settings()
+        if hasattr(self.map_window, "_sync_overlay_lock_button"):
+            self.map_window._sync_overlay_lock_button()
 
     @QtCore.Slot()
     def reload_ui(self) -> None:

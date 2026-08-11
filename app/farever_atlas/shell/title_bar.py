@@ -8,6 +8,8 @@ from ..config import (
     ASSET_ROOT,
     UI_CLOSE_HOVER_RELATIVE_PATH,
     UI_CLOSE_RELATIVE_PATH,
+    UI_LOCK_HOVER_RELATIVE_PATH,
+    UI_LOCK_RELATIVE_PATH,
     UI_MAXIMIZE_HOVER_RELATIVE_PATH,
     UI_MAXIMIZE_RELATIVE_PATH,
     UI_MINIMIZE_HOVER_RELATIVE_PATH,
@@ -19,6 +21,8 @@ from ..config import (
     UI_RESTORE_RELATIVE_PATH,
     UI_SETTINGS_HOVER_RELATIVE_PATH,
     UI_SETTINGS_RELATIVE_PATH,
+    UI_UNLOCK_HOVER_RELATIVE_PATH,
+    UI_UNLOCK_RELATIVE_PATH,
 )
 from ..controls import PowerStatusButton
 from ..pages.map.widgets import WindowResizeGrip
@@ -175,6 +179,30 @@ class TitleBarMixin:
             self.test_toast_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
             self.test_toast_button.clicked.connect(self._summon_test_toasts)
 
+        self.overlay_lock_button = QtWidgets.QToolButton(self.app_title_bar)
+        self.overlay_lock_button.setObjectName("overlayLockButton")
+        self.overlay_lock_button.setText("")
+        self.overlay_lock_button.setCheckable(True)
+        self.overlay_lock_icon_normal = QtGui.QIcon(
+            str(ASSET_ROOT / UI_LOCK_RELATIVE_PATH)
+        )
+        self.overlay_lock_icon_hover = QtGui.QIcon(
+            str(ASSET_ROOT / UI_LOCK_HOVER_RELATIVE_PATH)
+        )
+        self.overlay_unlock_icon_normal = QtGui.QIcon(
+            str(ASSET_ROOT / UI_UNLOCK_RELATIVE_PATH)
+        )
+        self.overlay_unlock_icon_hover = QtGui.QIcon(
+            str(ASSET_ROOT / UI_UNLOCK_HOVER_RELATIVE_PATH)
+        )
+        self.overlay_lock_button.setIcon(self.overlay_lock_icon_normal)
+        self.overlay_lock_button.setIconSize(QtCore.QSize(17, 17))
+        self.overlay_lock_button.setFixedSize(30, 27)
+        self.overlay_lock_button.setToolTip("Unlock overlay move/resize")
+        self.overlay_lock_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.overlay_lock_button.installEventFilter(self)
+        self.overlay_lock_button.toggled.connect(self._overlay_unlock_toggled)
+
         self.main_menu_button = QtWidgets.QToolButton(self.app_title_bar)
         self.main_menu_button.setObjectName("mainMenuButton")
         self.main_menu_button.setText("")
@@ -230,6 +258,7 @@ class TitleBarMixin:
             controls_layout.addWidget(self.test_toast_button)
         if self.reload_ui_button is not None:
             controls_layout.addWidget(self.reload_ui_button)
+        controls_layout.addWidget(self.overlay_lock_button)
         controls_layout.addWidget(self.main_menu_button)
         controls_layout.addSpacing(8)
 
@@ -287,6 +316,56 @@ class TitleBarMixin:
         self.window_minimize_button.clicked.connect(self.showMinimized)
         self.window_maximize_button.clicked.connect(self._toggle_maximized)
         self.window_close_button.clicked.connect(self.close)
+        self._sync_overlay_lock_button()
+
+    def _overlay_unlock_toggled(self, unlocked: bool) -> None:
+        """Title-bar shortcut for map/overlay_unlocked (checked = unlocked)."""
+        unlocked = bool(unlocked)
+        enabled = self._setting_bool("map/overlay_enabled", False)
+        if not enabled:
+            unlocked = False
+        self._settings.setValue("map/overlay_unlocked", unlocked)
+        panel = getattr(
+            getattr(self, "main_navigation_overlay", None),
+            "settings_panel",
+            None,
+        )
+        if panel is not None and hasattr(panel, "overlay_unlocked"):
+            was_suppress = bool(getattr(panel, "_suppress", False))
+            panel._suppress = True
+            try:
+                panel.overlay_unlocked.setChecked(unlocked)
+                panel._sync_overlay_controls_enabled()
+            finally:
+                panel._suppress = was_suppress
+        if hasattr(self, "main_navigation_overlay"):
+            self.main_navigation_overlay.settingsChanged.emit()
+        self._sync_overlay_lock_button()
+
+    def _sync_overlay_lock_button(self) -> None:
+        button = getattr(self, "overlay_lock_button", None)
+        if button is None:
+            return
+        enabled = self._setting_bool("map/overlay_enabled", False)
+        unlocked = enabled and self._setting_bool("map/overlay_unlocked", False)
+        blocked = button.blockSignals(True)
+        button.setEnabled(enabled)
+        button.setChecked(unlocked)
+        button.blockSignals(blocked)
+        if unlocked:
+            normal = self.overlay_unlock_icon_normal
+            hover = self.overlay_unlock_icon_hover
+            tip = "Lock overlay (click-through)"
+        else:
+            normal = self.overlay_lock_icon_normal
+            hover = self.overlay_lock_icon_hover
+            tip = (
+                "Unlock overlay move/resize"
+                if enabled
+                else "Enable map overlay in Settings first"
+            )
+        button.setToolTip(tip)
+        button.setIcon(hover if button.underMouse() and enabled else normal)
 
     def _toggle_maximized(self) -> None:
         if self.isMaximized():
