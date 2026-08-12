@@ -60,6 +60,29 @@ New features and improvements are added regularly. Check the
 [Nightly releases](https://github.com/wdymUsername/FareverAtlas/releases/tag/Nightly)
 for the current build.
 
+<details>
+<summary><strong>Screenshots</strong></summary>
+
+<br>
+
+**Map**
+
+![Farever Atlas world map](media/screenshots/map.jpg)
+
+**Players**
+
+![Players roster](media/screenshots/players.jpg)
+
+**Planner** (work in progress)
+
+![Planner work in progress](media/screenshots/planner.jpg)
+
+**Codex** (work in progress)
+
+![Codex work in progress](media/screenshots/codex.jpg)
+
+</details>
+
 ---
 
 ## NODE GUIDE
