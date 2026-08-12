@@ -65,6 +65,8 @@ for the current build.
 
 <br>
 
+More screenshots live in [`media/screenshots/`](media/screenshots/).
+
 **Map**
 
 ![Farever Atlas world map](media/screenshots/map.jpg)
