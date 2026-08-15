@@ -1,26 +1,7 @@
 name: FareverAtlas.exe
 
 on:
-  schedule:
-    - cron: "0 0 * * *" # every day at 00:00 UTC
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "app/**"
-      - "assets/**"
-      - "native_bridge/**"
-      - "packaging/windows/**"
-      - "requirements.txt"
-      - ".github/workflows/windows-portable.yml"
-  pull_request:
-    paths:
-      - "app/**"
-      - "assets/**"
-      - "native_bridge/**"
-      - "packaging/windows/**"
-      - "requirements.txt"
-      - ".github/workflows/windows-portable.yml"
 
 permissions:
   contents: write
@@ -106,12 +87,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag=""
-          # Publish Nightly on schedule, manual runs, and pushes to main.
-          # Pull requests stay artifact-only.
-          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
-            tag="Nightly"
-          fi
+          # Manual dispatch only — never publish from push/schedule/PR.
+          tag="Nightly"
           sha="$(git rev-parse --short HEAD)"
           stamp="$(date -u +"%Y-%m-%d %H:%M:%S UTC")"
           body="Nightly portable Windows build from ${sha} (${stamp})."

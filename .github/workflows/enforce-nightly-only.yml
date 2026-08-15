@@ -6,8 +6,6 @@ on:
   create:
   release:
     types: [published, created, released, prereleased, edited]
-  schedule:
-    - cron: "30 0 * * *" # shortly after the Nightly cron
   workflow_dispatch:
   pull_request:
     paths:

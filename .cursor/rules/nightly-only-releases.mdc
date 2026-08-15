@@ -12,14 +12,15 @@ FareverAtlas publishes **one** GitHub Release: tag/name **`Nightly`**.
 - Create, restore, push, or recreate versioned tags (`v0.12.2`, `v*`, semver tags)
 - Create GitHub Releases other than `Nightly`
 - Reintroduce workflow triggers for `push: tags: v*`, `release: published`, or versioned `workflow_dispatch` tag inputs
+- Reintroduce schedule, `push: branches`, or `pull_request` triggers on `windows-portable.yml`
 - Push historical tags from old commits (Actions runs the **workflow from that tag’s commit**, which can republish a dead `v*` release and steal Latest)
 - Create checkpoint/restore tags on `origin` (e.g. `restore/...`) unless the user explicitly asks for a remote tag
 
 ## Always do this
 
 - Publish portable Windows builds only to the rolling **`Nightly`** release
-- On `main` pushes (path-filtered), schedule, and `workflow_dispatch`: build + attach to Nightly + VirusTotal + refresh `published_at`
-- Pull requests: artifact only — do not update Nightly
+- **`FareverAtlas.exe` workflow is `workflow_dispatch` only** — no schedule, no `push`, no `pull_request`
+- Do not reintroduce cron, `push: branches`, or PR triggers for that workflow
 - If a stray `v*` / non-Nightly tag or release appears: delete the release and the tag, then ensure Nightly is `make_latest`
 
 ## Why
